@@ -3968,6 +3968,66 @@
           ],
           "@version": 1
         }
+      },
+      {
+        "id": "2ee595cd-921e-446e-ab77-a0b8ba60687c",
+        "path": "/maps/TestMap/SyncTestObj",
+        "componentNames": "MOD.Core.TransformComponent,MOD.Core.SpriteRendererComponent,script.TestComponent",
+        "jsonString": {
+          "name": "SyncTestObj",
+          "path": "/maps/TestMap/SyncTestObj",
+          "nameEditable": true,
+          "enable": true,
+          "visible": true,
+          "localize": false,
+          "displayOrder": 5,
+          "pathConstraints": "///",
+          "revision": 1,
+          "origin": {
+            "type": "Model",
+            "entry_id": "mapempty",
+            "sub_entity_id": null,
+            "root_entity_id": "2ee595cd-921e-446e-ab77-a0b8ba60687c",
+            "replaced_model_id": null
+          },
+          "modelId": "mapempty",
+          "@components": [
+            {
+              "@type": "MOD.Core.TransformComponent",
+              "Position": {
+                "x": -2.293623,
+                "y": 1.61775661,
+                "z": 999.999
+              },
+              "QuaternionRotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+              },
+              "Scale": {
+                "x": 4.78343868,
+                "y": 4.78343868,
+                "z": 1.0
+              },
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.SpriteRendererComponent",
+              "ActionSheet": {},
+              "EndFrameIndex": 2147483647,
+              "RenderSetting": 0,
+              "SpriteRUID": "543e1155a44e4793ae0d3bfccf474f06",
+              "StartFrameIndex": 0,
+              "Enable": true
+            },
+            {
+              "@type": "script.TestComponent",
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
       }
     ]
   }
