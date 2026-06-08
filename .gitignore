@@ -1,0 +1,5 @@
+# MSW AI 설정
+.mswai/
+
+# Claude 설정
+.claude/
