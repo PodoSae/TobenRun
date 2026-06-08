@@ -1,3 +1,6 @@
 {"ts":"2026-06-08T06:56:48.230Z","version":"0.8.6","command":"status","args":["--workspace","C:\\Users\\wns1d\\source\\repos\\TobenRun","--json"],"cwd":"C:\\Users\\wns1d\\source\\repos\\TobenRun","exitCode":0,"durationMs":17}
 {"ts":"2026-06-08T06:59:50.858Z","version":"0.8.6","command":"status","args":["--workspace","C:\\Users\\wns1d\\source\\repos\\TobenRun","--json"],"cwd":"C:\\Users\\wns1d\\source\\repos\\TobenRun","exitCode":0,"durationMs":18}
 {"ts":"2026-06-08T06:59:50.860Z","version":"0.8.6","command":"status","args":["--workspace","C:\\Users\\wns1d\\source\\repos\\TobenRun","--json"],"cwd":"C:\\Users\\wns1d\\source\\repos\\TobenRun","exitCode":0,"durationMs":18}
+{"ts":"2026-06-08T07:31:43.658Z","version":"0.8.6","command":"status","args":["--workspace","C:\\MSW\\TobenRun","--json"],"cwd":"C:\\MSW\\TobenRun","exitCode":0,"durationMs":14}
+{"ts":"2026-06-08T07:31:44.087Z","version":"0.8.6","command":"status","args":["--workspace","C:\\MSW\\TobenRun","--json"],"cwd":"C:\\MSW\\TobenRun","exitCode":0,"durationMs":13}
+{"ts":"2026-06-08T07:31:44.164Z","version":"0.8.6","command":"status","args":["--workspace","C:\\MSW\\TobenRun","--json"],"cwd":"C:\\MSW\\TobenRun","exitCode":0,"durationMs":11}
