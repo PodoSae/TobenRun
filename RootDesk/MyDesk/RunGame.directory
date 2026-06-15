@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://cbee65a02c1b40f0be18337c89624f29",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://cbee65a02c1b40f0be18337c89624f29",
+      "name": "RunGame",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

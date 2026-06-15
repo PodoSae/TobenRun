@@ -1,0 +1,543 @@
+@Logic
+script ScreenFlow extends Logic
+
+property Entity titleRoot = "e6d3da67-eb3c-4afd-9abe-cf06ec90ed0e"
+property Entity lobbyRoot = "6d97a194-546c-4732-b0c9-b0f843872f61"
+property Entity startButton = "4cc83fed-af0a-48bc-a88a-2a3fa9747f9c"
+property Entity backButton = "1d6433fa-a4ea-41f6-a01b-fb36b2daf066"
+property Entity startGameButton = "86b0e64c-95b4-411a-94de-64f02121927d"
+property any startHandler = nil
+property any backHandler = nil
+property any startGameHandler = nil
+property any stageHandlers = nil
+property any shopOpenHandler = nil
+property any shopBackHandler = nil
+property any shopCells = nil
+-- Running gauge fill-animation timer ids (cleared on rebuild / end play).
+property any gaugeTimers = nil
+
+@ExecSpace("ClientOnly")
+method void OnBeginPlay()
+	-- Show the title screen first, hide the lobby, and wire the buttons.
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = true
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.startButton) then
+		self.startHandler = self.startButton:ConnectEvent(ButtonClickEvent, self.OnStartClick)
+	end
+	if isvalid(self.backButton) then
+		self.backHandler = self.backButton:ConnectEvent(ButtonClickEvent, self.OnBackClick)
+	end
+	if isvalid(self.startGameButton) then
+		self.startGameHandler = self.startGameButton:ConnectEvent(ButtonClickEvent, self.OnStartGameClick)
+	end
+	-- Wire the 10 stage-select buttons (1-1 .. 2-5) in the lobby.
+	self.stageHandlers = {}
+	for w = 1, 2 do
+		for s = 1, 5 do
+			local stage = tostring(w) .. "-" .. tostring(s)
+			local path = "/ui/LobbyGroup/Stage_" .. tostring(w) .. "_" .. tostring(s)
+			local btn = _EntityService:GetEntityByPath(path)
+			if isvalid(btn) then
+				local capturedStage = stage
+				local h = btn:ConnectEvent(ButtonClickEvent, function() self:OnStageClick(capturedStage) end)
+				table.insert(self.stageHandlers, { ent = btn, hd = h })
+			end
+		end
+	end
+	-- Shop screen: hidden at start; wire its open / back / buy buttons.
+	local shop = _EntityService:GetEntityByPath("/ui/ShopGroup")
+	if isvalid(shop) then
+		shop.Enable = false
+	end
+	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
+	if isvalid(shopBtn) then
+		self.shopOpenHandler = shopBtn:ConnectEvent(ButtonClickEvent, self.OnShopOpenClick)
+	end
+	local shopBack = _EntityService:GetEntityByPath("/ui/ShopGroup/BackBtn")
+	if isvalid(shopBack) then
+		self.shopBackHandler = shopBack:ConnectEvent(ButtonClickEvent, self.OnShopBackClick)
+	end
+	-- Build the dynamic shop list (one cloned card per ShopItem dataset row).
+	self:BuildShopList()
+	-- Ask the server for this account's saved data (gold / best scores / item levels) → RefreshSavedUI.
+	if _PlayerSave ~= nil then
+		_PlayerSave:RequestMyData()
+	end
+	log("[ScreenFlow] OnBeginPlay: title shown")
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshSavedUI()
+	-- Apply the cached account data to the lobby (stage best scores) and shop (owned marks).
+	if _PlayerSave == nil then
+		return
+	end
+	-- Gold balance on lobby + shop.
+	local gold = _PlayerSave:GetGold()
+	local goldText = "골드 " .. tostring(gold)
+	local lobbyGold = _EntityService:GetEntityByPath("/ui/LobbyGroup/Gold")
+	if isvalid(lobbyGold) and lobbyGold.TextComponent ~= nil then
+		lobbyGold.TextComponent.Text = goldText
+	end
+	local shopGold = _EntityService:GetEntityByPath("/ui/ShopGroup/Gold")
+	if isvalid(shopGold) and shopGold.TextComponent ~= nil then
+		shopGold.TextComponent.Text = goldText
+	end
+	-- Stage unlock gating: a stage opens once the SUM of all stages best scores
+	-- reaches its StageUnlock threshold (1-1 = 0, always open). Locked stages show a
+	-- Lock overlay entity (dim + lock icon + required total) instead of being enterable.
+	local total = self:GetTotalBest()
+	for w = 1, 2 do
+		for s = 1, 5 do
+			local stage = tostring(w) .. "-" .. tostring(s)
+			local btnPath = "/ui/LobbyGroup/Stage_" .. tostring(w) .. "_" .. tostring(s)
+			local unlock = self:GetStageUnlock(stage)
+			local locked = total < unlock
+			local lockEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock")
+			if isvalid(lockEnt) then
+				lockEnt.Enable = locked
+				local reqEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock/Req")
+				if isvalid(reqEnt) and reqEnt.TextComponent ~= nil then
+					reqEnt.TextComponent.Text = "합계 " .. tostring(unlock)
+				end
+			end
+			local best = _PlayerSave:GetStageBest(stage)
+			local lbl = _EntityService:GetEntityByPath(btnPath .. "/Best")
+			if isvalid(lbl) and lbl.TextComponent ~= nil then
+				if best > 0 then
+					lbl.TextComponent.Text = "최고 " .. tostring(best)
+				else
+					lbl.TextComponent.Text = ""
+				end
+			end
+		end
+	end
+	-- Refresh the dynamic shop list (levels / prices / buy state).
+	self:RefreshShopCells()
+	log("[ScreenFlow] RefreshSavedUI")
+end
+
+@ExecSpace("ClientOnly")
+method void BuildShopList()
+	-- Clone one card per ShopItem dataset row into the scroll list (clears any prior clones).
+	self:ClearGaugeTimers()
+	if self.shopCells ~= nil then
+		for _, cell in ipairs(self.shopCells) do
+			if isvalid(cell.buy) and cell.hd ~= nil then
+				cell.buy:DisconnectEvent(ButtonClickEvent, cell.hd)
+			end
+			if isvalid(cell.clone) then
+				cell.clone:Destroy()
+			end
+		end
+	end
+	self.shopCells = {}
+	local template = _EntityService:GetEntityByPath("/ui/ShopGroup/List/ItemCard")
+	if isvalid(template) == false then
+		return
+	end
+	template.Enable = false
+	local sds = _DataService:GetTable("ShopItem")
+	if sds == nil then
+		return
+	end
+	local n = sds:GetRowCount()
+	for i = 1, n do
+		local row = sds:GetRow(i)
+		if row ~= nil then
+			local id = row:GetItem("id")
+			local clone = template:Clone("Item_" .. id)
+			clone.Enable = true
+			local iconEnt = clone:GetChildByName("Icon", false)
+			if isvalid(iconEnt) and iconEnt.SpriteGUIRendererComponent ~= nil then
+				local r = (tonumber(row:GetItem("r")) or 255) / 255
+				local g = (tonumber(row:GetItem("g")) or 255) / 255
+				local bl = (tonumber(row:GetItem("b")) or 255) / 255
+				iconEnt.SpriteGUIRendererComponent.Color = Color(r, g, bl, 1)
+			end
+			local nameEnt = clone:GetChildByName("Name", false)
+			if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+				nameEnt.TextComponent.Text = row:GetItem("name")
+			end
+			local infoEnt = clone:GetChildByName("Info", false)
+			local buyEnt = clone:GetChildByName("Buy", false)
+			-- Gather the 5 gauge cells + their rising-fill sprites, tinted with the item color.
+			local fillColor = Color(
+				(tonumber(row:GetItem("r")) or 255) / 255,
+				(tonumber(row:GetItem("g")) or 255) / 255,
+				(tonumber(row:GetItem("b")) or 255) / 255,
+				1)
+			local gaugeEnt = clone:GetChildByName("Gauge", false)
+			local cellEnts = {}
+			local fills = {}
+			if isvalid(gaugeEnt) then
+				for c = 1, 5 do
+					local ce = gaugeEnt:GetChildByName("Cell" .. tostring(c), false)
+					cellEnts[c] = ce
+					if isvalid(ce) then
+						local fe = ce:GetChildByName("Fill", false)
+						if isvalid(fe) and fe.SpriteGUIRendererComponent ~= nil then
+							fe.SpriteGUIRendererComponent.Color = fillColor
+							fe.SpriteGUIRendererComponent.FillAmount = 0
+							fills[c] = fe.SpriteGUIRendererComponent
+						end
+					end
+				end
+			end
+			local badgeEnt = clone:GetChildByName("OwnedBadge", false)
+			if isvalid(badgeEnt) then
+				badgeEnt.Enable = false
+			end
+			local capturedId = id
+			local hd = nil
+			if isvalid(buyEnt) then
+				hd = buyEnt:ConnectEvent(ButtonClickEvent, function() self:OnBuyClick(capturedId) end)
+			end
+			table.insert(self.shopCells, { id = id, clone = clone, info = infoEnt, buy = buyEnt, hd = hd, cellEnts = cellEnts, fills = fills, badge = badgeEnt, level = -1 })
+		end
+	end
+	log("[ScreenFlow] BuildShopList count=" .. tostring(#self.shopCells))
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshShopCells()
+	-- Update each cloned card's level / next-cost / buy-button state from save + dataset.
+	if self.shopCells == nil or _PlayerSave == nil then
+		return
+	end
+	local sds = _DataService:GetTable("ShopItem")
+	if sds == nil then
+		return
+	end
+	for _, cell in ipairs(self.shopCells) do
+		local row = sds:FindRow("id", cell.id)
+		local price = 0
+		local priceInc = 0
+		local maxLevel = 0
+		if row ~= nil then
+			price = tonumber(row:GetItem("price")) or 0
+			priceInc = tonumber(row:GetItem("priceInc")) or 0
+			maxLevel = tonumber(row:GetItem("maxLevel")) or 0
+		end
+		local level = _PlayerSave:GetItemLevel(cell.id)
+		local atMax = level >= maxLevel
+		local prev = cell.level
+		-- Animate only when this is a real increase from a known prior state (not first load).
+		local doAnim = (prev >= 0 and level > prev)
+		-- Show only maxLevel cells; fill the owned ones (rising one-by-one on a fresh purchase).
+		if cell.cellEnts ~= nil then
+			for c = 1, 5 do
+				local ce = cell.cellEnts[c]
+				if isvalid(ce) then
+					ce.Enable = (c <= maxLevel)
+				end
+				local fc = cell.fills[c]
+				if fc ~= nil and isvalid(fc) then
+					if c <= level then
+						if doAnim and c > prev then
+							-- newly gained cell → rise from empty with a small stagger
+							self:AnimateCellRise(fc, (c - prev - 1) * 0.12, 0.3)
+						else
+							fc.FillAmount = 1
+						end
+					else
+						fc.FillAmount = 0
+					end
+				end
+			end
+		end
+		cell.level = level
+		-- "보유" badge appears once the item has been purchased at least once.
+		if isvalid(cell.badge) then
+			cell.badge.Enable = (level >= 1)
+		end
+		-- Cost caption (the level number now lives in the gauge, so show price only).
+		if isvalid(cell.info) and cell.info.TextComponent ~= nil then
+			if atMax then
+				cell.info.TextComponent.Text = "최대 강화 완료"
+			else
+				local cost = _PlayerSave:ShopItemCost(price, priceInc, level)
+				cell.info.TextComponent.Text = "다음 " .. tostring(cost) .. " G"
+			end
+		end
+		if isvalid(cell.buy) and cell.buy.TextComponent ~= nil then
+			if atMax then
+				cell.buy.TextComponent.Text = "최대"
+				if cell.buy.SpriteGUIRendererComponent ~= nil then
+					cell.buy.SpriteGUIRendererComponent.Color = Color(0.45, 0.45, 0.45, 1)
+				end
+			else
+				cell.buy.TextComponent.Text = "구매"
+				if cell.buy.SpriteGUIRendererComponent ~= nil then
+					cell.buy.SpriteGUIRendererComponent.Color = Color(0.18, 0.62, 0.38, 1)
+				end
+			end
+		end
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void AnimateCellRise(SpriteGUIRendererComponent fill, number delay, number dur)
+	-- Rising fill (0 → 1) for one gauge cell after an optional start delay.
+	if fill == nil or isvalid(fill) == false then
+		return
+	end
+	if self.gaugeTimers == nil then
+		self.gaugeTimers = {}
+	end
+	fill.FillAmount = 0
+	local elapsed = 0
+	local preTime = _UtilLogic.ElapsedSeconds
+	local timerId = nil
+	timerId = _TimerService:SetTimerRepeat(function()
+		local now = _UtilLogic.ElapsedSeconds
+		elapsed = elapsed + (now - preTime)
+		preTime = now
+		if isvalid(fill) == false then
+			_TimerService:ClearTimer(timerId)
+			return
+		end
+		if elapsed < delay then
+			return
+		end
+		local t = (elapsed - delay) / dur
+		if t >= 1 then
+			fill.FillAmount = 1
+			_TimerService:ClearTimer(timerId)
+			return
+		end
+		fill.FillAmount = t
+	end, 1 / 60)
+	table.insert(self.gaugeTimers, timerId)
+end
+
+@ExecSpace("ClientOnly")
+method void ClearGaugeTimers()
+	-- Stop any in-flight gauge fill animations.
+	if self.gaugeTimers ~= nil then
+		for _, tid in ipairs(self.gaugeTimers) do
+			if tid ~= nil then
+				_TimerService:ClearTimer(tid)
+			end
+		end
+	end
+	self.gaugeTimers = {}
+end
+
+@ExecSpace("ClientOnly")
+method void OnShopOpenClick(ButtonClickEvent event)
+	-- Lobby → Shop screen.
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	local shop = _EntityService:GetEntityByPath("/ui/ShopGroup")
+	if isvalid(shop) then
+		shop.Enable = true
+	end
+	self:RefreshSavedUI()
+	log("[ScreenFlow] -> Shop")
+end
+
+@ExecSpace("ClientOnly")
+method void OnShopBackClick(ButtonClickEvent event)
+	-- Shop → Lobby.
+	local shop = _EntityService:GetEntityByPath("/ui/ShopGroup")
+	if isvalid(shop) then
+		shop.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	log("[ScreenFlow] Shop -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBuyClick(string itemId)
+	-- Request purchase: the server checks gold/level, deducts, persists, then pushes the result
+	-- (toast via BuyResultClient + data resync via ReceiveMyData → RefreshSavedUI).
+	local name = itemId
+	local sds = _DataService:GetTable("ShopItem")
+	if sds ~= nil then
+		local row = sds:FindRow("id", itemId)
+		if row ~= nil then
+			name = row:GetItem("name")
+		end
+	end
+	if _PlayerSave ~= nil then
+		_PlayerSave:BuyItem(itemId, name)
+	end
+	log("[ScreenFlow] buy request " .. tostring(itemId))
+end
+
+method integer GetTotalBest()
+	-- Sum of every stage's best score — the basis for unlock gating.
+	if _PlayerSave == nil then
+		return 0
+	end
+	local total = 0
+	for w = 1, 2 do
+		for s = 1, 5 do
+			total = total + _PlayerSave:GetStageBest(tostring(w) .. "-" .. tostring(s))
+		end
+	end
+	return total
+end
+
+method integer GetStageUnlock(string stage)
+	-- Required total-best-score to open this stage (StageUnlock dataset; 0 if missing).
+	local ds = _DataService:GetTable("StageUnlock")
+	if ds == nil then
+		return 0
+	end
+	local row = ds:FindRow("stage", stage)
+	if row == nil then
+		return 0
+	end
+	local v = tonumber(row:GetItem("unlock"))
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+method boolean IsStageUnlocked(string stage)
+	-- A stage is open when the player's total best score meets its threshold.
+	return self:GetTotalBest() >= self:GetStageUnlock(stage)
+end
+
+@ExecSpace("ClientOnly")
+method void OnStageClick(string stage)
+	-- Stage button → look up the stage's map name in the StageMap dataset, then go there.
+	if self:IsStageUnlocked(stage) == false then
+		local need = self:GetStageUnlock(stage)
+		if _UIToast ~= nil then
+			_UIToast:ShowMessage("최고점수 합계 " .. tostring(need) .. " 이상이면 열려요")
+		end
+		log("[ScreenFlow] stage " .. tostring(stage) .. " locked (need " .. tostring(need) .. ")")
+		return
+	end
+	local ds = _DataService:GetTable("StageMap")
+	if ds == nil then
+		log("[ScreenFlow] StageMap dataset not found")
+		return
+	end
+	local row = ds:FindRow("stage", stage)
+	if row == nil then
+		log("[ScreenFlow] no StageMap row for stage " .. tostring(stage))
+		return
+	end
+	local mapName = row:GetItem("map")
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = false
+	end
+	if _RunGameHud ~= nil then
+		_RunGameHud:GoToStage(stage, mapName)
+	end
+	log("[ScreenFlow] stage " .. tostring(stage) .. " -> map " .. tostring(mapName))
+end
+
+@ExecSpace("ClientOnly")
+method void OnStartClick(ButtonClickEvent event)
+	-- Title clicked → go to the lobby.
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	self:RefreshSavedUI()
+	log("[ScreenFlow] -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBackClick(ButtonClickEvent event)
+	-- Lobby back → return to the title.
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = true
+	end
+	log("[ScreenFlow] -> Title")
+end
+
+@ExecSpace("ClientOnly")
+method void ShowLobby()
+	-- Show the lobby screen (called after a run ends from the result panel).
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	self:RefreshSavedUI()
+	log("[ScreenFlow] ShowLobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnStartGameClick(ButtonClickEvent event)
+	-- "게임 시작" → hide all screens and begin the run.
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = false
+	end
+	if _RunGameHud ~= nil then
+		_RunGameHud:StartGame()
+	end
+	log("[ScreenFlow] -> Game Start")
+end
+
+@ExecSpace("ClientOnly")
+method void OnEndPlay()
+	-- Release click subscriptions.
+	if isvalid(self.startButton) and self.startHandler ~= nil then
+		self.startButton:DisconnectEvent(ButtonClickEvent, self.startHandler)
+		self.startHandler = nil
+	end
+	if isvalid(self.backButton) and self.backHandler ~= nil then
+		self.backButton:DisconnectEvent(ButtonClickEvent, self.backHandler)
+		self.backHandler = nil
+	end
+	if isvalid(self.startGameButton) and self.startGameHandler ~= nil then
+		self.startGameButton:DisconnectEvent(ButtonClickEvent, self.startGameHandler)
+		self.startGameHandler = nil
+	end
+	if self.stageHandlers ~= nil then
+		for _, rec in ipairs(self.stageHandlers) do
+			if isvalid(rec.ent) and rec.hd ~= nil then
+				rec.ent:DisconnectEvent(ButtonClickEvent, rec.hd)
+			end
+		end
+		self.stageHandlers = nil
+	end
+	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
+	if isvalid(shopBtn) and self.shopOpenHandler ~= nil then
+		shopBtn:DisconnectEvent(ButtonClickEvent, self.shopOpenHandler)
+		self.shopOpenHandler = nil
+	end
+	local shopBack = _EntityService:GetEntityByPath("/ui/ShopGroup/BackBtn")
+	if isvalid(shopBack) and self.shopBackHandler ~= nil then
+		shopBack:DisconnectEvent(ButtonClickEvent, self.shopBackHandler)
+		self.shopBackHandler = nil
+	end
+	if self.shopCells ~= nil then
+		for _, cell in ipairs(self.shopCells) do
+			if isvalid(cell.buy) and cell.hd ~= nil then
+				cell.buy:DisconnectEvent(ButtonClickEvent, cell.hd)
+			end
+		end
+		self.shopCells = nil
+	end
+	self:ClearGaugeTimers()
+end
+
+end

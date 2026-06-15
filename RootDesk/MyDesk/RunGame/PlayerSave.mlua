@@ -1,0 +1,294 @@
+@Logic
+script PlayerSave extends Logic
+
+-- Server-side per-account persistence (UserDataStorage). Saves are event-driven only
+-- (game end / purchase) and write only on change, per DataStorage cost rules.
+--
+-- IMPORTANT: _UtilLogic:TableToString/StringToTable does NOT serialize nested tables
+-- (a sub-table round-trips as an empty placeholder). So the save blob is a FLAT table
+-- of top-level scalar keys only:
+--   "gold"        = number
+--   "s_<stage>"   = best score for that stage   (e.g. "s_2-5" = 300)
+--   "i_<itemId>"  = 1 if the item is owned       (e.g. "i_hp10" = 1)
+property any caches = nil
+-- Client-side copy of THIS user's save (flat table), received from the server for UI.
+property any clientData = nil
+
+@ExecSpace("ServerOnly")
+method void OnBeginPlay()
+	self.caches = {}
+	log("[PlayerSave] OnBeginPlay (server cache ready)")
+end
+
+@ExecSpace("ServerOnly")
+method any LoadUser(string userId)
+	-- Returns the user's cached flat save table, reading UserDataStorage on first access.
+	if self.caches == nil then
+		self.caches = {}
+	end
+	if self.caches[userId] ~= nil then
+		return self.caches[userId]
+	end
+	local data = nil
+	local storage = _DataStorageService:GetUserDataStorage(userId)
+	if storage ~= nil then
+		local errorCode, raw = storage:GetAndWait("save")
+		if errorCode == 0 and raw ~= nil and raw ~= "" then
+			data = _UtilLogic:StringToTable(raw)
+		end
+	end
+	if data == nil then
+		data = {}
+	end
+	if data.gold == nil then
+		data.gold = 0
+	end
+	self.caches[userId] = data
+	log("[PlayerSave] loaded user=" .. tostring(userId) .. " gold=" .. tostring(data.gold))
+	return data
+end
+
+@ExecSpace("ServerOnly")
+method void Persist(string userId)
+	-- Writes the user's flat cache back to UserDataStorage (call only on real changes).
+	local data = self.caches[userId]
+	if data == nil then
+		return
+	end
+	local storage = _DataStorageService:GetUserDataStorage(userId)
+	if storage == nil then
+		return
+	end
+	local errorCode = storage:SetAndWait("save", _UtilLogic:TableToString(data))
+	if errorCode ~= 0 then
+		log_warning("[PlayerSave] persist failed code=" .. tostring(errorCode) .. " user=" .. tostring(userId))
+	else
+		log("[PlayerSave] persisted user=" .. tostring(userId))
+	end
+end
+
+@ExecSpace("Server")
+method void RequestMyData()
+	-- Client → server → client: send the caller's flat save back to their own client.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+end
+
+@ExecSpace("Client")
+method void ReceiveMyData(string json)
+	-- Runs on the owning client: parse the flat table and cache it, then refresh the UI.
+	local data = nil
+	if json ~= nil and json ~= "" then
+		data = _UtilLogic:StringToTable(json)
+	end
+	if data == nil then
+		data = {}
+	end
+	if data.gold == nil then
+		data.gold = 0
+	end
+	self.clientData = data
+	log("[PlayerSave] client received save data gold=" .. tostring(data.gold))
+	if _ScreenFlow ~= nil then
+		_ScreenFlow:RefreshSavedUI()
+	end
+end
+
+method integer GetStageBest(string stage)
+	-- Client-side read of the cached best score for a stage (0 if none).
+	if self.clientData == nil then
+		return 0
+	end
+	local v = self.clientData["s_" .. stage]
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+method integer GetItemLevel(string itemId)
+	-- Client-side read of an item's current level (0 = not bought yet).
+	if self.clientData == nil then
+		return 0
+	end
+	local v = self.clientData["lv_" .. itemId]
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+method integer GetGold()
+	-- Client-side read of the cached gold balance.
+	if self.clientData == nil or self.clientData.gold == nil then
+		return 0
+	end
+	return math.floor(self.clientData.gold)
+end
+
+method integer ShopItemCost(number price, number priceInc, number level)
+	-- Cost to buy the NEXT level (level is the current level). Shared by client display + server.
+	return math.floor(price + priceInc * level)
+end
+
+@ExecSpace("ServerOnly")
+method integer LookupReward(string stage, boolean isClear)
+	-- Reward amount from the StageReward dataset (clear vs fail column), 0 if missing.
+	local ds = _DataService:GetTable("StageReward")
+	if ds == nil then
+		return 0
+	end
+	local row = ds:FindRow("stage", stage)
+	if row == nil then
+		return 0
+	end
+	local key = "fail"
+	if isClear then
+		key = "clear"
+	end
+	local v = tonumber(row:GetItem(key))
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+@ExecSpace("Server")
+method void SaveStageScore(string stage, integer score)
+	-- Game end → save this stage's best score (only when it beats the stored best).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if stage == nil or stage == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local k = "s_" .. stage
+	local prev = data[k]
+	if prev == nil then
+		prev = 0
+	end
+	if score > prev then
+		data[k] = score
+		self:Persist(userId)
+		log("[PlayerSave] stage " .. tostring(stage) .. " NEW best=" .. tostring(score))
+	else
+		log("[PlayerSave] stage " .. tostring(stage) .. " kept best=" .. tostring(prev) .. " (run=" .. tostring(score) .. ")")
+	end
+end
+
+@ExecSpace("Server")
+method void GrantStageReward(string stage, boolean isClear)
+	-- Game end → grant data-driven gold (StageReward dataset), persist, sync + notify client.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if stage == nil or stage == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local amount = self:LookupReward(stage, isClear)
+	if amount > 0 then
+		data.gold = (data.gold or 0) + amount
+		self:Persist(userId)
+	end
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:ShowRewardClient(amount, userId)
+	log("[PlayerSave] reward stage=" .. tostring(stage) .. " clear=" .. tostring(isClear) .. " +" .. tostring(amount) .. " gold=" .. tostring(data.gold))
+end
+
+@ExecSpace("Client")
+method void ShowRewardClient(integer amount)
+	-- Show the earned reward on the result panel.
+	if _RunGameHud ~= nil then
+		_RunGameHud:ShowReward(amount)
+	end
+end
+
+@ExecSpace("Server")
+method void BuyItem(string itemId, string itemName)
+	-- Shop purchase → check gold, deduct price, mark owned, persist, sync + notify.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if itemId == nil or itemId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	-- Item config comes from the ShopItem dataset (price / priceInc / maxLevel).
+	local ds = _DataService:GetTable("ShopItem")
+	if ds == nil then
+		return
+	end
+	local row = ds:FindRow("id", itemId)
+	if row == nil then
+		return
+	end
+	local price = tonumber(row:GetItem("price")) or 0
+	local priceInc = tonumber(row:GetItem("priceInc")) or 0
+	local maxLevel = tonumber(row:GetItem("maxLevel")) or 0
+	local k = "lv_" .. itemId
+	local level = data[k]
+	if level == nil then
+		level = 0
+	end
+	if level >= maxLevel then
+		self:BuyResultClient(3, itemName, userId)
+		return
+	end
+	local cost = self:ShopItemCost(price, priceInc, level)
+	if (data.gold or 0) < cost then
+		self:BuyResultClient(1, itemName, userId)
+		log("[PlayerSave] buy denied (gold " .. tostring(data.gold) .. " < " .. tostring(cost) .. ") " .. tostring(itemId))
+		return
+	end
+	data.gold = data.gold - cost
+	data[k] = level + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:BuyResultClient(0, itemName, userId)
+	log("[PlayerSave] bought " .. tostring(itemId) .. " Lv." .. tostring(level + 1) .. " -" .. tostring(cost) .. " gold=" .. tostring(data.gold))
+end
+
+@ExecSpace("Client")
+method void BuyResultClient(integer code, string itemName)
+	-- Toast the purchase outcome (0 ok / 1 not enough gold / 2 already owned).
+	local msg = ""
+	if code == 0 then
+		msg = tostring(itemName) .. " 레벨 업!"
+	elseif code == 1 then
+		msg = "골드가 부족합니다"
+	elseif code == 3 then
+		msg = "이미 최대 레벨입니다"
+	else
+		msg = "이미 보유한 아이템입니다"
+	end
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage(msg)
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void SetLocalStageBest(string stage, integer score)
+	-- Keep the client cache in step with a just-finished run (server persists authoritatively).
+	if self.clientData == nil then
+		self.clientData = {}
+	end
+	local k = "s_" .. stage
+	local prev = self.clientData[k]
+	if prev == nil then
+		prev = 0
+	end
+	if score > prev then
+		self.clientData[k] = score
+	end
+end
+
+end

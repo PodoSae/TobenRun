@@ -1,0 +1,601 @@
+@Logic
+script RunGameHud extends Logic
+
+@DisplayName("달리기 속도")
+property number runSpeed = 3.0
+@DisplayName("점프 힘")
+property number jumpForce = 1.4
+@DisplayName("낙사 기준 Y")
+property number fallY = -6.0
+@DisplayName("골인 정지 여유거리")
+property number goalMargin = 2.0
+@DisplayName("추락 판정 깊이")
+property number fallDropMargin = 2.0
+@DisplayName("최대 체력")
+property integer maxHp = 100
+@DisplayName("추락 시 체력 감소")
+property integer fallDamage = 10
+
+property boolean hasCheckpoint = false
+property number lastFhX = 0
+property number lastFhY = 0
+property integer hp = 100
+
+property Entity scoreText = "c6183012-b66d-42ee-834b-72674ac98eca"
+property Entity gameOverPanel = "133f65c0-d55e-41f2-b3f2-1ae708139b40"
+property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
+property Entity restartButton = "27d7a562-4150-42d1-8716-a3bab2ccc588"
+property Entity resultTitle = "77cc9c1c-ff74-4d20-a62d-d96614f6ce8d"
+property Entity hpText = "6f9f998d-16ab-4d40-b90d-76ac49c315da"
+-- PopupGroup root (DefaultShow=false → must be enabled for any child to render)
+-- and the generic confirm backdrop that shares the group (hidden so it never overlays the result).
+property Entity popupGroup = "fb7a3b06-7026-4590-8efe-bb33416dd8f9"
+property Entity confirmBack = "e25e8e41-5cb9-4fae-8dc0-ea7dca85a91d"
+
+property any restartHandler = nil
+property any keyHandler = nil
+property any touchHandler = nil
+property any deadHandler = nil
+
+property boolean started = false
+property boolean isAlive = false
+property boolean pendingStart = false
+property string curMapName = ""
+property string curStage = ""
+property number spawnX = 0
+property number spawnY = 0
+property number bestX = 0
+property number goalX = 0
+property integer score = 0
+property integer scoreAnimTimer = 0
+property number scoreAnimCur = 0
+property integer scoreAnimTarget = 0
+
+@ExecSpace("ClientOnly")
+method void OnBeginPlay()
+	-- Hide the game-over panel and wire restart button + jump input at world start.
+	if isvalid(self.gameOverPanel) then
+		self.gameOverPanel.Enable = false
+	end
+	if isvalid(self.restartButton) then
+		self.restartHandler = self.restartButton:ConnectEvent(ButtonClickEvent, self.OnGoLobbyClick)
+	end
+	self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+	self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnScreenTouch)
+	self:SetScore(0)
+	self:SetHp(self.maxHp)
+	log("[RunGameHud] OnBeginPlay wired")
+end
+
+@ExecSpace("ClientOnly")
+method void OnUpdate(number delta)
+	-- Drives the local player: auto-run, animation, distance scoring, fall detection.
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+
+	-- One-time setup once the local player exists.
+	if self.started == false then
+		self:Setup(player)
+	end
+
+	-- Detect a map change (teleport between stages) and re-initialize per-map state.
+	local mapName = player.CurrentMapName
+	if mapName ~= nil and mapName ~= self.curMapName then
+		self.curMapName = mapName
+		self:OnArriveMap(player)
+	end
+
+	if self.isAlive == false then
+		return
+	end
+
+	local movement = player.MovementComponent
+	local rb = player.RigidbodyComponent
+	if movement == nil or rb == nil then
+		return
+	end
+
+	-- Auto-run to the right.
+	movement:MoveToDirection(Vector2(1, 0), delta)
+
+	-- Drive run / jump animation through the state machine.
+	local state = player.StateComponent
+	if state ~= nil then
+		if rb:IsOnGround() then
+			if state.CurrentStateName ~= "MOVE" then
+				state:ChangeState("MOVE")
+			end
+		else
+			if state.CurrentStateName ~= "JUMP" then
+				state:ChangeState("JUMP")
+			end
+		end
+	end
+
+	-- Remember the foothold currently under the player (checkpoint for fall respawn).
+	if rb:IsOnGround() then
+		local fh = rb:GetCurrentFoothold()
+		if isvalid(fh) then
+			self.lastFhX = fh.StartPoint.x
+			self.lastFhY = fh.StartPoint.y
+			self.hasCheckpoint = true
+		end
+	end
+
+	-- Distance-based score (monotonic — only forward progress counts).
+	local x = player.TransformComponent.WorldPosition.x
+	if x > self.bestX then
+		self.bestX = x
+	end
+	local newScore = math.floor((self.bestX - self.spawnX) * 10)
+	if newScore < 0 then
+		newScore = 0
+	end
+	if newScore ~= self.score then
+		self.score = newScore
+		self:SetScore(self.score)
+	end
+
+	-- Reached the end of the course → clear (game finished).
+	if self.goalX > self.spawnX and x >= self.goalX then
+		self:Clear()
+		return
+	end
+
+	-- Fell off a platform → lose HP, then respawn (or game over at 0 HP).
+	local py = player.TransformComponent.WorldPosition.y
+	if self.hasCheckpoint and py < self.lastFhY - self.fallDropMargin then
+		self:OnFall()
+		return
+	end
+	if py < self.fallY then
+		self:OnFall()
+		return
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void Setup(Entity player)
+	-- Configure the local player for auto-run (runs once).
+	self.started = true
+	-- Any death (fell off the map / HP 0 / engine death) → route to the game-over result.
+	self.deadHandler = player:ConnectEvent(DeadEvent, self.OnPlayerDead)
+	local movement = player.MovementComponent
+	if movement ~= nil then
+		movement.InputSpeed = self.runSpeed
+		movement.JumpForce = self.jumpForce
+	end
+	-- Disable the default controller so auto-run owns horizontal movement,
+	-- but make the avatar face right (the running direction) instead of backward.
+	local controller = player.PlayerControllerComponent
+	if controller ~= nil then
+		controller.Enable = false
+		controller.LookDirectionX = 1
+	end
+	-- Allow the runner to leave the map boundary so it can fall off course ends / gaps.
+	local rb = player.RigidbodyComponent
+	if rb ~= nil then
+		rb.IgnoreMoveBoundary = true
+	end
+	-- Let the camera follow the player all the way to the end (not confined to the map area),
+	-- otherwise the runner goes off-screen near the far end of a long course.
+	local cam = player.CameraComponent
+	if cam ~= nil then
+		cam.ConfineCameraArea = false
+	end
+	-- Do NOT run yet. Per-map spawn/goal init happens in OnArriveMap (also for the first map).
+	self.isAlive = false
+	log("[RunGameHud] Setup done (one-time player config)")
+end
+
+@ExecSpace("ClientOnly")
+method void OnArriveMap(Entity player)
+	-- Re-initialize per-map run state whenever the player enters a (new) map.
+	-- The course start is the player's landing position; the goal is this map's far edge.
+	local pos = player.TransformComponent.WorldPosition
+	self.spawnX = pos.x
+	self.spawnY = pos.y
+	self.bestX = pos.x
+	self.hp = self.maxHp
+	self.score = 0
+	self.hasCheckpoint = false
+	self.goalX = self:FindGoalX(player)
+	self:SetScore(0)
+	self:SetHp(self.hp)
+	if player.StateComponent ~= nil then
+		player.StateComponent:ChangeState("IDLE")
+	end
+	log("[RunGameHud] arrived map=" .. tostring(self.curMapName) .. " spawnX=" .. tostring(self.spawnX) .. " goalX=" .. tostring(self.goalX))
+	-- If a stage was selected (teleport in flight), auto-start the run on arrival.
+	if self.pendingStart then
+		self.pendingStart = false
+		self.isAlive = true
+		log("[RunGameHud] auto-start on arrival")
+	else
+		self.isAlive = false
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void GoToStage(string stage, string mapName)
+	-- Lobby stage button → teleport to the stage's map, then auto-start the run on arrival.
+	if mapName == nil or mapName == "" then
+		log("[RunGameHud] GoToStage: empty mapName for stage " .. tostring(stage))
+		return
+	end
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	-- Revive first if a previous run left the player dead, so it stands ready on arrival.
+	if isvalid(player.PlayerComponent) and player.PlayerComponent:IsDead() then
+		player.PlayerComponent:ProcessRevive()
+	end
+	self.curStage = stage
+	self.pendingStart = true
+	self:RequestTeleport(player, mapName)
+	log("[RunGameHud] GoToStage stage=" .. tostring(stage) .. " map=" .. tostring(mapName))
+end
+
+@ExecSpace("Server")
+method void RequestTeleport(Entity player, string mapName)
+	-- Server-side teleport. ServiceAuthorityCheck forces TeleportService to run on the server,
+	-- so this must be a Server RPC (a client call would raise [LEA-3022]).
+	if isvalid(player) == false then
+		return
+	end
+	_TeleportService:TeleportToMapPosition(player, Vector3(0, 2, 0), mapName)
+end
+
+@ExecSpace("ClientOnly")
+method void StartGame()
+	-- Begin running. Called when the lobby "게임 시작" button is pressed.
+	if self.started == false then
+		-- Local player not configured yet; start as soon as Setup finishes.
+		self.pendingStart = true
+		return
+	end
+	local player = _UserService.LocalPlayer
+	if isvalid(player) then
+		-- Revive first if a previous run left the player dead.
+		if isvalid(player.PlayerComponent) and player.PlayerComponent:IsDead() then
+			player.PlayerComponent:ProcessRevive()
+		end
+		if player.MovementComponent ~= nil then
+			player.MovementComponent:SetWorldPosition(Vector2(self.spawnX, self.spawnY))
+		end
+		if player.StateComponent ~= nil then
+			player.StateComponent:ChangeState("IDLE")
+		end
+	end
+	self.bestX = self.spawnX
+	self.hasCheckpoint = false
+	self.hp = self.maxHp
+	self.score = 0
+	self.isAlive = true
+	self:SetScore(0)
+	self:SetHp(self.hp)
+	log("[RunGameHud] StartGame")
+end
+
+@ExecSpace("ClientOnly")
+method number FindGoalX(Entity player)
+	-- The map end = the rightmost foothold's right edge, minus a small margin.
+	local map = player.CurrentMap
+	local goal = self.spawnX
+	if isvalid(map) and map.FootholdComponent ~= nil then
+		local footholds = map.FootholdComponent:GetFootholdAll()
+		for _, fh in ipairs(footholds) do
+			if fh.EndPoint.x > goal then
+				goal = fh.EndPoint.x
+			end
+		end
+	end
+	return goal - self.goalMargin
+end
+
+@ExecSpace("ClientOnly")
+method void OnFall()
+	-- A fall costs HP. At 0 HP it's game over; otherwise respawn at the last checkpoint.
+	self.hp = self.hp - self.fallDamage
+	if self.hp < 0 then
+		self.hp = 0
+	end
+	self:SetHp(self.hp)
+	log("[RunGameHud] fell, hp=" .. tostring(self.hp))
+	if self.hp <= 0 then
+		self:GameOver()
+	else
+		self:RespawnAtCheckpoint()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void SetHp(integer value)
+	-- Update the on-screen HP number.
+	if isvalid(self.hpText) then
+		self.hpText.TextComponent.Text = "HP  " .. tostring(value) .. " / " .. tostring(self.maxHp)
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void RespawnAtCheckpoint()
+	-- Put the player back on the left edge of the last foothold it stood on, then keep running.
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	local tx = self.lastFhX
+	local ty = self.lastFhY
+	if self.hasCheckpoint == false then
+		tx = self.spawnX
+		ty = self.spawnY
+	end
+	local movement = player.MovementComponent
+	if movement ~= nil then
+		movement:Stop()
+		movement:SetWorldPosition(Vector2(tx + 0.1, ty + 0.3))
+	end
+	log("[RunGameHud] respawn at checkpoint x=" .. tostring(tx))
+end
+
+@ExecSpace("ClientOnly")
+method void TryJump()
+	-- Jump only while alive and standing on a foothold.
+	if self.isAlive == false then
+		return
+	end
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	local rb = player.RigidbodyComponent
+	local movement = player.MovementComponent
+	if rb == nil or movement == nil then
+		return
+	end
+	if rb:IsOnGround() then
+		movement:Jump()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void GameOver()
+	-- Stop running and show the game-over panel with the final score.
+	if self.isAlive == false then
+		return
+	end
+	self.isAlive = false
+	local player = _UserService.LocalPlayer
+	if isvalid(player) and player.MovementComponent ~= nil then
+		player.MovementComponent:Stop()
+	end
+	-- Sad face on failure.
+	if isvalid(player) and isvalid(player.AvatarRendererComponent) then
+		player.AvatarRendererComponent:PlayEmotion(EmotionalType.Cry, 3.0)
+	end
+	self:ShowResult("GAME OVER", self.score, false)
+	log("[RunGameHud] GameOver score=" .. tostring(self.score))
+end
+
+@ExecSpace("ClientOnly")
+method void OnPlayerDead(DeadEvent event)
+	-- Engine death (fell off the map / HP 0) → same game-over result flow.
+	if self.isAlive then
+		log("[RunGameHud] DeadEvent received")
+		self:GameOver()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void Clear()
+	-- Reached the end of the course → finish the game with a clear result.
+	if self.isAlive == false then
+		return
+	end
+	self.isAlive = false
+	local player = _UserService.LocalPlayer
+	if isvalid(player) then
+		-- Hard stop at the finish — kill momentum so the runner doesn't slide.
+		if player.MovementComponent ~= nil then
+			player.MovementComponent:Stop()
+		end
+		if player.RigidbodyComponent ~= nil then
+			player.RigidbodyComponent.MoveVelocity = Vector2(0, 0)
+		end
+		-- Stand still and celebrate at the finish.
+		if player.StateComponent ~= nil then
+			player.StateComponent:ChangeState("IDLE")
+		end
+		if isvalid(player.AvatarRendererComponent) then
+			player.AvatarRendererComponent:PlayEmotion(EmotionalType.Cheers, 3.0)
+		end
+	end
+	self:ShowResult("골인! CLEAR", self.score, true)
+	log("[RunGameHud] Clear score=" .. tostring(self.score))
+end
+
+@ExecSpace("ClientOnly")
+method void SetScore(integer score)
+	-- Update the on-screen score number.
+	if isvalid(self.scoreText) then
+		self.scoreText.TextComponent.Text = "SCORE  " .. tostring(score)
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void ShowResult(string title, integer score, boolean isClear)
+	-- Clear any previous reward text; the new reward arrives async from the server.
+	local rewardEnt = _EntityService:GetEntityByPath("/ui/PopupGroup/RunGameOver/Reward")
+	if isvalid(rewardEnt) and rewardEnt.TextComponent ~= nil then
+		rewardEnt.TextComponent.Text = ""
+	end
+	-- Persist this stage's score (server keeps the best) + grant data-driven gold reward.
+	if self.curStage ~= "" and _PlayerSave ~= nil then
+		_PlayerSave:SaveStageScore(self.curStage, score)
+		_PlayerSave:SetLocalStageBest(self.curStage, score)
+		_PlayerSave:GrantStageReward(self.curStage, isClear)
+	end
+	-- Reveal the result panel with a title (clear / game over) and final score.
+	if isvalid(self.resultTitle) then
+		self.resultTitle.TextComponent.Text = title
+		if isClear then
+			self.resultTitle.TextComponent.FontColor = Color(0.40, 1.00, 0.55, 1.0)
+		else
+			self.resultTitle.TextComponent.FontColor = Color(1.00, 0.35, 0.35, 1.0)
+		end
+	end
+	-- PopupGroup is DefaultShow=false: enabling only the child renders nothing.
+	-- Show the group root (and reset its alpha), and hide the shared confirm backdrop.
+	if isvalid(self.popupGroup) then
+		self.popupGroup.Enable = true
+		if self.popupGroup.CanvasGroupComponent ~= nil then
+			self.popupGroup.CanvasGroupComponent.GroupAlpha = 1
+		end
+	end
+	if isvalid(self.confirmBack) then
+		self.confirmBack.Enable = false
+	end
+	if isvalid(self.gameOverPanel) then
+		self.gameOverPanel.Enable = true
+	end
+	-- Animate the score counting up from 0 (연출).
+	self:StartScoreAnim(score)
+end
+
+@ExecSpace("ClientOnly")
+method void ShowReward(integer amount)
+	-- Display the gold earned on the result panel (called when the server grants the reward).
+	local rewardEnt = _EntityService:GetEntityByPath("/ui/PopupGroup/RunGameOver/Reward")
+	if isvalid(rewardEnt) and rewardEnt.TextComponent ~= nil then
+		if amount > 0 then
+			rewardEnt.TextComponent.Text = "+" .. tostring(amount) .. " G 획득!"
+		else
+			rewardEnt.TextComponent.Text = ""
+		end
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void StartScoreAnim(integer target)
+	-- Kick off a count-up of the final score in the result panel.
+	if self.scoreAnimTimer ~= 0 then
+		_TimerService:ClearTimer(self.scoreAnimTimer)
+		self.scoreAnimTimer = 0
+	end
+	self.scoreAnimTarget = target
+	self.scoreAnimCur = 0
+	if isvalid(self.finalScoreText) then
+		self.finalScoreText.TextComponent.Text = "SCORE  0"
+	end
+	if target <= 0 then
+		return
+	end
+	-- ~30 ticks over ~0.9s.
+	self.scoreAnimTimer = _TimerService:SetTimerRepeat(self.TickScoreAnim, 0.03)
+end
+
+@ExecSpace("ClientOnly")
+method void TickScoreAnim()
+	-- Step the displayed score toward the target, then settle and stop.
+	local step = self.scoreAnimTarget / 30.0
+	if step < 1 then
+		step = 1
+	end
+	self.scoreAnimCur = self.scoreAnimCur + step
+	if self.scoreAnimCur >= self.scoreAnimTarget then
+		self.scoreAnimCur = self.scoreAnimTarget
+		if self.scoreAnimTimer ~= 0 then
+			_TimerService:ClearTimer(self.scoreAnimTimer)
+			self.scoreAnimTimer = 0
+		end
+	end
+	if isvalid(self.finalScoreText) then
+		self.finalScoreText.TextComponent.Text = "SCORE  " .. tostring(math.floor(self.scoreAnimCur))
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnGoLobbyClick(ButtonClickEvent event)
+	-- Result panel button → hide result, reset to waiting, and return to the lobby.
+	if isvalid(self.gameOverPanel) then
+		self.gameOverPanel.Enable = false
+	end
+	-- Hide the whole PopupGroup again so it returns to its DefaultShow=false state.
+	if isvalid(self.popupGroup) then
+		self.popupGroup.Enable = false
+	end
+	if self.scoreAnimTimer ~= 0 then
+		_TimerService:ClearTimer(self.scoreAnimTimer)
+		self.scoreAnimTimer = 0
+	end
+	local player = _UserService.LocalPlayer
+	if isvalid(player) then
+		-- Revive if the engine killed the player, so it stands ready at spawn.
+		if isvalid(player.PlayerComponent) and player.PlayerComponent:IsDead() then
+			player.PlayerComponent:ProcessRevive()
+		end
+		if player.MovementComponent ~= nil then
+			player.MovementComponent:Stop()
+			player.MovementComponent:SetWorldPosition(Vector2(self.spawnX, self.spawnY))
+		end
+		if player.StateComponent ~= nil then
+			player.StateComponent:ChangeState("IDLE")
+		end
+	end
+	self.isAlive = false
+	self.bestX = self.spawnX
+	self.score = 0
+	self:SetScore(0)
+	if _ScreenFlow ~= nil then
+		_ScreenFlow:ShowLobby()
+	end
+	log("[RunGameHud] result -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnKeyDown(KeyDownEvent event)
+	-- Space / Up arrow → jump.
+	if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
+		self:TryJump()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnScreenTouch(ScreenTouchEvent event)
+	-- Tap anywhere (except on UI) → jump.
+	if _InputService:IsPointerOverUI() then
+		return
+	end
+	self:TryJump()
+end
+
+@ExecSpace("ClientOnly")
+method void OnEndPlay()
+	-- Release input subscriptions.
+	if self.keyHandler ~= nil then
+		_InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+		self.keyHandler = nil
+	end
+	if self.touchHandler ~= nil then
+		_InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler)
+		self.touchHandler = nil
+	end
+	if isvalid(self.restartButton) and self.restartHandler ~= nil then
+		self.restartButton:DisconnectEvent(ButtonClickEvent, self.restartHandler)
+		self.restartHandler = nil
+	end
+	local player = _UserService.LocalPlayer
+	if isvalid(player) and self.deadHandler ~= nil then
+		player:DisconnectEvent(DeadEvent, self.deadHandler)
+		self.deadHandler = nil
+	end
+	if self.scoreAnimTimer ~= 0 then
+		_TimerService:ClearTimer(self.scoreAnimTimer)
+		self.scoreAnimTimer = 0
+	end
+end
+
+end
