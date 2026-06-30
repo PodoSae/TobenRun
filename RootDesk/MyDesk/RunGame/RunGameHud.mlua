@@ -51,6 +51,9 @@ property integer coinBonus = 50
 property any coins = nil
 property any gapZones = nil
 property integer coinScore = 0
+-- Per-course run speed. This default is the fallback; a course overrides it with "Set,speed,<v>".
+@DisplayName("코스 달리기 속도(Course의 Set,speed로 지정)")
+property number courseSpeed = 4
 
 @ExecSpace("ClientOnly")
 method void OnBeginPlay()
@@ -177,6 +180,14 @@ method void SetRunnerActive(boolean active)
 	if pc ~= nil then
 		if active then
 			pc.speedMultiplier = 1
+			pc.speed = self.courseSpeed
+			-- The engine clamps the Rigidbody's horizontal velocity to WalkSpeed, so WalkSpeed is the
+			-- REAL speed knob (raising pc.speed past it does nothing). Drive WalkSpeed from the per-course
+			-- "Set,speed,<v>" value so actual run speed ≈ that value (u/s).
+			local rb = player.RigidbodyComponent
+			if rb ~= nil then
+				rb.WalkSpeed = self.courseSpeed
+			end
 		else
 			pc.speedMultiplier = 0
 		end
@@ -224,6 +235,7 @@ method void OnArriveMap(Entity player)
 	self.score = 0
 	self.coinScore = 0
 	self.goalX = cfg.goalX
+	self.courseSpeed = cfg.speed
 	-- Rebuild coin / gap interactions for this stage.
 	self:BuildCourseInteractions(self.curStage)
 	self:SetScore(0)
@@ -335,7 +347,7 @@ end
 @ExecSpace("ClientOnly")
 method table ResolveStageConfig(string stage)
 	-- Resolve a stage's floorY / startX / goalX from CourseGen defaults + the stage's "Set" commands.
-	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0 }
+	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0, speed = self.courseSpeed }
 	if _CourseGen ~= nil then
 		cfg.floorY = _CourseGen.defFloorY
 		cfg.startX = _CourseGen.defStartX
@@ -360,6 +372,8 @@ method table ResolveStageConfig(string stage)
 					cfg.startX = v
 				elseif key == "goal" then
 					cfg.goalX = v
+				elseif key == "speed" then
+					cfg.speed = v
 				end
 			end
 		end

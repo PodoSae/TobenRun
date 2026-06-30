@@ -2,6 +2,7 @@
 Set,floorY,0,
 Set,length,140,
 Set,goal,130,
+Set,speed,3,
 Set,tile,2b73e2c6c05143a192ea6d1a08966349,
 Spawn,normal,16,
 Spawn,obstacle,28,
