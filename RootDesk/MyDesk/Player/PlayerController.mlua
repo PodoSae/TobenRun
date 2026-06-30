@@ -18,8 +18,8 @@ script PlayerController extends Component
 	-- Ground jump. PlayerControllerComponent.UseCustomScript=true hands ALL input to this script, so the
 	-- native controller no longer jumps — the runner provides the grounded jump here. The air/double
 	-- jump is DoubleJump's job (its Jump-key handler only fires while airborne).
-	@DisplayName("점프 힘")
-	property number jumpForce = 1.4
+	@DisplayName("점프 힘(수직 임펄스)")
+	property number jumpForce = 13
 	property any jumpKeyHandler = nil
 	property boolean isLocal = false
 
@@ -47,9 +47,6 @@ script PlayerController extends Component
 		if self:IsClient() and _UserService.LocalPlayer == self.Entity then
 			self.isLocal = true
 			self:LockRunnerInput()
-			if self.movement ~= nil then
-				self.movement.JumpForce = self.jumpForce
-			end
 			self.jumpKeyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnGroundJumpKey)
 		end
 	end
@@ -111,12 +108,13 @@ script PlayerController extends Component
 
 	@ExecSpace("ClientOnly")
 	method void OnGroundJumpKey(KeyDownEvent event)
-		-- Space / Up = ground jump. MovementComponent:Jump() succeeds only when grounded, so a mid-air
-		-- tap fails here and falls through to DoubleJump's air jump. Local player only.
+		-- Space / Up = ground jump: a PURELY VERTICAL impulse (AddForce only adds Y), so the jump keeps the
+		-- run's horizontal speed instead of launching forward. Gated on IsOnGround() so a mid-air tap does
+		-- nothing here and falls through to DoubleJump's air jump. Local player only.
 		if _UserService.LocalPlayer ~= self.Entity then return end
 		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
-			if self.movement ~= nil then
-				self.movement:Jump()
+			if self.body ~= nil and self.body:IsOnGround() then
+				self.body:AddForce(Vector2(0, self.jumpForce))
 			end
 		end
 	end
