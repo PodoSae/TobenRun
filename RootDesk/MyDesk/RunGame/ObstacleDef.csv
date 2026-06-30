@@ -1,6 +1,5 @@
-﻿id,ruid,yoff,damage,debuff,dvalue,dtime,scale,flipy,ceiling,minjumps,scaley
-obstacle,af921b2251574675834981e2394e05d1,0,10,none,0,0,1,0,0,1,0
-monster,bbdf743f29c749f391ddfb440e10055f,0,10,none,0,0,1,0,0,1,0
-spike,e3183be47a884b03a3d6edfc1dec6d17,0,15,slow,0.5,2,1.5,0,0,1,0
-spike_2,e1c5d96fdcb0460fa009a884c165605c,0,15,slow,0.5,2,1.2,0,0,2,2.4
-spike_up,56bd0ac3a7ed453884c993d4b64f0de5,1.0,15,none,0,0,1.0,1,1,0,3.0
+﻿id,model,damage,debuff,dvalue,dtime
+obstacle,Haz_obstacle,10,none,0,0
+spike,Haz_spike,15,slow,0.5,2
+spike_2,Haz_spike2,15,slow,0.5,2
+spike_up,Haz_spikeup,15,none,0,0

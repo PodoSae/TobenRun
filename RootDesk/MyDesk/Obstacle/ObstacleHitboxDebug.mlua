@@ -1,10 +1,10 @@
 @Component
 script ObstacleHitboxDebug extends Component
 
-    -- Debug overlay for the obstacle's contact range. Obstacle collision is a circle of radius
-    -- Obstacle.HitRadius around its origin (script.Obstacle:CheckHit), so the marker is a square bounding
-    -- that circle (side = 2*HitRadius). Client-only/visual; toggle with ShowHitboxes. The box is a child,
-    -- so it inherits the obstacle's (0.5) scale — the scale below divides it back out to true world units.
+    -- Debug overlay for the obstacle's contact range. Obstacle collision is an axis-aligned box of
+    -- half-extents Obstacle.HitHalfWidth/HitHalfHeight around its origin (script.Obstacle:CheckHit), so the
+    -- marker is that box. Client-only/visual; toggle with ShowHitboxes. The box is a child, so it inherits
+    -- the obstacle's per-type scale — the scale below divides it back out to true world units.
     @DisplayName("히트박스 표시")
     property boolean ShowHitboxes = true
 
@@ -40,10 +40,14 @@ script ObstacleHitboxDebug extends Component
         if unit <= 0 then unit = 0.2 end
         if self.hitBox == nil or not isvalid(self.hitBox) then return end
 
-        local r = 0.6
+        local hw = 0.6
+        local hh = 0.6
         ---@type Obstacle
         local ob = self.Entity:GetComponent("script.Obstacle")
-        if ob ~= nil then r = ob.HitRadius end
+        if ob ~= nil then
+            hw = ob.HitHalfWidth
+            hh = ob.HitHalfHeight
+        end
 
         local ps = self.Entity.TransformComponent.Scale
         local psx = math.abs(ps.x)
@@ -54,7 +58,7 @@ script ObstacleHitboxDebug extends Component
         local t = self.hitBox.TransformComponent
         if t ~= nil then
             t.Position = Vector3(0, 0, 0)
-            t.Scale = Vector3((2 * r) / (unit * psx), (2 * r) / (unit * psy), 1)
+            t.Scale = Vector3((2 * hw) / (unit * psx), (2 * hh) / (unit * psy), 1)
         end
         local sr = self.hitBox.SpriteRendererComponent
         if sr ~= nil then

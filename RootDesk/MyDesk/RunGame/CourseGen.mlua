@@ -344,8 +344,8 @@ method number ObstacleDamage(string id)
 end
 
 @ExecSpace("ServerOnly")
-method string ObstacleRuid(string id)
-	-- Look up a hazard type's sprite RUID from the ObstacleDef DataSet (returns "" if not defined).
+method string ObstacleModel(string id)
+	-- Look up a hazard type's dedicated .model name from the ObstacleDef DataSet (returns "" if not defined).
 	local ds = _DataService:GetTable("ObstacleDef")
 	if ds == nil then
 		return ""
@@ -354,67 +354,7 @@ method string ObstacleRuid(string id)
 	if row == nil then
 		return ""
 	end
-	return tostring(row:GetItem("ruid"))
-end
-
-@ExecSpace("ServerOnly")
-method number ObstacleYOff(string id)
-	-- Extra vertical offset above the floor for a hazard type (default 0 = bottom on the floor).
-	local ds = _DataService:GetTable("ObstacleDef")
-	if ds == nil then
-		return 0
-	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
-		return 0
-	end
-	return tonumber(row:GetItem("yoff")) or 0
-end
-
-@ExecSpace("ServerOnly")
-method number ObstacleScale(string id)
-	-- Uniform display scale for a hazard's sprite (default 1). Lets a small sprite become a big spike.
-	local ds = _DataService:GetTable("ObstacleDef")
-	if ds == nil then
-		return 1
-	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
-		return 1
-	end
-	local s = tonumber(row:GetItem("scale"))
-	if s == nil or s <= 0 then
-		return 1
-	end
-	return s
-end
-
-@ExecSpace("ServerOnly")
-method boolean ObstacleFlipY(string id)
-	-- Flip a hazard sprite vertically (flipy=1) so a ceiling/hanging shape points UP from the floor.
-	local ds = _DataService:GetTable("ObstacleDef")
-	if ds == nil then
-		return false
-	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
-		return false
-	end
-	return tostring(row:GetItem("flipy")) == "1"
-end
-
-@ExecSpace("ServerOnly")
-method number ObstacleScaleY(string id)
-	-- Vertical-only display scale (default 0 = "use the uniform scale"). Lets a spike be TALLER than wide.
-	local ds = _DataService:GetTable("ObstacleDef")
-	if ds == nil then
-		return 0
-	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
-		return 0
-	end
-	return tonumber(row:GetItem("scaley")) or 0
+	return tostring(row:GetItem("model"))
 end
 
 @ExecSpace("ServerOnly")
@@ -442,31 +382,28 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		end
 		return
 	end
-	-- An obstacle type (ObstacleDef id) → spawn the sjy Obstacle model. Its in-model Obstacle script
-	-- damages PlayerHealth on contact. Params (sprite / damage / never-despawn / rest height) are set
-	-- post-spawn — Obstacle reads them in OnUpdate, so this ordering is safe (the component is in-model).
-	local oruid = self:ObstacleRuid(kind)
-	if oruid ~= "" then
+	-- An obstacle type (ObstacleDef id) → spawn its dedicated per-type .model (sprite + size baked in,
+	-- named by the ObstacleDef "model" column). The in-model Obstacle script self-sizes its contact box
+	-- from its sprite and damages PlayerHealth on contact; only damage / rest height are set post-spawn.
+	local omodel = self:ObstacleModel(kind)
+	if omodel ~= "" then
 		local restY = cfg.floorY + self.obstacleYRest
-		local o = _SpawnService:SpawnByModelId("obstacle", "Obstacle_" .. tostring(math.floor(x)), Vector3(x, restY, 0), map)
+		local o = _SpawnService:SpawnByModelId(omodel, "Obstacle_" .. tostring(math.floor(x)), Vector3(x, restY, 0), map)
 		if isvalid(o) then
 			---@type Obstacle
 			local oc = o:GetComponent("script.Obstacle")
 			if oc ~= nil then
-				oc.TargetY = restY     -- already at rest height: no rise-from-below for fixed placement
 				oc.Lifetime = 999999   -- fixed course placement must not auto-despawn before the runner arrives
-				oc.Damage = self:ObstacleDamage(kind)
+					oc.Damage = self:ObstacleDamage(kind)
+					if oc.IsCeiling then
+						-- Hang from the ceiling at CeilingY (FlipY baked in the model). Stay put: no rise-from-below.
+						oc.TargetY = oc.CeilingY
+						o.TransformComponent.Position = Vector3(x, oc.CeilingY, 0)
+					else
+						oc.TargetY = restY  -- floor placement: already at rest height, no rise
+					end
 			end
-			local spr = o.SpriteRendererComponent
-			if spr ~= nil then
-				spr.SpriteRUID = oruid
-			end
-			local sc = self:ObstacleScale(kind)
-			local scy = self:ObstacleScaleY(kind)
-			if scy <= 0 then
-				scy = sc
-			end
-			o.TransformComponent.Scale = Vector3(sc, scy, 1)
+			-- sprite + size are baked into the per-type model; Obstacle self-sizes its hitbox.
 		end
 		return
 	end

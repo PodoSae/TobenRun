@@ -7,10 +7,24 @@ script Obstacle extends Component
     property number RiseSpeed = 4.0
     -- Damage dealt to a player on contact.
     property number Damage = 20
-    -- Contact radius (world units) for the player-overlap check.
-    property number HitRadius = 0.6
+    -- Contact box half-extents (world units), centered on the origin (the sprite pivot is its center).
+    -- Self-sized in OnBeginPlay from this entity's OWN sprite footprint * Transform.Scale * HitFairness, so
+    -- the hit range always matches the image. Each obstacle type is its own .model (sprite + scale baked
+    -- in), so the size is read off the entity — no per-type data needed. A box (not a circle) is used so a
+    -- tall spike gets a tall range. @Sync propagates the server-computed size to the client overlay.
+    @Sync property number HitHalfWidth = 0.6
+    @Sync property number HitHalfHeight = 0.6
+    -- Contact box = sprite footprint * this fraction. <1 trims it inside the sprite so a near-miss past the
+    -- visible edge does not hit.
+    property number HitFairness = 0.8
     -- Safety auto-despawn after this many seconds.
     property number Lifetime = 12.0
+
+    -- Ceiling hazard: hangs from above pointing down (FlipY is baked into the model). The spawner places
+    -- it at CeilingY instead of the floor, so the player is only hit when jumping up into it and can run
+    -- underneath safely. CeilingY is the spike's CENTER height (its danger box is centered there).
+    property boolean IsCeiling = false
+    property number CeilingY = 3.5
 
     property number aliveTime = 0
     property boolean consumed = false
@@ -20,9 +34,26 @@ script Obstacle extends Component
         -- Logs spawn; the obstacle starts below ground and rises to TargetY.
         self.aliveTime = 0
         self.consumed = false
+        self:AutoSizeHitbox()
         local p = self.Entity.TransformComponent.Position
         log("[Obstacle] spawned at x=" .. string.format("%.2f", p.x)
-            .. " y=" .. string.format("%.2f", p.y) .. " targetY=" .. string.format("%.2f", self.TargetY))
+            .. " y=" .. string.format("%.2f", p.y) .. " targetY=" .. string.format("%.2f", self.TargetY)
+            .. " hbox=" .. string.format("%.2f", self.HitHalfWidth) .. "x" .. string.format("%.2f", self.HitHalfHeight))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AutoSizeHitbox()
+        -- Sizes the contact box to this entity's rendered sprite: (px / PixelPerUnit) * Transform.Scale,
+        -- trimmed by HitFairness. Runs on the server; @Sync sends the result to the client overlay. The
+        -- sprite + scale are baked into each obstacle .model, so the box matches the image with no per-type
+        -- data. LoadSpriteAndWait blocks until the sprite is ready, so this is safe at OnBeginPlay.
+        local spr = self.Entity.SpriteRendererComponent
+        if spr == nil then return end
+        local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
+        if sp == nil or sp.PixelPerUnit <= 0 then return end
+        local sc = self.Entity.TransformComponent.Scale
+        self.HitHalfWidth = (sp.Width / sp.PixelPerUnit) * math.abs(sc.x) * 0.5 * self.HitFairness
+        self.HitHalfHeight = (sp.Height / sp.PixelPerUnit) * math.abs(sc.y) * 0.5 * self.HitFairness
     end
 
     @ExecSpace("ServerOnly")
@@ -51,7 +82,7 @@ script Obstacle extends Component
 
     @ExecSpace("ServerOnly")
     method void CheckHit()
-        -- Damages the first player within HitRadius, then consumes the obstacle.
+        -- Damages the first player inside the contact box, then consumes the obstacle.
         local map = self.Entity.CurrentMap
         if map == nil then return end
         local mapComp = map.MapComponent
@@ -66,7 +97,7 @@ script Obstacle extends Component
                 local up = user.TransformComponent.WorldPosition
                 local dx = up.x - myPos.x
                 local dy = up.y - myPos.y
-                if (dx * dx + dy * dy) <= (self.HitRadius * self.HitRadius) then
+                if math.abs(dx) <= self.HitHalfWidth and math.abs(dy) <= self.HitHalfHeight then
                     ---@type PlayerHealth
                     local hp = user:GetComponent("script.PlayerHealth")
                     if hp ~= nil then
