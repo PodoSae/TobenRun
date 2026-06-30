@@ -21,6 +21,7 @@ script PlayerController extends Component
 	@DisplayName("점프 힘")
 	property number jumpForce = 1.4
 	property any jumpKeyHandler = nil
+	property boolean isLocal = false
 
 	method void OnBeginPlay()
 		-- Caches the movement + rigidbody components used for constant forward auto-run.
@@ -44,6 +45,7 @@ script PlayerController extends Component
 		-- Strip unwanted input keys + wire the ground jump on the owning client only (input authority
 		-- is per-client; RemoveActionKey and the key subscription are client-side).
 		if self:IsClient() and _UserService.LocalPlayer == self.Entity then
+			self.isLocal = true
 			self:LockRunnerInput()
 			if self.movement ~= nil then
 				self.movement.JumpForce = self.jumpForce
@@ -84,6 +86,26 @@ script PlayerController extends Component
 		if self.body ~= nil then
 			local v = self.body.MoveVelocity
 			self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier, v.y)
+		end
+
+		-- Drive the avatar animation state for the local player. The runner moves via MoveVelocity (no
+		-- key input) and UseCustomScript=true stopped PlayerControllerComponent from setting the engine
+		-- MOVE/JUMP state, so the avatar would otherwise stay in IDLE (no walk). Keep it in MOVE while
+		-- grounded (Slide remaps the MOVE body action to crouch on its own) and JUMP while airborne
+		-- (JumpAnimSetup maps JUMP/FALL to the air clip).
+		if self.isLocal and self.body ~= nil then
+			local state = self.Entity.StateComponent
+			if state ~= nil then
+				if self.body:IsOnGround() then
+					if state.CurrentStateName ~= "MOVE" then
+						state:ChangeState("MOVE")
+					end
+				else
+					if state.CurrentStateName ~= "JUMP" and state.CurrentStateName ~= "FALL" then
+						state:ChangeState("JUMP")
+					end
+				end
+			end
 		end
 	end
 
