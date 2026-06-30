@@ -20,7 +20,9 @@
       "Components": [
         "MOD.Core.TransformComponent",
         "MOD.Core.SpriteRendererComponent",
-        "MOD.Core.DamageSkinSettingComponent"
+        "MOD.Core.DamageSkinSettingComponent",
+        "script.SwordBeam",
+        "script.SwordBeamAttack"
       ],
       "Properties": [],
       "Values": [
@@ -62,7 +64,7 @@
             "$type": "MOD.Core.MODVector3, MOD.Core",
             "x": -0.4,
             "y": 0.5,
-            "z": 1.0
+            "z": 1
           }
         },
         {
@@ -74,10 +76,10 @@
           },
           "Value": {
             "$type": "MOD.Core.MODQuaternion, MOD.Core",
-            "x": 0.0,
-            "y": 0.0,
-            "z": 0.0,
-            "w": 1.0
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "w": 1
           }
         },
         {

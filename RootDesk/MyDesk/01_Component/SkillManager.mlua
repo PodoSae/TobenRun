@@ -8,8 +8,11 @@ script SkillManager extends Component
         -- Stat values are owned by PlayerStatManager; skills read them directly.
         self.skills = {}
         if self.Entity ~= nil then
+            -- User @Component lookup MUST go through GetComponent("script.X"); dot access
+            -- (self.Entity.PowerStrike) returns nil for script components (LIA-1114), which
+            -- silently collected zero skills and disabled auto-attack.
             local candidates = {
-                self.Entity.PowerStrike,
+                self.Entity:GetComponent("script.PowerStrike"),
             }
 
             for i, comp in ipairs(candidates) do

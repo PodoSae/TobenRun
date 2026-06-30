@@ -28,7 +28,10 @@
         "script.PlayerWallet",
         "MOD.Core.DamageSkinSpawnerComponent",
         "MOD.Core.DamageSkinComponent",
-        "script.DoubleJump"
+        "script.DoubleJump",
+        "script.PlayerStatManager",
+        "script.SkillManager",
+        "script.PowerStrike"
       ],
       "Properties": [],
       "Values": [
