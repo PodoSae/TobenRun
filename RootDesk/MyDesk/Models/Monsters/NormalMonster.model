@@ -7,8 +7,8 @@
   "Usage": 0,
   "UsePublish": 1,
   "UseService": 0,
-  "CoreVersion": "",
-  "StudioVersion": "",
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
   "DynamicLoading": 0,
   "ContentProto": {
     "Use": "Json",
@@ -24,7 +24,6 @@
         "MOD.Core.MovementComponent",
         "MOD.Core.StateComponent",
         "MOD.Core.HitComponent",
-        "script.MonsterUnit",
         "MOD.Core.DamageSkinSpawnerComponent",
         "MOD.Core.DamageSkinComponent"
       ],
@@ -64,7 +63,7 @@
             "$type": "MODNativeType",
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 1
+          "Value": 1.0
         },
         {
           "TargetType": "MOD.Core.HitComponent",
@@ -88,7 +87,7 @@
           },
           "Value": {
             "$type": "MOD.Core.MODVector2, MOD.Core",
-            "x": 0,
+            "x": 0.0,
             "y": 0.75
           }
         },
@@ -117,7 +116,7 @@
             "$type": "MODNativeType",
             "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 1
+          "Value": 1.0
         },
         {
           "TargetType": "script.MonsterUnit",
@@ -126,7 +125,7 @@
             "$type": "MODNativeType",
             "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 5
+          "Value": 5.0
         }
       ],
       "EventLinks": [],

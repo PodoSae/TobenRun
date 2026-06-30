@@ -16,7 +16,7 @@ property number fallDropMargin = 2.0
 
 property number lastGroundedX = 0
 
-property Entity scoreText = "c6183012-b66d-42ee-834b-72674ac98eca"
+property Entity scoreText = "2de4eed6-7a29-4a36-be9b-57cc5f3bf397"
 property Entity gameOverPanel = "133f65c0-d55e-41f2-b3f2-1ae708139b40"
 property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
 property Entity restartButton = "27d7a562-4150-42d1-8716-a3bab2ccc588"

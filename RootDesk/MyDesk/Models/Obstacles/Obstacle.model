@@ -19,8 +19,7 @@
       "Id": "obstacle",
       "Components": [
         "MOD.Core.TransformComponent",
-        "MOD.Core.SpriteRendererComponent",
-        "script.Obstacle"
+        "MOD.Core.SpriteRendererComponent"
       ],
       "Properties": [],
       "Values": [
@@ -62,7 +61,7 @@
             "$type": "MOD.Core.MODVector3, MOD.Core",
             "x": 0.5,
             "y": 0.5,
-            "z": 1
+            "z": 1.0
           }
         }
       ],
