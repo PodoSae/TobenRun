@@ -15,69 +15,96 @@ script PlayerController extends Component
 	property boolean blockBackward = true
 	property boolean blockCrouch = true
 
+	-- Ground jump. PlayerControllerComponent.UseCustomScript=true hands ALL input to this script, so the
+	-- native controller no longer jumps — the runner provides the grounded jump here. The air/double
+	-- jump is DoubleJump's job (its Jump-key handler only fires while airborne).
+	@DisplayName("점프 힘")
+	property number jumpForce = 1.4
+	property any jumpKeyHandler = nil
+
 	method void OnBeginPlay()
-			-- Caches the movement + rigidbody components used for constant forward auto-run.
-			self.movement = self.Entity.MovementComponent
-			self.body = self.Entity.RigidbodyComponent
-			log("[PlayerController] OnBeginPlay - movement: " .. tostring(self.movement ~= nil)
-				.. " body: " .. tostring(self.body ~= nil))
+		-- Caches the movement + rigidbody components used for constant forward auto-run.
+		self.movement = self.Entity.MovementComponent
+		self.body = self.Entity.RigidbodyComponent
+		log("[PlayerController] OnBeginPlay - movement: " .. tostring(self.movement ~= nil)
+			.. " body: " .. tostring(self.body ~= nil))
 
-			-- Force the running (walk) animation. The runner moves via a direct MoveVelocity write
-			-- (not input/MoveToDirection), so PlayerControllerComponent never sees "movement input"
-			-- and would otherwise leave the avatar in the idle/stand pose while it slides forward.
-			-- AlwaysMovingState makes the controller play the MOVE (walk) animation continuously.
-			-- @Sync property -> set on the server so it propagates to every client.
-			if self:IsServer() then
-				local pcc = self.Entity.PlayerControllerComponent
-				if pcc ~= nil then
-					pcc.AlwaysMovingState = true
-				end
+		-- Force the running (walk) animation. The runner moves via a direct MoveVelocity write
+		-- (not input/MoveToDirection), so PlayerControllerComponent never sees "movement input"
+		-- and would otherwise leave the avatar in the idle/stand pose while it slides forward.
+		-- AlwaysMovingState makes the controller play the MOVE (walk) animation continuously.
+		-- @Sync property -> set on the server so it propagates to every client.
+		if self:IsServer() then
+			local pcc = self.Entity.PlayerControllerComponent
+			if pcc ~= nil then
+				pcc.AlwaysMovingState = true
 			end
+		end
 
-			-- Strip unwanted input keys on the owning client only (input authority is per-client,
-			-- and RemoveActionKey is ClientOnly).
-			if self:IsClient() and _UserService.LocalPlayer == self.Entity then
-				self:LockRunnerInput()
+		-- Strip unwanted input keys + wire the ground jump on the owning client only (input authority
+		-- is per-client; RemoveActionKey and the key subscription are client-side).
+		if self:IsClient() and _UserService.LocalPlayer == self.Entity then
+			self:LockRunnerInput()
+			if self.movement ~= nil then
+				self.movement.JumpForce = self.jumpForce
 			end
+			self.jumpKeyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnGroundJumpKey)
+		end
 	end
 
 	@ExecSpace("ClientOnly")
 	method void LockRunnerInput()
-			-- Removes the backward + crouch key bindings from PlayerControllerComponent so A/Left
-			-- (move back) and S/Down (crouch) do nothing. Right-run and jump are left untouched.
-			local pcc = self.Entity.PlayerControllerComponent
-			if pcc == nil then return end
+		-- Removes the backward + crouch key bindings from PlayerControllerComponent so A/Left
+		-- (move back) and S/Down (crouch) do nothing. Right-run and jump are left untouched.
+		local pcc = self.Entity.PlayerControllerComponent
+		if pcc == nil then return end
 
-			if self.blockBackward then
-				pcc:RemoveActionKey(KeyboardKey.A)
-				pcc:RemoveActionKey(KeyboardKey.LeftArrow)
-			end
-			if self.blockCrouch then
-				pcc:RemoveActionKey(KeyboardKey.S)
-				pcc:RemoveActionKey(KeyboardKey.DownArrow)
-			end
+		if self.blockBackward then
+			pcc:RemoveActionKey(KeyboardKey.A)
+			pcc:RemoveActionKey(KeyboardKey.LeftArrow)
+		end
+		if self.blockCrouch then
+			pcc:RemoveActionKey(KeyboardKey.S)
+			pcc:RemoveActionKey(KeyboardKey.DownArrow)
+		end
 
-			log("[PlayerController] Runner input locked - backward=" .. tostring(self.blockBackward)
-				.. " crouch=" .. tostring(self.blockCrouch))
+		log("[PlayerController] Runner input locked - backward=" .. tostring(self.blockBackward)
+			.. " crouch=" .. tostring(self.blockCrouch))
 	end
 
 	method void OnUpdate(number delta)
-			-- Keeps the runner moving right every frame.
-			if self.movement == nil then return end
+		-- Keeps the runner moving right every frame.
+		if self.movement == nil then return end
 
-			-- Normal movement channel — also keeps the avatar facing the run direction.
-			-- self.movement:MoveToDirection(Vector2(self.speed, 0), delta)
+		-- Force the rigidbody move input forward so the ATTACK state cannot stop the run.
+		-- The ATTACK state (auto-added by PlayerControllerComponent) roots the character
+		-- while the attack animation plays, which makes MoveToDirection a no-op. A direct
+		-- MoveVelocity write is not suppressed by the state machine, so the runner keeps
+		-- its speed during attacks. Y input is preserved so gravity/jump are unaffected.
+		if self.body ~= nil then
+			local v = self.body.MoveVelocity
+			self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier, v.y)
+		end
+	end
 
-			-- Force the rigidbody move input forward so the ATTACK state cannot stop the run.
-			-- The ATTACK state (auto-added by PlayerControllerComponent) roots the character
-			-- while the attack animation plays, which makes MoveToDirection a no-op. A direct
-			-- MoveVelocity write is not suppressed by the state machine, so the runner keeps
-			-- its speed during attacks. Y input is preserved so gravity/jump are unaffected.
-			if self.body ~= nil then
-				-- log("[PlayerController] OnUpdate - speed: " .. tostring(self.speed) .. " speedMultiplier: " .. tostring(self.speedMultiplier))
-					local v = self.body.MoveVelocity
-					self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier, v.y)
+	@ExecSpace("ClientOnly")
+	method void OnGroundJumpKey(KeyDownEvent event)
+		-- Space / Up = ground jump. MovementComponent:Jump() succeeds only when grounded, so a mid-air
+		-- tap fails here and falls through to DoubleJump's air jump. Local player only.
+		if _UserService.LocalPlayer ~= self.Entity then return end
+		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
+			if self.movement ~= nil then
+				self.movement:Jump()
 			end
+		end
+	end
+
+	method void OnEndPlay()
+		-- Release the jump input subscription created in OnBeginPlay.
+		if self.jumpKeyHandler ~= nil then
+			_InputService:DisconnectEvent(KeyDownEvent, self.jumpKeyHandler)
+			self.jumpKeyHandler = nil
+		end
 	end
 
 end
