@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://cbee65a02c1b40f0be18337c89624f29",
+  "EntryKey": "directory://88352aad7e2c42a4b6db5bf9a90537b3",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://cbee65a02c1b40f0be18337c89624f29",
-      "name": "RunGame",
+      "entry_id": "directory://88352aad7e2c42a4b6db5bf9a90537b3",
+      "name": "Hazards",
       "lock": false,
       "folding": false,
       "nameEditable": true

@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://cbee65a02c1b40f0be18337c89624f29",
+  "EntryKey": "directory://afa96010c3094a14bee8e2cf5f13d9b8",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://cbee65a02c1b40f0be18337c89624f29",
-      "name": "RunGame",
+      "entry_id": "directory://afa96010c3094a14bee8e2cf5f13d9b8",
+      "name": "Models",
       "lock": false,
       "folding": false,
       "nameEditable": true

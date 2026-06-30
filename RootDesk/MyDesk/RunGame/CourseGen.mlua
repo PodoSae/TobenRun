@@ -1,0 +1,536 @@
+@Logic
+script CourseGen extends Logic
+
+-- The RUN MAP provides a flat NATIVE foothold floor at y=0 (collision). This logic only
+-- spawns the VISUAL floor sprite (body-less) + data-driven content. Runtime CustomFootholds
+-- snap the player to x=0 on a tile-less map, so we never generate footholds here.
+@DisplayName("바닥 높이 Y(네이티브 풋홀드와 일치)")
+property number defFloorY = 0.0
+@DisplayName("기본 시작 X")
+property number defStartX = 0.0
+@DisplayName("기본 코스 길이")
+property number defLength = 120.0
+@DisplayName("기본 골인 X")
+property number defGoalX = 110.0
+@DisplayName("바닥 시각 높이(아래로 채움)")
+property number floorVisualHeight = 2.0
+@DisplayName("바닥 윗면 보정(잔디면을 발높이에)")
+property number floorTopPad = 0.2
+@DisplayName("바닥 타일 겹침(빈틈 방지)")
+property number floorOverlap = 0.3
+@DisplayName("바닥 아래 채움 깊이")
+property number floorFillDepth = 5.0
+@DisplayName("바닥 줄 세로 겹침(잔디 숨김)")
+property number floorRowOverlap = 0.4
+@DisplayName("스테이지 데이터셋 접두어")
+property string dataSetPrefix = "Course"
+@DisplayName("장애물 RUID")
+property string obstacleRuid = "af921b2251574675834981e2394e05d1"
+@DisplayName("몬스터 RUID")
+property string monsterRuid = "bbdf743f29c749f391ddfb440e10055f"
+@DisplayName("코인 RUID")
+property string coinRuid = "184093654538492ea60617c0e3dd5c51"
+@DisplayName("기본 바닥 타일 RUID")
+property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
+@DisplayName("몬스터 바닥 높이 미세보정(+위/-아래)")
+property number monsterYOff = -0.15
+@DisplayName("walk 좌우 이동 폭")
+property number monWalkRange = 1.2
+@DisplayName("walk 이동 속도")
+property number monWalkSpeed = 2.5
+@DisplayName("jump 점프 높이")
+property number monJumpHeight = 0.8
+@DisplayName("jump 한 사이클 시간(초)")
+property number monJumpPeriod = 1.1
+@DisplayName("jump 착지 대기 비율(0~1)")
+property number monJumpRest = 0.45
+-- Server registry of spawned monsters being animated by OnUpdate: { ent, mtype, baseX, baseY, t }.
+property any monsters = nil
+
+-- Server registry: mapName -> stage currently generated on that map.
+property any mapStage = nil
+
+@ExecSpace("ServerOnly")
+method void OnBeginPlay()
+	-- Init the per-map "which stage is built" registry on the server.
+	self.mapStage = {}
+	self.monsters = {}
+end
+
+@ExecSpace("ServerOnly")
+method void OnUpdate(number delta)
+	-- Animate spawned monsters by their movement type. They are body-less props, so we write
+	-- TransformComponent.WorldPosition directly (Position is @Sync → server writes replicate to clients).
+	if self.monsters == nil then
+		return
+	end
+	for _, m in ipairs(self.monsters) do
+		if isvalid(m.ent) then
+			m.t = m.t + delta
+			local tr = m.ent.TransformComponent
+			local z = tr.WorldPosition.z
+			if m.mtype == "walk" then
+				-- Patrol left/right around the spawn point.
+				local off = math.sin(m.t * self.monWalkSpeed) * self.monWalkRange
+				tr.WorldPosition = Vector3(m.baseX + off, m.baseY, z)
+				-- Mobs are authored facing left → flip when travelling right (cos = velocity sign).
+				local spr = m.ent.SpriteRendererComponent
+				if spr ~= nil then
+					spr.FlipX = math.cos(m.t * self.monWalkSpeed) > 0
+				end
+			elseif m.mtype == "jump" then
+				-- Rest on the ground, then a parabolic hop, so it clearly SITS on the floor between jumps
+				-- (a plain abs(sin) hovers and reads as floating).
+				local ph = (m.t % self.monJumpPeriod) / self.monJumpPeriod
+				local hop = 0
+				if ph >= self.monJumpRest then
+					local u = (ph - self.monJumpRest) / (1 - self.monJumpRest)
+					hop = 4 * self.monJumpHeight * u * (1 - u)
+				end
+				tr.WorldPosition = Vector3(m.baseX, m.baseY + hop, z)
+			end
+		end
+	end
+end
+
+@ExecSpace("ServerOnly")
+method string TableNameForStage(string stage)
+	-- A stage "1-1" maps to its own DataSet named e.g. "Course1_1".
+	return self.dataSetPrefix .. string.gsub(stage, "-", "_")
+end
+
+@ExecSpace("Server")
+method void RequestBuildCourse(string stage, string mapName)
+	-- Entry point: build (or rebuild) a stage's course on the given map. Clears the previous one.
+	if stage == nil or stage == "" or mapName == nil or mapName == "" then
+		return
+	end
+	if self.mapStage == nil then
+		self.mapStage = {}
+	end
+	if self.mapStage[mapName] == stage then
+		return
+	end
+	local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
+	if isvalid(map) == false then
+		log("[CourseGen] map not found: " .. mapName)
+		return
+	end
+	self.mapStage[mapName] = stage
+	self:ClearCourse(map)
+	self:BuildCourse(stage, map)
+end
+
+@ExecSpace("ServerOnly")
+method void ClearCourse(Entity map)
+	-- Destroy any previously generated course entities on this map.
+	-- Drop stale monster references first (the entities themselves are destroyed in the loop below).
+	self.monsters = {}
+	for _, e in ipairs(map.Children:ToTable()) do
+		if self:IsCourseEntity(e.Name) then
+			e:Destroy()
+		end
+	end
+end
+
+@ExecSpace("ServerOnly")
+method boolean IsCourseEntity(string nm)
+	-- True if the entity name is one this system generated.
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_" }
+	for _, p in ipairs(prefixes) do
+		if string.find(nm, p) == 1 then
+			return true
+		end
+	end
+	return false
+end
+
+@ExecSpace("ServerOnly")
+method void BuildCourse(string stage, Entity map)
+	-- Read this stage's command rows, resolve config, lay the visual floor, then run the commands.
+	local rows = self:ReadStageRows(stage)
+	local cfg = { floorY = self.defFloorY, startX = self.defStartX, length = self.defLength, goalX = self.defGoalX, tileRuid = self.defaultTileRuid }
+	local gaps = {}
+	local cmds = {}
+	for _, r in ipairs(rows) do
+		if r.cmd == "Set" then
+			self:ApplySet(cfg, r.p1, r.p2)
+		elseif r.cmd == "Gap" then
+			-- Param order matches Spawn: p1 = gap length, p2 = x (so p2 is ALWAYS the x-coordinate).
+			local glen = tonumber(r.p1) or 3
+			local gx = tonumber(r.p2) or 0
+			table.insert(gaps, { x1 = gx, x2 = gx + glen })
+		else
+			table.insert(cmds, r)
+		end
+	end
+	self:SpawnVisualFloor(map, cfg, gaps)
+	self:Dispatch(map, cfg, cmds)
+	log("[CourseGen] built stage=" .. stage .. " rows=" .. tostring(#rows) .. " cmds=" .. tostring(#cmds))
+end
+
+@ExecSpace("ServerOnly")
+method table ReadStageRows(string stage)
+	-- Collect every command row from this stage's own DataSet (cols: cmd, p1, p2, p3).
+	local out = {}
+	local name = self:TableNameForStage(stage)
+	local ds = _DataService:GetTable(name)
+	if ds == nil then
+		log("[CourseGen] no dataset '" .. name .. "' for stage " .. stage .. " (bare floor only)")
+		return out
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		table.insert(out, {
+			cmd = ds:GetCell(i, "cmd"),
+			p1 = ds:GetCell(i, "p1"),
+			p2 = ds:GetCell(i, "p2"),
+			p3 = ds:GetCell(i, "p3"),
+		})
+	end
+	return out
+end
+
+@ExecSpace("ServerOnly")
+method void ApplySet(table cfg, string key, string val)
+	-- "Set" command — p1=key, p2=value. (floorY should match the map's native foothold height.)
+	-- "tile" takes a string RUID (the repeating floor tile sprite), not a number.
+	if key == "tile" then
+		if val ~= nil and val ~= "" then
+			cfg.tileRuid = val
+		end
+		return
+	end
+	local v = tonumber(val)
+	if v == nil then
+		return
+	end
+	if key == "floorY" then
+		cfg.floorY = v
+	elseif key == "startX" then
+		cfg.startX = v
+	elseif key == "length" then
+		cfg.length = v
+	elseif key == "goal" then
+		cfg.goalX = v
+	end
+end
+
+@ExecSpace("ServerOnly")
+method void SpawnVisualFloor(Entity map, table cfg, table gaps)
+	-- Body-less VISUAL floor (collision = the map's native foothold, which has REAL holes at gaps).
+	-- Tiles are laid per solid SEGMENT (between gaps); the last tile of each segment is scaled
+	-- horizontally to end exactly at the gap edge, so the visual hole matches the real gap.
+	local ruid = cfg.tileRuid
+	if ruid == nil or ruid == "" then
+		ruid = self.defaultTileRuid
+	end
+	local tw = 1.0
+	local th = 1.0
+	local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+	if sprite ~= nil and sprite.PixelPerUnit > 0 then
+		tw = sprite.Width / sprite.PixelPerUnit
+		th = sprite.Height / sprite.PixelPerUnit
+	end
+	if tw < 0.2 then tw = 1.0 end
+	if th < 0.2 then th = 1.0 end
+	-- Solid segments = [startX-4, startX+length+4] minus every gap range.
+	table.sort(gaps, function(a, b)
+		return a.x1 < b.x1
+	end)
+	local segs = {}
+	local cursor = cfg.startX - 4
+	local endX = cfg.startX + cfg.length + 4
+	for _, g in ipairs(gaps) do
+		if g.x1 > cursor then
+			table.insert(segs, { cursor, g.x1 })
+		end
+		if g.x2 > cursor then
+			cursor = g.x2
+		end
+	end
+	if endX > cursor then
+		table.insert(segs, { cursor, endX })
+	end
+	-- COLLISION: one real foothold (CustomFootholdComponent) per solid segment, so the runner can
+	-- actually stand/run on the floor. Without this the map has 0 footholds, IsOnGround() is never
+	-- true, and the player bobs/falls (jumps then read as choppy "air jumps"). Gaps stay foothold-less
+	-- (they are excluded from segs), so the runner physically falls into them.
+	self:SpawnSegmentFootholds(map, cfg, segs)
+	-- Vertical fill so the background doesn't show below the floor.
+	local topY = cfg.floorY + self.floorTopPad - th / 2
+	local rowStep = th - self.floorRowOverlap
+	if rowStep < 0.2 then
+		rowStep = th
+	end
+	local fillRows = math.ceil(self.floorFillDepth / rowStep)
+	if fillRows < 0 then
+		fillRows = 0
+	end
+	local i = 0
+	for _, seg in ipairs(segs) do
+		local s = seg[1]
+		local e = seg[2]
+		local x = s
+		while x < e - 0.01 do
+			local w = e - x
+			if w > tw then
+				w = tw
+			end
+			local cx = x + w / 2
+			local sx = w / tw -- horizontal scale (1 for full tiles, <1 for the segment's edge tile)
+			local row = 0
+			while row <= fillRows do
+				local ry = topY - row * rowStep
+				local rz = row * 0.1
+				local fv = _SpawnService:SpawnByModelId("runfloorvisual", "FloorVis_" .. tostring(i), Vector3(cx, ry, rz), map)
+				if isvalid(fv) then
+					local spr = fv.SpriteRendererComponent
+					if spr ~= nil then
+						spr.SpriteRUID = ruid
+						spr.DrawMode = SpriteDrawMode.Simple
+					end
+					fv.TransformComponent.Scale = Vector3(sx, 1, 1)
+				end
+				i = i + 1
+				row = row + 1
+			end
+			x = x + w
+		end
+	end
+end
+
+@ExecSpace("ServerOnly")
+method void SpawnSegmentFootholds(Entity map, table cfg, table segs)
+	-- Spawn one collision-only foothold entity per solid segment. The `runfloor` model carries a
+	-- CustomFootholdComponent; its foothold path (edgeLists) is empty by default, so we set a single
+	-- horizontal edge spanning the segment at the walking-surface height. The visual is drawn
+	-- separately by the runfloorvisual tiles, so this entity's own sprite is disabled.
+	local surfaceY = cfg.floorY + self.floorTopPad
+	for _, seg in ipairs(segs) do
+		local s = seg[1]
+		local e = seg[2]
+		local fh = _SpawnService:SpawnByModelId("runfloor", "Foothold_" .. tostring(math.floor(s)), Vector3(0, 0, 0), map)
+		if isvalid(fh) then
+			local cf = fh.CustomFootholdComponent
+			if cf ~= nil then
+				-- edgeLists is SyncList<List<Vector2>>; a plain Lua table of Vector2 is accepted.
+				-- Points are world coordinates (entity sits at origin). A flat line = a flat floor.
+				cf.edgeLists:Add({ Vector2(s, surfaceY), Vector2(e, surfaceY) })
+			end
+			-- Collision only — hide the foothold entity's own sprite (visuals = runfloorvisual tiles).
+			local spr = fh.SpriteRendererComponent
+			if spr ~= nil then
+				spr.Enable = false
+			end
+		end
+	end
+end
+
+@ExecSpace("ServerOnly")
+method void Dispatch(Entity map, table cfg, table cmds)
+	-- Command dispatcher. Add a new verb by adding an "elseif" branch + a Cmd* method (params in p1/p2/p3).
+	for _, c in ipairs(cmds) do
+		if c.cmd == "Spawn" then
+			self:CmdSpawn(map, cfg, c)
+		elseif c.cmd == "Goal" then
+			-- Goal X is resolved client-side by RunGameHud; nothing to spawn.
+		elseif c.cmd == "Cutscene" then
+			self:CmdCutscene(map, cfg, c)
+		elseif c.cmd == "Boss" then
+			self:CmdBoss(map, cfg, c)
+		elseif c.cmd ~= nil and c.cmd ~= "" then
+			log("[CourseGen] unknown command: " .. tostring(c.cmd))
+		end
+	end
+end
+
+@ExecSpace("ServerOnly")
+method Entity SpawnProp(Entity map, string name, number x, number worldY, string ruid)
+	-- Spawn a body-less visual prop; interaction is handled client-side by RunGameHud.
+	local prop = _SpawnService:SpawnByModelId("runprop", name, Vector3(x, worldY, 0), map)
+	if isvalid(prop) == false then
+		return nil
+	end
+	local spr = prop.SpriteRendererComponent
+	if spr ~= nil and ruid ~= nil and ruid ~= "" then
+		spr.SpriteRUID = ruid
+	end
+	return prop
+end
+
+@ExecSpace("ServerOnly")
+method number PropHalfHeight(string ruid)
+	-- Half the prop sprite's world height — used to sit a prop's BOTTOM exactly on the floor.
+	local s = _ResourceService:LoadSpriteAndWait(ruid)
+	if s ~= nil and s.PixelPerUnit > 0 then
+		return (s.Height / s.PixelPerUnit) / 2
+	end
+	return 0.5
+end
+
+@ExecSpace("ServerOnly")
+method string MonsterField(string id, string col)
+	-- Read one column of a monster type from the MonsterDef DataSet ("" if not defined).
+	local ds = _DataService:GetTable("MonsterDef")
+	if ds == nil then
+		return ""
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return ""
+	end
+	return tostring(row:GetItem(col))
+end
+
+@ExecSpace("ServerOnly")
+method string MonsterRuid(string id)
+	-- Monster's sprite/animation RUID from MonsterDef ("" if this id is not a monster).
+	return self:MonsterField(id, "ruid")
+end
+
+@ExecSpace("ServerOnly")
+method string ObstacleRuid(string id)
+	-- Look up a hazard type's sprite RUID from the ObstacleDef DataSet (returns "" if not defined).
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return ""
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return ""
+	end
+	return tostring(row:GetItem("ruid"))
+end
+
+@ExecSpace("ServerOnly")
+method number ObstacleYOff(string id)
+	-- Extra vertical offset above the floor for a hazard type (default 0 = bottom on the floor).
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return 0
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return 0
+	end
+	return tonumber(row:GetItem("yoff")) or 0
+end
+
+@ExecSpace("ServerOnly")
+method number ObstacleScale(string id)
+	-- Uniform display scale for a hazard's sprite (default 1). Lets a small sprite become a big spike.
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return 1
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return 1
+	end
+	local s = tonumber(row:GetItem("scale"))
+	if s == nil or s <= 0 then
+		return 1
+	end
+	return s
+end
+
+@ExecSpace("ServerOnly")
+method boolean ObstacleFlipY(string id)
+	-- Flip a hazard sprite vertically (flipy=1) so a ceiling/hanging shape points UP from the floor.
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return false
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return false
+	end
+	return tostring(row:GetItem("flipy")) == "1"
+end
+
+@ExecSpace("ServerOnly")
+method number ObstacleScaleY(string id)
+	-- Vertical-only display scale (default 0 = "use the uniform scale"). Lets a spike be TALLER than wide.
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return 0
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return 0
+	end
+	return tonumber(row:GetItem("scaley")) or 0
+end
+
+@ExecSpace("ServerOnly")
+method void CmdSpawn(Entity map, table cfg, table c)
+	-- "Spawn" command — p1=type, p2=x, p3=optional RUID override.
+	-- p1 is a hazard id defined in the ObstacleDef DataSet (spike/obstacle/monster/...),
+	-- or "coin", or a raw registered modelId.
+	local kind = c.p1
+	local x = tonumber(c.p2) or 0
+	if kind == nil or kind == "" then
+		return
+	end
+	if kind == "coin" then
+		self:SpawnProp(map, "Coin_" .. tostring(math.floor(x)), x, cfg.floorY + 0.6 + self:PropHalfHeight(self.coinRuid), self.coinRuid)
+		return
+	end
+	-- A monster type defined in MonsterDef → spawn its (animated mob) sprite as a contact hazard.
+	-- Interaction (contact damage) is resolved client-side by RunGameHud, like obstacles.
+	local mruid = self:MonsterRuid(kind)
+	if mruid ~= "" then
+		-- Maple mob animationclips pivot at the FEET (bottom-center, ny=0), so the entity Y = where the
+		-- feet rest. Put feet on the walking surface (floorY + floorTopPad) so the mob stands on the floor.
+		local my = cfg.floorY + self.floorTopPad + self.monsterYOff
+		local mon = self:SpawnProp(map, "Monster_" .. tostring(math.floor(x)), x, my, mruid)
+		if isvalid(mon) then
+			-- Register it so OnUpdate animates it per its move type (walk / jump).
+			table.insert(self.monsters, { ent = mon, mtype = self:MonsterField(kind, "move"), baseX = x, baseY = my, t = 0 })
+		end
+		return
+	end
+	local ruid = c.p3
+	if ruid == nil or ruid == "" then
+		ruid = self:ObstacleRuid(kind)
+	end
+	if ruid ~= nil and ruid ~= "" then
+		-- A defined hazard: spawn its sprite at its display scale. yoff lifts the BOTTOM edge above the
+		-- floor (0 = bottom on floor; a ceiling spike uses a positive yoff so it hangs from above).
+		local sc = self:ObstacleScale(kind)
+		local scy = self:ObstacleScaleY(kind)
+		if scy <= 0 then
+			scy = sc
+		end
+		local worldY = cfg.floorY + self:ObstacleYOff(kind) + self:PropHalfHeight(ruid) * scy
+		local prop = self:SpawnProp(map, "Haz_" .. tostring(math.floor(x)), x, worldY, ruid)
+		if isvalid(prop) then
+			local sy = scy
+			if self:ObstacleFlipY(kind) then
+				sy = -scy
+			end
+			prop.TransformComponent.Scale = Vector3(sc, sy, 1)
+		end
+		return
+	end
+	-- Otherwise treat p1 as a registered model id and spawn it directly (custom entities).
+	local e = _SpawnService:SpawnByModelId(kind, "Spawn_" .. tostring(math.floor(x)), Vector3(x, cfg.floorY + 1.0, 0), map)
+	if isvalid(e) == false then
+		log("[CourseGen] Spawn: unknown type/model '" .. tostring(kind) .. "'")
+	end
+end
+
+@ExecSpace("ServerOnly")
+method void CmdCutscene(Entity map, table cfg, table c)
+	-- "Cutscene" command — p1=cutscene id, p2=x. Reserved for future use.
+	log("[CourseGen] Cutscene '" .. tostring(c.p1) .. "' @x=" .. tostring(c.p2) .. " (TODO: not implemented yet)")
+end
+
+@ExecSpace("ServerOnly")
+method void CmdBoss(Entity map, table cfg, table c)
+	-- "Boss" command — p1=boss model id, p2=x. Reserved for future use.
+	log("[CourseGen] Boss '" .. tostring(c.p1) .. "' @x=" .. tostring(c.p2) .. " (TODO: not implemented yet)")
+end
+
+end

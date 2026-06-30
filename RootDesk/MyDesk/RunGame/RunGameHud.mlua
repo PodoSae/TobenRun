@@ -19,6 +19,7 @@ property integer fallDamage = 10
 property boolean hasCheckpoint = false
 property number lastFhX = 0
 property number lastFhY = 0
+property number lastGroundedX = 0
 property integer hp = 100
 
 property Entity scoreText = "c6183012-b66d-42ee-834b-72674ac98eca"
@@ -50,6 +51,32 @@ property integer score = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
 property integer scoreAnimTarget = 0
+
+-- Data-driven course interaction (read from the CourseScript DataSet on arrival).
+@DisplayName("장애물 피격 범위")
+property number hazardWindow = 0.6
+@DisplayName("코인 획득 범위")
+property number coinWindow = 0.8
+@DisplayName("코인 점수 보너스")
+property integer coinBonus = 50
+property any hazards = nil
+property any coins = nil
+property any gapZones = nil
+property integer coinScore = 0
+property string debuffKind = "none"
+property number debuffTime = 0
+
+-- Double-jump + slide (data-driven hazard avoidance).
+@DisplayName("최대 점프 횟수(더블점프=2)")
+property integer maxJumps = 2
+@DisplayName("공중 2단 점프 힘(작을수록 살짝)")
+property number airJumpForce = 8.0
+property integer jumpCount = 0
+property number airJumpClear = 0
+@DisplayName("슬라이드 지속시간(초)")
+property number slideDuration = 0.7
+property boolean sliding = false
+property number slideTime = 0
 
 @ExecSpace("ClientOnly")
 method void OnBeginPlay()
@@ -97,6 +124,35 @@ method void OnUpdate(number delta)
 		return
 	end
 
+	-- Tick down any active debuff and clear it when it expires.
+	if self.debuffTime > 0 then
+		self.debuffTime = self.debuffTime - delta
+		if self.debuffTime <= 0 then
+			self:ClearDebuff()
+		end
+	end
+
+	-- Tick down an active slide.
+	if self.slideTime > 0 then
+		self.slideTime = self.slideTime - delta
+		if self.slideTime <= 0 then
+			self.sliding = false
+		end
+	end
+
+	-- Landed → reset the jump counter so the next grounded jump starts a fresh single/double sequence.
+	if rb:IsOnGround() then
+		self.jumpCount = 0
+	end
+
+	-- Clear the air-jump impulse a few frames after a double jump so gravity resumes (else AddForce persists).
+	if self.airJumpClear > 0 then
+		self.airJumpClear = self.airJumpClear - delta
+		if self.airJumpClear <= 0 then
+			rb:SetForce(Vector2(0, 0))
+		end
+	end
+
 	-- Auto-run to the right.
 	movement:MoveToDirection(Vector2(1, 0), delta)
 
@@ -129,13 +185,56 @@ method void OnUpdate(number delta)
 	if x > self.bestX then
 		self.bestX = x
 	end
-	local newScore = math.floor((self.bestX - self.spawnX) * 10)
-	if newScore < 0 then
-		newScore = 0
+	-- Remember the last x where the runner was on solid ground (to know which gap it fell into).
+	if rb:IsOnGround() then
+		self.lastGroundedX = x
 	end
+	local distScore = math.floor((self.bestX - self.spawnX) * 10)
+	if distScore < 0 then
+		distScore = 0
+	end
+	local newScore = distScore + self.coinScore
 	if newScore ~= self.score then
 		self.score = newScore
 		self:SetScore(self.score)
+	end
+
+	-- Course hazards, avoidance is input-state based:
+	--  FLOOR hazard (ceiling=false): clear it by being airborne with jumpCount >= minjumps while crossing.
+	--    minjumps=1 → a single jump clears; minjumps=2 → only a DOUBLE jump is high enough (single still hits).
+	--  CEILING hazard (ceiling=true): it hangs from above; the ONLY way past is to be SLIDING while crossing.
+	if self.hazards ~= nil then
+		for _, h in ipairs(self.hazards) do
+			if h.hit == false and math.abs(x - h.x) <= self.hazardWindow then
+				local doHit = false
+				if h.ceiling then
+					doHit = (self.sliding == false)
+				else
+					local need = h.minjumps
+					if need == nil or need < 1 then
+						need = 1
+					end
+					doHit = (self.jumpCount < need)
+				end
+				if doHit then
+					h.hit = true
+					self:TakeHit(h.damage)
+					self:ApplyDebuff(h.debuff, h.dvalue, h.dtime)
+					return
+				end
+			end
+		end
+	end
+	-- (Gaps are now REAL holes in the floor — the runner physically falls in; handled below.)
+	-- Coins: collect when the runner passes within range.
+	if self.coins ~= nil then
+		for _, cn in ipairs(self.coins) do
+			if cn.got == false and math.abs(x - cn.x) <= self.coinWindow then
+				cn.got = true
+				self.coinScore = self.coinScore + self.coinBonus
+				self:HideCourseEntity("Coin_" .. tostring(math.floor(cn.x)))
+			end
+		end
 	end
 
 	-- Reached the end of the course → clear (game finished).
@@ -144,16 +243,45 @@ method void OnUpdate(number delta)
 		return
 	end
 
-	-- Fell off a platform → lose HP, then respawn (or game over at 0 HP).
+	-- Fell into a GAP hole → lose HP and drop back in from above the screen, past that gap.
 	local py = player.TransformComponent.WorldPosition.y
-	if self.hasCheckpoint and py < self.lastFhY - self.fallDropMargin then
-		self:OnFall()
+	local floorY = self.spawnY - 1.0
+	if py < floorY - 0.5 then
+		self:FallIntoGap()
 		return
 	end
-	if py < self.fallY then
-		self:OnFall()
+end
+
+@ExecSpace("ClientOnly")
+method void FallIntoGap()
+	-- The runner walked off a foothold edge into a real gap. Cost HP, then RE-DROP from above the
+	-- screen onto solid floor just past the gap (not teleport-to-before) so the fall reads as a fall.
+	self.hp = self.hp - self.fallDamage
+	if self.hp < 0 then
+		self.hp = 0
+	end
+	self:SetHp(self.hp)
+	if self.hp <= 0 then
+		self:GameOver()
 		return
 	end
+	-- Find the gap the runner just fell into (first gap ending after where it was last grounded).
+	local rx = self.lastGroundedX + 3.0
+	if self.gapZones ~= nil then
+		for _, g in ipairs(self.gapZones) do
+			if g.x2 > self.lastGroundedX - 0.5 then
+				rx = g.x2 + 1.5
+				break
+			end
+		end
+	end
+	-- Drop in from high above the visible screen; gravity carries the runner down onto the floor.
+	local player = _UserService.LocalPlayer
+	if isvalid(player) and player.MovementComponent ~= nil then
+		player.MovementComponent:Stop()
+		player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY + 6.0))
+	end
+	log("[RunGameHud] fell into gap, re-drop from above at x=" .. tostring(rx))
 end
 
 @ExecSpace("ClientOnly")
@@ -194,14 +322,28 @@ end
 method void OnArriveMap(Entity player)
 	-- Re-initialize per-map run state whenever the player enters a (new) map.
 	-- The course start is the player's landing position; the goal is this map's far edge.
-	local pos = player.TransformComponent.WorldPosition
-	self.spawnX = pos.x
-	self.spawnY = pos.y
-	self.bestX = pos.x
+	-- Resolve this stage's course config (Set commands) and ask the server to build it.
+	local cfg = self:ResolveStageConfig(self.curStage)
+	if self.curStage ~= nil and self.curStage ~= "" and _CourseGen ~= nil then
+		_CourseGen:RequestBuildCourse(self.curStage, self.curMapName)
+	end
+	-- Stand the runner at the start of the generated floor.
+	local sx = cfg.startX
+	local sy = cfg.floorY + 1.0
+	if player.MovementComponent ~= nil then
+		player.MovementComponent:SetWorldPosition(Vector2(sx, sy))
+	end
+	self.spawnX = sx
+	self.spawnY = sy
+	self.bestX = sx
 	self.hp = self.maxHp
 	self.score = 0
+	self.coinScore = 0
 	self.hasCheckpoint = false
-	self.goalX = self:FindGoalX(player)
+	self.goalX = cfg.goalX
+	-- Reset any leftover debuff (restore run speed) and rebuild interactions for this stage.
+	self:ClearDebuff()
+	self:BuildCourseInteractions(self.curStage)
 	self:SetScore(0)
 	self:SetHp(self.hp)
 	if player.StateComponent ~= nil then
@@ -235,7 +377,14 @@ method void GoToStage(string stage, string mapName)
 	end
 	self.curStage = stage
 	self.pendingStart = true
-	self:RequestTeleport(player, mapName)
+	if player.CurrentMapName == mapName then
+		-- Already on the shared run map: rebuild this stage's course in place (no map change → OnArriveMap won't auto-fire).
+		self.curMapName = mapName
+		self:OnArriveMap(player)
+	else
+		-- Different map: teleport; OnArriveMap fires on arrival via the map-change check in OnUpdate.
+		self:RequestTeleport(player, mapName)
+	end
 	log("[RunGameHud] GoToStage stage=" .. tostring(stage) .. " map=" .. tostring(mapName))
 end
 
@@ -274,6 +423,8 @@ method void StartGame()
 	self.hasCheckpoint = false
 	self.hp = self.maxHp
 	self.score = 0
+	self.coinScore = 0
+	self:BuildCourseInteractions(self.curStage)
 	self.isAlive = true
 	self:SetScore(0)
 	self:SetHp(self.hp)
@@ -294,6 +445,198 @@ method number FindGoalX(Entity player)
 		end
 	end
 	return goal - self.goalMargin
+end
+
+@ExecSpace("ClientOnly")
+method string CourseTableName(string stage)
+	-- A stage "1-1" reads its own DataSet, e.g. "Course1_1" (mirrors CourseGen).
+	local prefix = "Course"
+	if _CourseGen ~= nil then
+		prefix = _CourseGen.dataSetPrefix
+	end
+	return prefix .. string.gsub(stage, "-", "_")
+end
+
+@ExecSpace("ClientOnly")
+method table ResolveStageConfig(string stage)
+	-- Resolve a stage's floorY / startX / goalX from CourseGen defaults + the stage's "Set" commands.
+	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0 }
+	if _CourseGen ~= nil then
+		cfg.floorY = _CourseGen.defFloorY
+		cfg.startX = _CourseGen.defStartX
+		cfg.goalX = _CourseGen.defGoalX
+	end
+	if stage == nil or stage == "" then
+		return cfg
+	end
+	local ds = _DataService:GetTable(self:CourseTableName(stage))
+	if ds == nil then
+		return cfg
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		if ds:GetCell(i, "cmd") == "Set" then
+			local key = ds:GetCell(i, "p1")
+			local v = tonumber(ds:GetCell(i, "p2"))
+			if v ~= nil then
+				if key == "floorY" then
+					cfg.floorY = v
+				elseif key == "startX" then
+					cfg.startX = v
+				elseif key == "goal" then
+					cfg.goalX = v
+				end
+			end
+		end
+	end
+	return cfg
+end
+
+@ExecSpace("ClientOnly")
+method table LookupObstacle(string id)
+	-- Look up a hazard type's damage + debuff from the ObstacleDef DataSet (nil if not defined).
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return nil
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return nil
+	end
+	return {
+		damage = tonumber(row:GetItem("damage")) or 10,
+		debuff = tostring(row:GetItem("debuff")),
+		dvalue = tonumber(row:GetItem("dvalue")) or 0,
+		dtime = tonumber(row:GetItem("dtime")) or 0,
+		ceiling = tostring(row:GetItem("ceiling")) == "1",
+		minjumps = tonumber(row:GetItem("minjumps")) or 1,
+	}
+end
+
+@ExecSpace("ClientOnly")
+method table LookupMonster(string id)
+	-- Look up a monster's contact damage + stats from the MonsterDef DataSet (nil if not a monster).
+	local ds = _DataService:GetTable("MonsterDef")
+	if ds == nil then
+		return nil
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return nil
+	end
+	return {
+		damage = tonumber(row:GetItem("contactdmg")) or 10,
+		hp = tonumber(row:GetItem("hp")) or 10,
+		move = tostring(row:GetItem("move")),
+		attack = tostring(row:GetItem("attack")),
+	}
+end
+
+@ExecSpace("ClientOnly")
+method void ApplyDebuff(string name, number value, number time)
+	-- Apply a timed debuff on collision. Extensible: add an "elseif" for each new debuff kind.
+	if name == nil or name == "none" or name == "" or time <= 0 then
+		return
+	end
+	self.debuffKind = name
+	self.debuffTime = time
+	local player = _UserService.LocalPlayer
+	if name == "slow" then
+		-- Reduce run speed to runSpeed * value for the duration.
+		if isvalid(player) and player.MovementComponent ~= nil then
+			player.MovementComponent.InputSpeed = self.runSpeed * value
+		end
+	else
+		log("[RunGameHud] unknown debuff: " .. tostring(name))
+	end
+	log("[RunGameHud] debuff '" .. tostring(name) .. "' value=" .. tostring(value) .. " time=" .. tostring(time))
+end
+
+@ExecSpace("ClientOnly")
+method void ClearDebuff()
+	-- Remove the active debuff and restore normal stats.
+	local player = _UserService.LocalPlayer
+	if self.debuffKind == "slow" then
+		if isvalid(player) and player.MovementComponent ~= nil then
+			player.MovementComponent.InputSpeed = self.runSpeed
+		end
+	end
+	self.debuffKind = "none"
+	self.debuffTime = 0
+end
+
+@ExecSpace("ClientOnly")
+method void BuildCourseInteractions(string stage)
+	-- Read this stage's commands and build client-side hazard / coin / gap-zone lists.
+	self.hazards = {}
+	self.coins = {}
+	self.gapZones = {}
+	self.coinScore = 0
+	if stage == nil or stage == "" then
+		return
+	end
+	local ds = _DataService:GetTable(self:CourseTableName(stage))
+	if ds == nil then
+		return
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local cmd = ds:GetCell(i, "cmd")
+		if cmd == "Spawn" then
+			local kind = ds:GetCell(i, "p1")
+			local cx = tonumber(ds:GetCell(i, "p2")) or 0
+			if kind == "coin" then
+				table.insert(self.coins, { x = cx, got = false })
+			else
+				-- A monster defined in MonsterDef → contact hazard (jump over it to avoid contact damage).
+				local mon = self:LookupMonster(kind)
+				if mon ~= nil then
+					table.insert(self.hazards, { x = cx, hit = false, damage = mon.damage, debuff = "none", dvalue = 0, dtime = 0, ceiling = false, minjumps = 1 })
+				else
+					-- A hazard type defined in ObstacleDef → carry its damage + debuff.
+					local def = self:LookupObstacle(kind)
+					if def ~= nil then
+						table.insert(self.hazards, { x = cx, hit = false, damage = def.damage, debuff = def.debuff, dvalue = def.dvalue, dtime = def.dtime, ceiling = def.ceiling, minjumps = def.minjumps })
+					end
+				end
+			end
+		elseif cmd == "Gap" then
+			-- A "pit" the runner must jump over: damages only if grounded while crossing.
+			-- Param order matches Spawn: p1 = gap length, p2 = x (so p2 is ALWAYS the x-coordinate).
+			local glen = tonumber(ds:GetCell(i, "p1")) or 3
+			local gx = tonumber(ds:GetCell(i, "p2")) or 0
+			table.insert(self.gapZones, { x1 = gx, x2 = gx + glen, hit = false })
+		end
+	end
+	log("[RunGameHud] interactions stage=" .. tostring(stage) .. " hazards=" .. tostring(#self.hazards) .. " coins=" .. tostring(#self.coins) .. " gaps=" .. tostring(#self.gapZones))
+end
+
+@ExecSpace("ClientOnly")
+method void HideCourseEntity(string name)
+	-- Hide a course entity (e.g. a collected coin) by its path under the current map.
+	local ent = _EntityService:GetEntityByPath("/maps/" .. self.curMapName .. "/" .. name)
+	if isvalid(ent) then
+		ent.Enable = false
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void TakeHit(integer dmg)
+	-- A hazard hit costs HP (per-obstacle damage) but does NOT teleport the runner back — it keeps
+	-- progressing. Jumping over a hazard still avoids the hit (and its debuff) entirely.
+	local d = dmg
+	if d <= 0 then
+		d = self.fallDamage
+	end
+	self.hp = self.hp - d
+	if self.hp < 0 then
+		self.hp = 0
+	end
+	self:SetHp(self.hp)
+	log("[RunGameHud] hit, hp=" .. tostring(self.hp))
+	if self.hp <= 0 then
+		self:GameOver()
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -357,8 +700,29 @@ method void TryJump()
 		return
 	end
 	if rb:IsOnGround() then
+		-- First (grounded) jump.
+		self.jumpCount = 1
 		movement:Jump()
+	elseif self.jumpCount < self.maxJumps then
+		-- Air jump (double jump). Mid-air, movement:Jump()/JustJump/MoveVelocity.y are all no-ops (verified)
+		-- — the only thing that actually lifts is a brief upward AddForce, cleared a few frames later in
+		-- OnUpdate so gravity resumes. PURELY VERTICAL (no forward X force) so it never fights the auto-run's
+		-- per-frame MoveToDirection — that X tug-of-war was the old stutter. airJumpForce tunes the hop
+		-- height (≈8 → +0.65 units "살짝", ≈20 → +2.5 "too much").
+		self.jumpCount = self.jumpCount + 1
+		rb:AddForce(Vector2(0, self.airJumpForce))
+		self.airJumpClear = 0.06
 	end
+end
+
+@ExecSpace("ClientOnly")
+method void StartSlide()
+	-- Begin a slide (duck) for slideDuration seconds — the only way to pass UNDER a ceiling spike.
+	if self.isAlive == false then
+		return
+	end
+	self.sliding = true
+	self.slideTime = self.slideDuration
 end
 
 @ExecSpace("ClientOnly")
@@ -557,9 +921,12 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnKeyDown(KeyDownEvent event)
-	-- Space / Up arrow → jump.
+	-- Space / Up arrow → jump (tap again mid-air = double jump).
 	if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
 		self:TryJump()
+	-- Down arrow / S → slide (the only way under a ceiling spike).
+	elseif event.key == KeyboardKey.DownArrow or event.key == KeyboardKey.S then
+		self:StartSlide()
 	end
 end
 

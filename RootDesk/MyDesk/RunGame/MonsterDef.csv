@@ -1,0 +1,4 @@
+﻿id,ruid,move,hp,attack,contactdmg
+spore,4a0350be4a734dffac3f0f14d20caaf6,walk,15,contact,10
+slime,dc932872543f4a02bf41e977ab79e5ad,jump,25,contact,12
+orangemushroom,8257566e41aa4234929e81c6c2dab2e4,jump,40,contact,15
