@@ -1,0 +1,66 @@
+@Component
+script ObstacleHitboxDebug extends Component
+
+    -- Debug overlay for the obstacle's contact range. Obstacle collision is a circle of radius
+    -- Obstacle.HitRadius around its origin (script.Obstacle:CheckHit), so the marker is a square bounding
+    -- that circle (side = 2*HitRadius). Client-only/visual; toggle with ShowHitboxes. The box is a child,
+    -- so it inherits the obstacle's (0.5) scale — the scale below divides it back out to true world units.
+    @DisplayName("히트박스 표시")
+    property boolean ShowHitboxes = true
+
+    -- Marker sprite (20x20, center pivot) is 0.2 world units at Scale 1. Keep in sync with the child's RUID.
+    property number boxSpriteUnit = 0.2
+
+    property any hitBox = nil
+    @HideFromInspector property number refreshTimer = 0
+
+    method void OnBeginPlay()
+        -- Caches the debug child entity (client only — visual).
+        if not self:IsClient() then return end
+        self.hitBox = self.Entity:GetChildByName("DbgHitBox")
+        self:RefreshBox()
+    end
+
+    method void OnUpdate(number delta)
+        -- Re-applies size/color a few times a second so live HitRadius tweaks show and the child gets
+        -- initialized even if it was not ready on the first frame after spawn.
+        if not self:IsClient() then return end
+        self.refreshTimer = self.refreshTimer + delta
+        if self.refreshTimer < 0.3 then return end
+        self.refreshTimer = 0
+        if self.hitBox == nil then self.hitBox = self.Entity:GetChildByName("DbgHitBox") end
+        self:RefreshBox()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RefreshBox()
+        -- Sizes the bounding box from the live HitRadius, dividing out the obstacle's own scale so the
+        -- overlay equals the true world-unit contact range.
+        local unit = self.boxSpriteUnit
+        if unit <= 0 then unit = 0.2 end
+        if self.hitBox == nil or not isvalid(self.hitBox) then return end
+
+        local r = 0.6
+        ---@type Obstacle
+        local ob = self.Entity:GetComponent("script.Obstacle")
+        if ob ~= nil then r = ob.HitRadius end
+
+        local ps = self.Entity.TransformComponent.Scale
+        local psx = math.abs(ps.x)
+        local psy = math.abs(ps.y)
+        if psx <= 0 then psx = 1 end
+        if psy <= 0 then psy = 1 end
+
+        local t = self.hitBox.TransformComponent
+        if t ~= nil then
+            t.Position = Vector3(0, 0, 0)
+            t.Scale = Vector3((2 * r) / (unit * psx), (2 * r) / (unit * psy), 1)
+        end
+        local sr = self.hitBox.SpriteRendererComponent
+        if sr ~= nil then
+            sr.Color = Color(1, 0.5, 0, 0.55)   -- orange
+            sr.Enable = self.ShowHitboxes
+        end
+    end
+
+end
