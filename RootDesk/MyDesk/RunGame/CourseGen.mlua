@@ -201,11 +201,12 @@ method void SpawnVisualFloor(Entity map, table cfg, table gaps)
 	if endX > cursor then
 		table.insert(segs, { cursor, endX })
 	end
-	-- COLLISION: one real foothold (CustomFootholdComponent) per solid segment, so the runner can
-	-- actually stand/run on the floor. Without this the map has 0 footholds, IsOnGround() is never
-	-- true, and the player bobs/falls (jumps then read as choppy "air jumps"). Gaps stay foothold-less
-	-- (they are excluded from segs), so the runner physically falls into them.
-	self:SpawnSegmentFootholds(map, cfg, segs)
+	-- COLLISION: the RUN MAP already bakes NATIVE footholds matching this course's segments/gaps
+	-- (RunStage1_1 = 4 footholds for 3 gaps; RunStage1_2 = 3 for 2). Spawning runtime CustomFootholds
+	-- on top DOUBLES the floor and — per the verified gotcha — PINS the player's X to 0 the moment it
+	-- lands on a custom one (auto-run MoveVelocity then no-ops while only native arrow input still moves).
+	-- So we do NOT spawn custom footholds here; the runner stands on the native baked floor, and the
+	-- native gaps make the runner physically fall in. (segs below is still used to lay the visual tiles.)
 	-- Vertical fill so the background doesn't show below the floor.
 	local topY = cfg.floorY + self.floorTopPad - th / 2
 	local rowStep = th - self.floorRowOverlap
