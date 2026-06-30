@@ -12,7 +12,11 @@ script DoubleJump extends Component
 	property boolean unlocked = false
 	-- Upward force applied for the mid-air jump (RigidbodyComponent:SetForce Y).
 	property number jumpForce = 10
-	property number runSpeed = 0 
+	property number runSpeed = 0
+	-- Forward force of the mid-air jump (SetForce X). Tuned so the double jump reaches ~3.8u forward —
+	-- the midpoint between a pure-vertical jump and this skill's original (runSpeed-driven, ~5.2u) reach,
+	-- matching the single ground jump's forward distance.
+	property number forwardForce = 3.5
 
 	-- Cached + runtime state (client / local player only).
 	property RigidbodyComponent body = nil
@@ -107,7 +111,7 @@ script DoubleJump extends Component
 		-- no-ops in mid-air — SetForce does not.
 
 		--self.body:SetForce(Vector2(self.runSpeed * self.jumpForce, self.jumpForce))
-		self.body:SetForce(Vector2(self.runSpeed, self.jumpForce * 1.5))
+		self.body:SetForce(Vector2(self.forwardForce, self.jumpForce * 1.5))
 
 		-- Skill SFX through the central SoundManager (Logic): the dash / "burst forward" sound.
 		if _SoundManager ~= nil then
