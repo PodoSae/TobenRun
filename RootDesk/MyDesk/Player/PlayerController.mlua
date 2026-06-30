@@ -19,7 +19,7 @@ script PlayerController extends Component
 	-- native controller no longer jumps — the runner provides the grounded jump here. The air/double
 	-- jump is DoubleJump's job (its Jump-key handler only fires while airborne).
 	@DisplayName("점프 힘(수직 임펄스)")
-	property number jumpForce = 13
+	property number jumpForce = 8
 	property any jumpKeyHandler = nil
 	property boolean isLocal = false
 

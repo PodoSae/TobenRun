@@ -862,7 +862,7 @@
             "$type": "MODNativeType",
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 14
+          "Value": 30
         },
         {
           "TargetType": "MOD.Core.RigidbodyComponent",
@@ -871,7 +871,7 @@
             "$type": "MODNativeType",
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 14
+          "Value": 30
         }
       ],
       "EventLinks": [],
