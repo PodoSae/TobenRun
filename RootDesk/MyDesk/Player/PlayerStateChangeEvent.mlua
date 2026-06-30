@@ -1,0 +1,10 @@
+@Event
+script PlayerStateChangeEvent extends EventType
+
+    -- Fired by PlayerStateMachine on every movement-state transition. Other client-side systems
+    -- (VFX, SFX, HUD, future skills) can subscribe instead of polling GetState() every frame.
+    -- States are plain strings (RUN / JUMP / DOUBLE_JUMP / SLIDE / ...) so new states need no edit here.
+    property string PrevState = ""
+    property string NewState = ""
+
+end

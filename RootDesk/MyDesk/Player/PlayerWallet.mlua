@@ -1,0 +1,86 @@
+@Component
+script PlayerWallet extends Component
+
+    -- Player's meso (currency). Server-authoritative; synced to the owning client so a HUD can read it.
+    @TargetUserSync property number Meso = 0
+
+    -- DataStorage key for persisting the meso balance (per-user storage).
+    property string StorageKey = "wallet_meso"
+
+    -- Server-only state.
+    property any storage = nil        -- UserDataStorage handle
+    property number savedMeso = 0     -- last persisted value (for debounce)
+    property boolean dirty = false
+    property integer flushTimer = 0
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Loads the saved balance, then starts a debounced save loop (mirrors PlayerStatManager).
+        self:LoadMeso()
+        self.flushTimer = _TimerService:SetTimerRepeat(function()
+            self:Flush(false)
+        end, 30.0)
+        log("[PlayerWallet] Ready for " .. tostring(self.Entity and self.Entity.Name or "unknown") .. " meso=" .. tostring(self.Meso))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LoadMeso()
+        -- Restores the saved meso balance from this player's UserDataStorage (once, on join).
+        local pc = self.Entity.PlayerComponent
+        if pc == nil then return end
+
+        self.storage = _DataStorageService:GetUserDataStorage(pc.UserId)
+        local errorCode, raw = self.storage:GetAndWait(self.StorageKey)
+        if errorCode == 0 and raw ~= nil and raw ~= "" then
+            self.Meso = tonumber(raw) or 0
+            self.savedMeso = self.Meso
+            log("[PlayerWallet] Loaded meso=" .. tostring(self.Meso) .. " for " .. tostring(pc.UserId))
+        else
+            log("[PlayerWallet] No saved meso (code=" .. tostring(errorCode) .. ")")
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddMeso(number amount)
+        -- Credits meso (e.g. on monster kill). Server-authoritative; ignores non-positive amounts.
+        if amount <= 0 then return end
+        self.Meso = self.Meso + amount
+        self.dirty = true
+        log("[PlayerWallet] +" .. tostring(amount) .. " meso -> " .. tostring(self.Meso))
+    end
+
+    method number GetMeso()
+        -- Current balance. Reads the synced property, so it is valid on both client and server.
+        return self.Meso
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Flush(boolean force)
+        -- Persists the balance only when changed (debounced; avoids per-frame Credit burn).
+        if not self.dirty and not force then return end
+        if self.storage == nil then return end
+        self.dirty = false
+        self.savedMeso = self.Meso
+
+        self.storage:SetAsync(self.StorageKey, tostring(math.floor(self.Meso)), function(errorCode, key)
+            if errorCode ~= 0 then
+                log_warning("[PlayerWallet] Save failed code=" .. tostring(errorCode))
+                self.dirty = true
+            end
+        end)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Final synchronous flush + timer cleanup.
+        if self.flushTimer ~= 0 then
+            _TimerService:ClearTimer(self.flushTimer)
+            self.flushTimer = 0
+        end
+        if self.dirty and self.storage ~= nil then
+            self.storage:SetAndWait(self.StorageKey, tostring(math.floor(self.Meso)))
+            self.dirty = false
+        end
+    end
+
+end

@@ -1,0 +1,278 @@
+@Component
+script UltimateSkill extends Component
+
+    -- Ultimate (궁극기): a gauge fills over time; at 100% the local player presses R to DASH forward
+    -- (돌진), ploughing through and DESTROYING any monster (a HitComponent entity) or obstacle
+    -- (script.Obstacle) in its path. The gauge + activation gate + destruction are server-authoritative;
+    -- the dash speed/visual is client-side (movement authority for a Rigidbody LocalPlayer is the owning
+    -- client) and gated through PlayerStateMachine's ULTIMATE state so it coordinates with the other
+    -- movement skills. The synced Gauge drives the HUD gauge bar (see PlayerHudUI).
+    --
+    -- Gauge fill is time-based by default (GaugeFillPerSec). Call AddGauge() from elsewhere (e.g. on a
+    -- kill) to also charge it from gameplay events.
+
+    -- ── Gauge (server-authoritative, @Sync for the HUD) ──
+    @Sync property number Gauge = 0
+    property number MaxGauge = 100
+    property number GaugeFillPerSec = 12.5     -- ~8s from empty to full
+
+    -- ── Dash tuning ──
+    property number DashDuration = 1.2         -- seconds the dash lasts
+    property number DashSpeedMul = 3.0         -- forward-speed multiplier during the dash
+    property number DashHitWidth = 2.4         -- forward reach of the destroy box (world units)
+    property number DashHitHeight = 1.8        -- vertical reach of the destroy box
+    property number DashHitOffset = 1.0        -- destroy-box center ahead of the player
+
+    -- Active dash state (server-authoritative, @Sync so every client can react to the visual).
+    @Sync property boolean Active = false
+    property number remaining = 0
+
+    -- ── Optional polish (empty = none) ──
+    property string dashEffectRUID = ""        -- looped aura attached to the player while dashing
+    property string destroyEffectRUID = ""     -- one-shot burst at each destroyed target
+
+    -- Cached refs / runtime state.
+    property RigidbodyComponent body = nil
+    -- The rigidbody's WalkSpeed is the MAX ground speed: it clamps MoveVelocity, so the dash speed
+    -- boost is silently capped unless we also raise this limit for the dash. Captured on begin play.
+    property number origWalkSpeed = 0
+    property any fsm = nil
+    property any controller = nil
+    property boolean isLocal = false
+    property any keyHandler = nil
+    property integer effectSerial = 0
+
+    method void OnBeginPlay()
+        -- Server owns the gauge/dash/destruction; the client also binds input + FSM.
+        -- The PlayerController ref is cached on BOTH sides: the dash speed boost must be applied
+        -- wherever the Rigidbody movement authority lives. PlayerController.OnUpdate runs on the
+        -- server too and keeps writing the normal run speed (speed * speedMultiplier), so if only
+        -- the client raised speedMultiplier the server would cancel the boost out — hence we also
+        -- raise it on the server while dashing.
+        self.controller = self.Entity:GetComponent("script.PlayerController")
+        self.body = self.Entity.RigidbodyComponent
+        -- Remember the normal max ground speed so the dash can raise it and then restore it exactly.
+        if self.body ~= nil then
+            self.origWalkSpeed = self.body.WalkSpeed
+        end
+
+        if self:IsServer() then
+            self.Gauge = 0
+            self.Active = false
+            self.remaining = 0
+        end
+
+        if self:IsClient() then
+            self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
+            self.isLocal = (_UserService.LocalPlayer == self.Entity)
+            if self.isLocal then
+                self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+            end
+        end
+
+        log("[UltimateSkill] OnBeginPlay server=" .. tostring(self:IsServer())
+            .. " client=" .. tostring(self:IsClient()))
+    end
+
+    method void OnEndPlay()
+        -- Release the input subscription and any looped dash effect.
+        if self.keyHandler ~= nil then
+            _InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+            self.keyHandler = nil
+        end
+        if self.effectSerial ~= 0 then
+            _EffectService:RemoveEffect(self.effectSerial)
+            self.effectSerial = 0
+        end
+    end
+
+    method void ApplyDashSpeed()
+        -- Raises BOTH the run-speed multiplier AND the rigidbody's max ground speed (WalkSpeed). The
+        -- multiplier alone is not enough: MoveVelocity is clamped by WalkSpeed, so without lifting the
+        -- cap the dash velocity is silently limited to the normal run speed. No @ExecSpace → runs on
+        -- the caller's side (server dash loop or owning client), which is where movement is applied.
+        if self.controller ~= nil then self.controller.speedMultiplier = self.DashSpeedMul end
+        if self.body ~= nil then self.body.WalkSpeed = self.origWalkSpeed * self.DashSpeedMul end
+    end
+
+    method void RestoreDashSpeed()
+        -- Restores the normal run-speed multiplier and the original max ground speed cap.
+        if self.controller ~= nil then self.controller.speedMultiplier = 1 end
+        if self.body ~= nil then self.body.WalkSpeed = self.origWalkSpeed end
+    end
+
+    method void OnUpdate(number delta)
+        -- Server: fill the gauge, tick the dash timer, destroy targets in the path.
+        if self:IsServer() then
+            if not self.Active and self.Gauge < self.MaxGauge then
+                self.Gauge = math.min(self.MaxGauge, self.Gauge + self.GaugeFillPerSec * delta)
+            end
+            if self.Active then
+                -- Server-side speed boost (the server may own Rigidbody movement; without this it
+                -- overwrites the client's boost with the normal run speed every frame). Also raises
+                -- the WalkSpeed cap so the boosted velocity is not clamped.
+                self:ApplyDashSpeed()
+                self:DestroyTargetsInPath()
+                self.remaining = self.remaining - delta
+                if self.remaining <= 0 then
+                    self:EndDashServer()
+                end
+            end
+        end
+
+        -- Client (local player): re-assert the dash speed + WalkSpeed cap every frame so another skill
+        -- (e.g. Slide restoring speedMultiplier to 1 as it ends) can't cancel the dash mid-flight.
+        if self:IsClient() and self.Active and self.isLocal then
+            self:ApplyDashSpeed()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnKeyDown(KeyDownEvent event)
+        -- R activates the ultimate for the local player only (server validates the gauge).
+        if _UserService.LocalPlayer ~= self.Entity then return end
+        if event.key == KeyboardKey.R then
+            self:RequestActivate()
+        end
+    end
+
+    @ExecSpace("Server")
+    method void RequestActivate()
+        -- Server-authoritative gate: only when the gauge is full and not already dashing.
+        if self.Active then return end
+        if self.Gauge < self.MaxGauge then return end
+        self.Gauge = 0
+        self.Active = true
+        self.remaining = self.DashDuration
+        log("[UltimateSkill] ULTIMATE activated (server)")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddGauge(number amount)
+        -- Public hook to charge the gauge from gameplay events (e.g. a kill). Ignored while dashing.
+        if self.Active then return end
+        if amount <= 0 then return end
+        self.Gauge = math.min(self.MaxGauge, self.Gauge + amount)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void EndDashServer()
+        -- Ends the dash; the @Sync flip drives EndDashClient on every client.
+        self.Active = false
+        self.remaining = 0
+        -- Restore the normal run speed + WalkSpeed cap on the server side (mirrors EndDashClient).
+        self:RestoreDashSpeed()
+        log("[UltimateSkill] dash end (server)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnSyncProperty(string name, any value)
+        -- Reacts to the server flipping Active (start/stop the dash visual + local movement).
+        if name == "Active" then
+            if value == true then
+                self:StartDashClient()
+            else
+                self:EndDashClient()
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartDashClient()
+        -- Visual on every client; speed + FSM state only on the owning client.
+        if self.dashEffectRUID ~= "" then
+            self.effectSerial = _EffectService:PlayEffectAttached(
+                self.dashEffectRUID, self.Entity, Vector3(0, 0, 0), 0, Vector3(1, 1, 1), true)
+        end
+        if _UserService.LocalPlayer == self.Entity then
+            self:ApplyDashSpeed()
+            if self.fsm ~= nil then self.fsm:TryChange("ULTIMATE") end
+        end
+        log("[UltimateSkill] dash start (client) local=" .. tostring(_UserService.LocalPlayer == self.Entity))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void EndDashClient()
+        -- Stops the visual and restores normal run speed / RUN state on the owning client.
+        if self.effectSerial ~= 0 then
+            _EffectService:RemoveEffect(self.effectSerial)
+            self.effectSerial = 0
+        end
+        if _UserService.LocalPlayer == self.Entity then
+            self:RestoreDashSpeed()
+            if self.fsm ~= nil then self.fsm:TryChange("RUN") end
+        end
+        log("[UltimateSkill] dash end (client)")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DestroyTargetsInPath()
+        -- Destroys monsters (HitComponent entities) and obstacles (script.Obstacle) inside the forward
+        -- dash box. Two passes because obstacles have no collider (they use distance checks), so the
+        -- overlap query can't see them.
+        local tr = self.Entity.TransformComponent
+        if tr == nil then return end
+        local wp = tr.WorldPosition
+
+        local direction = 1
+        local pcc = self.Entity.PlayerControllerComponent
+        if pcc ~= nil and pcc.LookDirectionX < 0 then direction = -1 end
+
+        local cx = wp.x + direction * self.DashHitOffset
+        local cy = wp.y
+
+        -- Pass 1 — monsters via a non-damaging overlap query (HitBox group).
+        local sim = _CollisionService:GetSimulator(self.Entity)
+        if sim ~= nil then
+            local shape = BoxShape(Vector2(cx, cy), Vector2(self.DashHitWidth, self.DashHitHeight), 0)
+            local hits = sim:OverlapAll(CollisionGroups.HitBox, shape)
+            if hits ~= nil then
+                for i, comp in ipairs(hits) do
+                    if comp ~= nil and isvalid(comp) then
+                        local e = comp.Entity
+                        if e ~= nil and isvalid(e) and e ~= self.Entity and e.PlayerComponent == nil then
+                            self:DestroyTarget(e)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Pass 2 — obstacles (no collider) via the map's script.Obstacle children + a box test.
+        local map = self.Entity.CurrentMap
+        if isvalid(map) then
+            local obstacles = map:GetChildComponentsByTypeName("script.Obstacle", true)
+            if obstacles ~= nil then
+                local halfW = self.DashHitWidth * 0.5
+                local halfH = self.DashHitHeight * 0.5
+                for i, oc in ipairs(obstacles) do
+                    if oc ~= nil and isvalid(oc) then
+                        local oe = oc.Entity
+                        if isvalid(oe) then
+                            local op = oe.TransformComponent.WorldPosition
+                            if math.abs(op.x - cx) <= halfW and math.abs(op.y - cy) <= halfH then
+                                self:DestroyTarget(oe)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DestroyTarget(Entity e)
+        -- Removes one target, with an optional burst effect at its position.
+        if self.destroyEffectRUID ~= "" then
+            self:PlayDestroyEffect(e.TransformComponent.WorldPosition)
+        end
+        e:Destroy()
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayDestroyEffect(Vector3 pos)
+        -- One-shot destruction burst on every client.
+        _EffectService:PlayEffect(self.destroyEffectRUID, self.Entity, pos, 0, Vector3(1, 1, 1), false)
+    end
+
+end

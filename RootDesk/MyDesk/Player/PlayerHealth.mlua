@@ -1,0 +1,116 @@
+@Component
+script PlayerHealth extends Component
+
+    -- Server-authoritative HP, synced to clients so the HUD can read it.
+    @Sync property number MaxHp = 100
+    @Sync property number CurrentHp = 100
+
+    -- World position to teleport back to when HP hits 0 (captured on begin play).
+    property number respawnX = 0
+    property number respawnY = 0
+
+    -- Brief invulnerability after a hit so one obstacle does not drain HP every frame.
+    property number invulnTime = 0.7
+    property number invulnRemain = 0
+
+    -- Hit feedback (effects played when the player takes damage). Inspector-tunable.
+    @DisplayName("카메라 흔들림 강도")
+    property number ShakeIntensity = 0.3
+    @DisplayName("카메라 흔들림 시간")
+    property number ShakeDuration = 0.25
+    -- Damage number skin shown over the player (taken-hit skin).
+    -- Default DamageSkinSettingComponent.DamageSkinId — the very skin the monster's auto-mode damage
+    -- number already renders with in this project, so the manual _DamageSkinService:Play call is
+    -- guaranteed a real, proven resource to render.
+    property string HitSkinRUID = "6ba67548f43f48f29eb23dafd0766383"
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Initializes HP to full and records the spawn point used for respawn-on-death.
+        self.CurrentHp = self.MaxHp
+        self.invulnRemain = 0
+        local wp = self.Entity.TransformComponent.WorldPosition
+        self.respawnX = wp.x
+        self.respawnY = wp.y
+        log("[PlayerHealth] OnBeginPlay HP=" .. tostring(self.CurrentHp) .. "/" .. tostring(self.MaxHp)
+            .. " respawn=(" .. tostring(self.respawnX) .. "," .. tostring(self.respawnY) .. ")")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Ticks down the post-hit invulnerability window.
+        if self.invulnRemain > 0 then
+            self.invulnRemain = self.invulnRemain - delta
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void TakeDamage(number amount)
+        -- Server-side damage entry point. Ignored while invulnerable or for non-positive damage.
+        if amount <= 0 then return end
+        if self.invulnRemain > 0 then return end
+
+        self.invulnRemain = self.invulnTime
+        self.CurrentHp = self.CurrentHp - amount
+        log("[PlayerHealth] TakeDamage " .. tostring(amount) .. " -> HP=" .. tostring(self.CurrentHp))
+
+        -- Hit feedback: damage number + spark on all clients, camera shake on the hit player only.
+        self:PlayHitEffects(math.floor(amount))
+        local pc = self.Entity.PlayerComponent
+        if pc ~= nil then
+            self:ShakeCameraOnHit(pc.UserId)
+        end
+
+        if self.CurrentHp <= 0 then
+            self.CurrentHp = 0
+            self:Respawn()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Respawn()
+        -- Refills HP and teleports the player back to the recorded spawn point.
+        log("[PlayerHealth] HP depleted - respawning at start")
+
+        local movement = self.Entity.MovementComponent
+        if movement ~= nil then
+            movement:SetWorldPosition(Vector2(self.respawnX, self.respawnY))
+        end
+
+        self.CurrentHp = self.MaxHp
+        self.invulnRemain = self.invulnTime
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayHitEffects(integer amount)
+        -- Damage number over the player + a hit spark, on every client (these are client-side visuals).
+        local e = self.Entity
+        if not isvalid(e) then return end
+        local wp = e.TransformComponent.WorldPosition
+        log("[PlayerHealth] PlayHitEffects (client) amount=" .. tostring(amount)
+            .. " skin=" .. tostring(self.HitSkinRUID) .. " pos=(" .. string.format("%.1f", wp.x) .. "," .. string.format("%.1f", wp.y) .. ")")
+
+        _DamageSkinService:Play(
+            e, self.HitSkinRUID, 0, { amount },
+            DamageSkinTweenType.Default, false,
+            Vector2(0, 1.2),                       -- above the player's head
+            Vector2(1, 1), 1.0, 1.0, LitMode.Default
+        )
+
+        _ParticleService:PlayBasicParticle(
+            BasicParticleType.SparkExplosion, e,
+            Vector3(wp.x, wp.y + 0.7, wp.z), 0, Vector3(1, 1, 1), false, {}
+        )
+    end
+
+    @ExecSpace("Client")
+    method void ShakeCameraOnHit()
+        -- Runs only on the hit player's client (targetUserId is passed as the last call-site arg).
+        -- _CameraService:GetCurrentCameraComponent() is ClientOnly, so this must run client-side.
+        local cam = _CameraService:GetCurrentCameraComponent()
+        if isvalid(cam) then
+            cam:ShakeCamera(self.ShakeIntensity, self.ShakeDuration)
+        end
+    end
+
+end

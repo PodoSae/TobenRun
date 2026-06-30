@@ -1,0 +1,145 @@
+@Component
+script MushmomSpore extends Component
+
+    -- Mushmom's ranged spore projectile. Body-less entity moved by direct Transform writes (like SwordBeam),
+    -- flying along a 2D velocity vector so a single spray can fan across top/middle/bottom lanes.
+    -- Pooled and reused by script.MushmomBoss (never Destroy()ed mid-game). Server-authoritative.
+
+    -- Hard safety lifetime (seconds): recycles even if it never leaves the map or hits a player.
+    property number MaxLifetime = 5.0
+    -- Horizontal half-width (world units) of the contact check against players each frame.
+    property number HitRadius = 0.6
+    -- Player body height (world units). The player's transform origin is at the feet, so the vertical
+    -- hit span runs from slightly below the feet up to feet + PlayerHeight — otherwise mid/high spores
+    -- (which fly ~1 unit above the ground) sail over the foot-anchored origin and never connect.
+    property number PlayerHeight = 1.7
+    -- Damage dealt to a player on contact (overwritten per-launch by the boss).
+    property number Damage = 15
+
+    -- Map rectangle: the spore recycles the instant it leaves this area. Covers map01's extent + margin.
+    property number BoundMinX = -10
+    property number BoundMaxX = 50
+    property number BoundMinY = -12
+    property number BoundMaxY = 16
+
+    -- Parking spot for an idle (pooled) spore: far off any camera while it waits to be reused.
+    property Vector3 ParkPosition = Vector3(0, 99999, 999)
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- One-time idle init. Guarded so it can't clobber a spore the boss Launched on the same frame
+        -- it was spawned (Launch may run before OnBeginPlay for a fresh entity).
+        if self._T.fired ~= nil then return end
+        self._T.fired = false
+        self._T.lifetime = 0
+        self._T.vx = 0
+        self._T.vy = 0
+        self:Park()
+    end
+
+    method boolean IsIdle()
+        -- True when this spore is parked and free for the pool to hand out again (server-side query).
+        return self._T.fired ~= true
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Launch(Vector3 startPos, number vx, number vy, number damage)
+        -- Activates a pooled (or fresh) spore: position it, set its velocity vector + damage, make it visible.
+        self._T.fired = true
+        self._T.lifetime = 0
+        self._T.vx = vx
+        self._T.vy = vy
+        self.Damage = damage
+
+        self.Entity.TransformComponent.Position = startPos
+
+        local renderer = self.Entity.SpriteRendererComponent
+        if renderer ~= nil then
+            renderer.FlipX = vx < 0
+            renderer.Enable = true
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Server-authoritative flight loop: move, hit-test vs players, recycle on hit / lifetime / out-of-map.
+        if self._T.fired ~= true then return end
+
+        self._T.lifetime = self._T.lifetime + delta
+        if self._T.lifetime >= self.MaxLifetime then
+            self:Deactivate()
+            return
+        end
+
+        -- Move. Body-less entity -> Translate (direct transform write replicates to clients).
+        self.Entity.TransformComponent:Translate(self._T.vx * delta, self._T.vy * delta)
+
+        local pos = self.Entity.TransformComponent.Position
+        if pos.x < self.BoundMinX or pos.x > self.BoundMaxX
+            or pos.y < self.BoundMinY or pos.y > self.BoundMaxY then
+            self:Deactivate()
+            return
+        end
+
+        self:CheckPlayerHit(pos)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void CheckPlayerHit(Vector3 pos)
+        -- Damages the first player within HitRadius, then recycles. PlayerHealth's own invuln window
+        -- guards against multi-frame double-hits, but recycling on first contact makes it a clean one-shot.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return end
+
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                -- Horizontal: within HitRadius of the player column. Vertical: anywhere along the
+                -- player's body (feet-0.2 .. feet+PlayerHeight), since the origin sits at the feet.
+                if math.abs(up.x - pos.x) <= self.HitRadius
+                    and pos.y >= up.y - 0.2 and pos.y <= up.y + self.PlayerHeight then
+                    ---@type PlayerHealth
+                    local hp = user:GetComponent("script.PlayerHealth")
+                    if isvalid(hp) then
+                        log("[MushmomSpore] hit player -> TakeDamage " .. tostring(self.Damage))
+                        hp:TakeDamage(self.Damage)
+                    end
+                    self:ShowHitEffect(pos.x, pos.y, pos.z)
+                    self:Deactivate()
+                    return
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Deactivate()
+        -- Recycles the spore: mark idle and park it off-screen so the pool can reuse it.
+        self._T.fired = false
+        self:Park()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Park()
+        -- Hides the spore (disabled renderer + parked off any camera) while it waits idle in the pool.
+        local renderer = self.Entity.SpriteRendererComponent
+        if renderer ~= nil then
+            renderer.Enable = false
+        end
+        self.Entity.TransformComponent.Position = self.ParkPosition
+    end
+
+    @ExecSpace("Client")
+    method void ShowHitEffect(number px, number py, number pz)
+        -- Fixed-position burst at the impact point (survives the spore recycling). Built-in particle = no RUID.
+        local mapEntity = self.Entity.CurrentMap
+        if mapEntity == nil then return end
+        _ParticleService:PlayBasicParticle(BasicParticleType.SmallExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(0.7, 0.7, 0.7), false, {})
+    end
+
+end

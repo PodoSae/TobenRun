@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://3426feaca9d84a949256aab13c77a8a0",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://3426feaca9d84a949256aab13c77a8a0",
+      "name": "Skill",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

@@ -1,0 +1,60 @@
+@Component
+script RunGhost extends Component
+
+	-- Lives on a spawned ghost-avatar entity (model "runghost"). The ghost mirrors the player's
+	-- look via CostumeManagerComponent.DefaultEquipUserId (set by the spawner on the server), and
+	-- this component only handles the client-side fade-out. The server schedules the actual
+	-- Destroy(Duration) at spawn time, so Duration here MUST match the spawner's ghostDuration.
+
+	-- Fade lifetime (seconds). Keep equal to RunSpeedEffect.ghostDuration.
+	property number Duration = 0.45
+	-- Alpha the ghost starts at (then fades linearly to 0).
+	property number StartAlpha = 0.5
+
+	property AvatarRendererComponent renderer = nil
+	property number life = 0
+
+	method void OnBeginPlay()
+		-- Caches the avatar renderer, applies the initial translucency, and poses the ghost as
+		-- running (client visual only). Avatar state authority is client-side, so the pose is set
+		-- here via BodyActionStateChangeEvent (enum-direct, needs no StateComponent registration)
+		-- rather than StateComponent:ChangeState.
+		if not self:IsClient() then return end
+		
+		self.renderer = self.Entity.AvatarRendererComponent
+		if isvalid(self.renderer) then
+			self.renderer:SetAlpha(self.StartAlpha)
+		end
+
+		-- Best-effort running pose. If the avatar body has not composed yet this is harmless —
+		-- the ghost simply shows the default stand pose instead (no error either way).
+		local poseEvent = BodyActionStateChangeEvent()
+		poseEvent.ActionState = MapleAvatarBodyActionState.Walk
+		poseEvent.needResetAction = true
+		self.Entity:SendEvent(poseEvent)
+
+		-- Force the ghost to face right on spawn. The avatar defaults to facing left
+		-- (PlayerControllerComponent.LookDirectionX = -1), and an avatar entity IGNORES
+		-- SpriteRenderer.FlipX / TransformComponent.Scale.x (the avatar renderer paints over them) —
+		-- which is why the old Scale approach did nothing. The horizontal mirror must go through the
+		-- entity transform's QuaternionRotation: w = -1 is MSW's horizontal-flip encoding.
+		local transform = self.Entity.TransformComponent
+		if isvalid(transform) then
+			transform.QuaternionRotation = Quaternion(0, 0, 0, -1)
+		end
+
+		-- log("[RunGhost] OnBeginPlay - renderer: " .. tostring(isvalid(self.renderer)))
+	end
+
+	method void OnUpdate(number delta)
+		-- Linearly fades the ghost's alpha to 0 over Duration.
+		if not self:IsClient() then return end
+		if not isvalid(self.renderer) then return end
+
+		self.life = self.life + delta
+		local a = self.StartAlpha * (1 - self.life / self.Duration)
+		if a < 0 then a = 0 end
+		self.renderer:SetAlpha(a)
+	end
+
+end

@@ -1,0 +1,105 @@
+@Component
+script PlayerStateMachine extends Component
+
+    -- Single source of truth for the player's *movement* state (RUN / JUMP / DOUBLE_JUMP / SLIDE).
+    -- This is a gameplay-control FSM, intentionally SEPARATE from the engine's avatar-animation
+    -- StateComponent (which PlayerControllerComponent drives for the walk/jump/fall poses). Keeping
+    -- the two layers apart is what prevents conflicts: every action skill (DoubleJump, Slide, ...)
+    -- coordinates through this one arbiter instead of each poking the rigidbody on its own.
+    --
+    -- Runs client-side for the LOCAL player only: movement authority for a Rigidbody LocalPlayer is
+    -- the owning client, and every skill that queries this FSM is client-input driven.
+    --
+    -- Extending the FSM: add a state name to the `transitions` table below (a row for transitions
+    -- *out* of it, and entries in other rows for transitions *into* it). Skills request gated
+    -- transitions with TryChange("NEW_STATE"); grounded<->air states are auto-driven in OnUpdate.
+
+    property string CurrentState = "RUN"
+
+    -- Cached refs (resolved on begin play).
+    property RigidbodyComponent body = nil
+    property boolean isLocal = false
+
+    -- Allowed transitions: from -> { to = true, ... }. Held in a plain Lua table (property any).
+    property any transitions = nil
+
+    method void OnBeginPlay()
+        -- Builds the transition table and caches the rigidbody used for ground detection.
+        self.body = self.Entity.RigidbodyComponent
+        self.CurrentState = "RUN"
+
+        self.transitions = {
+            RUN         = { JUMP = true, SLIDE = true, ULTIMATE = true },
+            JUMP        = { DOUBLE_JUMP = true, RUN = true, ULTIMATE = true },
+            DOUBLE_JUMP = { RUN = true, ULTIMATE = true },
+            SLIDE       = { RUN = true, JUMP = true, ULTIMATE = true },
+            -- Ultimate dash: entered from any movement state, only exits back to RUN (when the dash
+            -- timer ends). The grounded<->air auto-transitions below intentionally never touch it, so
+            -- the dash holds for its full duration regardless of ground contact.
+            ULTIMATE    = { RUN = true },
+        }
+
+        self.isLocal = self:IsClient() and _UserService.LocalPlayer == self.Entity
+        log("[PlayerStateMachine] OnBeginPlay state=" .. self.CurrentState
+            .. " local=" .. tostring(self.isLocal) .. " body=" .. tostring(self.body ~= nil))
+    end
+
+    method boolean CanChange(string toState)
+        -- True when a transition from the current state to toState is registered.
+        if self.transitions == nil then return false end
+        local row = self.transitions[self.CurrentState]
+        if row == nil then return false end
+        return row[toState] == true
+    end
+
+    method boolean TryChange(string toState)
+        -- Performs the transition when allowed (fires PlayerStateChangeEvent, returns true).
+        -- Returns false with no change when the transition is not in the table.
+        if toState == self.CurrentState then return false end
+        if not self:CanChange(toState) then return false end
+
+        local prev = self.CurrentState
+        self.CurrentState = toState
+
+        local ev = PlayerStateChangeEvent()
+        ev.PrevState = prev
+        ev.NewState = toState
+        self.Entity:SendEvent(ev)
+
+        log("[PlayerStateMachine] " .. prev .. " -> " .. toState)
+        return true
+    end
+
+    method string GetState()
+        -- Current movement state name.
+        return self.CurrentState
+    end
+
+    method boolean Is(string s)
+        -- Convenience equality check for gameplay systems (e.g. obstacles treating SLIDE as a low target).
+        return self.CurrentState == s
+    end
+
+    method void OnUpdate(number delta)
+        -- Auto-drives the grounded<->air transitions for the local player. Gated transitions
+        -- (DOUBLE_JUMP, SLIDE) are requested by their own skills via TryChange.
+        if not self.isLocal then return end
+        if self.body == nil then return end
+
+        local grounded = self.body:IsOnGround()
+        local s = self.CurrentState
+
+        if grounded then
+            -- Landed: any airborne state falls back to the default run state.
+            if s == "JUMP" or s == "DOUBLE_JUMP" then
+                self:TryChange("RUN")
+            end
+        else
+            -- Left the ground (jumped or ran off an edge): grounded states become JUMP.
+            if s == "RUN" or s == "SLIDE" then
+                self:TryChange("JUMP")
+            end
+        end
+    end
+
+end

@@ -1,0 +1,83 @@
+@Component
+script PlayerController extends Component
+
+	property number speed = 2
+	property MovementComponent movement = nil
+	property RigidbodyComponent body = nil
+
+	-- Run-speed factor other movement states modulate (e.g. Slide sets this for its duration, then
+	-- restores it to 1). Read every frame in OnUpdate, so the writer's update order doesn't matter.
+	property number speedMultiplier = 1
+
+	-- Auto-runner input locks. The runner only ever moves right, so backward movement
+	-- (A / Left arrow) and crouch (S / Down arrow) are stripped from the engine
+	-- PlayerControllerComponent. Toggle off in the inspector to restore either.
+	property boolean blockBackward = true
+	property boolean blockCrouch = true
+
+	method void OnBeginPlay()
+			-- Caches the movement + rigidbody components used for constant forward auto-run.
+			self.movement = self.Entity.MovementComponent
+			self.body = self.Entity.RigidbodyComponent
+			log("[PlayerController] OnBeginPlay - movement: " .. tostring(self.movement ~= nil)
+				.. " body: " .. tostring(self.body ~= nil))
+
+			-- Force the running (walk) animation. The runner moves via a direct MoveVelocity write
+			-- (not input/MoveToDirection), so PlayerControllerComponent never sees "movement input"
+			-- and would otherwise leave the avatar in the idle/stand pose while it slides forward.
+			-- AlwaysMovingState makes the controller play the MOVE (walk) animation continuously.
+			-- @Sync property -> set on the server so it propagates to every client.
+			if self:IsServer() then
+				local pcc = self.Entity.PlayerControllerComponent
+				if pcc ~= nil then
+					pcc.AlwaysMovingState = true
+				end
+			end
+
+			-- Strip unwanted input keys on the owning client only (input authority is per-client,
+			-- and RemoveActionKey is ClientOnly).
+			if self:IsClient() and _UserService.LocalPlayer == self.Entity then
+				self:LockRunnerInput()
+			end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void LockRunnerInput()
+			-- Removes the backward + crouch key bindings from PlayerControllerComponent so A/Left
+			-- (move back) and S/Down (crouch) do nothing. Right-run and jump are left untouched.
+			local pcc = self.Entity.PlayerControllerComponent
+			if pcc == nil then return end
+
+			if self.blockBackward then
+				pcc:RemoveActionKey(KeyboardKey.A)
+				pcc:RemoveActionKey(KeyboardKey.LeftArrow)
+			end
+			if self.blockCrouch then
+				pcc:RemoveActionKey(KeyboardKey.S)
+				pcc:RemoveActionKey(KeyboardKey.DownArrow)
+			end
+
+			log("[PlayerController] Runner input locked - backward=" .. tostring(self.blockBackward)
+				.. " crouch=" .. tostring(self.blockCrouch))
+	end
+
+	method void OnUpdate(number delta)
+			-- Keeps the runner moving right every frame.
+			if self.movement == nil then return end
+
+			-- Normal movement channel — also keeps the avatar facing the run direction.
+			-- self.movement:MoveToDirection(Vector2(self.speed, 0), delta)
+
+			-- Force the rigidbody move input forward so the ATTACK state cannot stop the run.
+			-- The ATTACK state (auto-added by PlayerControllerComponent) roots the character
+			-- while the attack animation plays, which makes MoveToDirection a no-op. A direct
+			-- MoveVelocity write is not suppressed by the state machine, so the runner keeps
+			-- its speed during attacks. Y input is preserved so gravity/jump are unaffected.
+			if self.body ~= nil then
+				-- log("[PlayerController] OnUpdate - speed: " .. tostring(self.speed) .. " speedMultiplier: " .. tostring(self.speedMultiplier))
+					local v = self.body.MoveVelocity
+					self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier, v.y)
+			end
+	end
+
+end

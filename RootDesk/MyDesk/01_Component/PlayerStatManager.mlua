@@ -1,0 +1,175 @@
+@Component
+script PlayerStatManager extends Component
+
+    property string DataSetName = "StatTable"
+    property string StorageKey = "stat_levels"
+
+    -- statKey -> current upgrade level. Server-authoritative; synced to the owning client for UI.
+    @TargetUserSync property SyncTable<string, number> StatLevels
+
+    -- Server-only caches.
+    property table defs = nil        -- statKey -> { displayName, base, perLevel, maxLevel, cost }
+    property any storage = nil       -- UserDataStorage handle
+    property table levelCache = nil  -- plain mirror of StatLevels for persistence
+    property boolean dirty = false
+    property integer flushTimer = 0
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Loads stat definitions from the DataSet and the player's saved levels, then starts a debounced save loop.
+        self.defs = {}
+        self.levelCache = {}
+        self:LoadDefinitions()
+        self:LoadLevels()
+
+        self.flushTimer = _TimerService:SetTimerRepeat(function()
+            self:Flush(false)
+        end, 30.0)
+
+        log("[PlayerStatManager] Ready for " .. tostring(self.Entity and self.Entity.Name or "unknown"))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LoadDefinitions()
+        -- Reads every row of the stat DataSet into self.defs (the data table is the source of truth).
+        local ds = _DataService:GetTable(self.DataSetName)
+        if ds == nil then
+            log_warning("[PlayerStatManager] DataSet not found: " .. tostring(self.DataSetName))
+            return
+        end
+
+        local rows = ds:GetAllRow()
+        for i, row in ipairs(rows) do
+            local key = row:GetItem("key")
+            if key ~= nil and key ~= "" then
+                self.defs[key] = {
+                    displayName = row:GetItem("displayName"),
+                    base = tonumber(row:GetItem("base")) or 1.0,
+                    perLevel = tonumber(row:GetItem("perLevel")) or 0,
+                    maxLevel = tonumber(row:GetItem("maxLevel")) or 0,
+                    cost = tonumber(row:GetItem("cost")) or 0,
+                }
+                if self.StatLevels[key] == nil then
+                    self.StatLevels[key] = 0
+                    self.levelCache[key] = 0
+                end
+            end
+        end
+
+        log("[PlayerStatManager] Loaded " .. tostring(#rows) .. " stat definitions")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LoadLevels()
+        -- Loads saved upgrade levels from this player's UserDataStorage (once, on join).
+        local pc = self.Entity.PlayerComponent
+        if pc == nil then return end
+
+        self.storage = _DataStorageService:GetUserDataStorage(pc.UserId)
+        local errorCode, raw = self.storage:GetAndWait(self.StorageKey)
+        if errorCode == 0 and raw ~= nil and raw ~= "" then
+            local saved = _UtilLogic:StringToTable(raw)
+            if saved ~= nil then
+                for k, v in pairs(saved) do
+                    local lvl = tonumber(v) or 0
+                    self.levelCache[k] = lvl
+                    self.StatLevels[k] = lvl
+                end
+            end
+            log("[PlayerStatManager] Loaded saved levels for " .. tostring(pc.UserId))
+        else
+            log("[PlayerStatManager] No saved levels (code=" .. tostring(errorCode) .. ")")
+        end
+    end
+
+    method number GetLevel(string statKey)
+        -- Current upgrade level (0 if none). Reads the synced table, so it is valid on client and server.
+        local lvl = self.StatLevels[statKey]
+        return lvl ~= nil and lvl or 0
+    end
+
+    method number GetStatValue(string statKey)
+        -- Effective value = base + perLevel * level. Server-side (defs are loaded only on the server).
+        if self.defs == nil then return 1.0 end
+        local def = self.defs[statKey]
+        if def == nil then return 1.0 end
+        return def.base + def.perLevel * self:GetLevel(statKey)
+    end
+
+    @ExecSpace("Server")
+    method void RequestUpgrade(string statKey)
+        -- Client (UI) -> server upgrade request. Validates owner + max level, bumps the level, marks dirty.
+        local pc = self.Entity.PlayerComponent
+        if pc == nil then return end
+        if senderUserId ~= pc.UserId then
+            log("[PlayerStatManager] Rejected upgrade from non-owner")
+            return
+        end
+
+        local def = self.defs ~= nil and self.defs[statKey] or nil
+        if def == nil then
+            log("[PlayerStatManager] Unknown stat: " .. tostring(statKey))
+            return
+        end
+
+        local cur = self:GetLevel(statKey)
+        if def.maxLevel > 0 and cur >= def.maxLevel then
+            log("[PlayerStatManager] " .. statKey .. " already at max level " .. tostring(def.maxLevel))
+            return
+        end
+
+        local nextLevel = cur + 1
+        self.StatLevels[statKey] = nextLevel
+        self.levelCache[statKey] = nextLevel
+        self.dirty = true
+        log("[PlayerStatManager] " .. statKey .. " -> Lv." .. tostring(nextLevel) .. " value=" .. tostring(self:GetStatValue(statKey)))
+    end
+
+    @ExecSpace("Server")
+    method void RequestReset()
+        -- Client (UI) -> server reset request. Validates owner, then resets every defined stat level to 1.
+        local pc = self.Entity.PlayerComponent
+        if pc == nil then return end
+        if senderUserId ~= pc.UserId then
+            log("[PlayerStatManager] Rejected reset from non-owner")
+            return
+        end
+        if self.defs == nil then return end
+
+        for statKey, _ in pairs(self.defs) do
+            self.StatLevels[statKey] = 1
+            self.levelCache[statKey] = 1
+        end
+        self.dirty = true
+        log("[PlayerStatManager] Reset all stat levels to 1 for " .. tostring(pc.UserId))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Flush(boolean force)
+        -- Persists levels to DataStorage only when changed (debounced; avoids per-frame Credit burn).
+        if not self.dirty and not force then return end
+        if self.storage == nil then return end
+        self.dirty = false
+
+        self.storage:SetAsync(self.StorageKey, _UtilLogic:TableToString(self.levelCache), function(errorCode, key)
+            if errorCode ~= 0 then
+                log_warning("[PlayerStatManager] Save failed code=" .. tostring(errorCode))
+                self.dirty = true
+            end
+        end)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Final synchronous flush + timer cleanup.
+        if self.flushTimer ~= 0 then
+            _TimerService:ClearTimer(self.flushTimer)
+            self.flushTimer = 0
+        end
+        if self.dirty and self.storage ~= nil then
+            self.storage:SetAndWait(self.StorageKey, _UtilLogic:TableToString(self.levelCache))
+            self.dirty = false
+        end
+    end
+
+end

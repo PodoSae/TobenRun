@@ -1,0 +1,37 @@
+@Component
+script HitEffectOnHit extends Component
+
+	property number ParticleScaleX = 0.8
+
+	property number ParticleScaleY = 0.8
+
+	property number ParticleScaleZ = 0.8
+
+	property number ParticleZRotation = 0
+
+	method void OnBeginPlay()
+		        local hitComponent = self.Entity.HitComponent
+		        if hitComponent == nil then
+		            log("[HitEffectOnHit] HitComponent not found on entity: " .. tostring(self.Entity.Name))
+		            return
+		        end
+		
+		        hitComponent:ListenTo(hitComponent.EmitHitEvent, function(event)
+		            self:OnEntityHit(event)
+		        end)
+		
+		        log("[HitEffectOnHit] Listening to hit events on: " .. tostring(self.Entity.Name))
+	end
+
+	method void OnEntityHit(HitEvent event)
+		        if event == nil then return end
+		
+		        local hitPos = self.Entity.TransformComponent.WorldPosition
+		        local particleScale = Vector3(self.ParticleScaleX, self.ParticleScaleY, self.ParticleScaleZ)
+		
+		        _ParticleService:PlayBasicParticle(BasicParticleType.CircularExplosion, self.Entity, hitPos, self.ParticleZRotation, particleScale)
+		
+		        log("[HitEffectOnHit] Hit effect played on " .. tostring(self.Entity.Name) .. " | Damage: " .. tostring(event.TotalDamage))
+	end
+
+end

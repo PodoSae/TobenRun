@@ -1,0 +1,84 @@
+@Logic
+@ExecSpace("ClientOnly")
+script PlayerHudUI extends Logic
+
+    -- Bound to DefaultGroup HP-bar entities by the UIBuilder (UUIDs injected on write).
+    property SpriteGUIRendererComponent hpFill = "d987cab6-2583-498e-addb-49591d4b00a3"
+    property TextComponent hpLabel = "14cb0b5c-041f-4622-99aa-f2a15e60cfb7"
+
+    -- Ultimate gauge bar (UUIDs injected by the UIBuilder on write).
+    property SpriteGUIRendererComponent ultFill = "c4ad8dcf-5af3-46cc-91dc-c1149b9492d6"
+    property TextComponent ultLabel = "b3d60bb8-36e3-4c0e-bb73-dc5ae59219c2"
+
+    -- Throttle counter for the once-per-second gauge diagnostic log (remove after debugging).
+    property integer dbgFrame = 0
+
+    method void OnUpdate(number delta)
+        -- Drives both HUD bars each frame. HP and ULT update INDEPENDENTLY so that a missing/nil
+        -- PlayerHealth can never block the ult gauge update (and vice-versa).
+        local player = _UserService.LocalPlayer
+        if not isvalid(player) then return end
+
+        self:UpdateHpBar(player)
+        self:UpdateUltGauge(player)
+    end
+
+    method void UpdateHpBar(Entity player)
+        -- Mirrors the local player's synced HP onto the HUD HP bar.
+        ---@type PlayerHealth
+        local hp = player:GetComponent("script.PlayerHealth")
+        if hp == nil then return end
+
+        local cur = hp.CurrentHp
+        local max = hp.MaxHp
+        if max <= 0 then max = 1 end
+
+        local ratio = cur / max
+        if ratio < 0 then ratio = 0 end
+        if ratio > 1 then ratio = 1 end
+
+        if isvalid(self.hpFill) then
+            self.hpFill.FillAmount = ratio
+        end
+        if isvalid(self.hpLabel) then
+            self.hpLabel.Text = tostring(math.floor(cur + 0.5)) .. " / " .. tostring(math.floor(max + 0.5))
+        end
+    end
+
+    method void UpdateUltGauge(Entity player)
+        -- Mirrors the local player's synced ultimate gauge (0..100) onto the HUD gauge bar.
+        ---@type UltimateSkill
+        local ult = player:GetComponent("script.UltimateSkill")
+
+        -- Once-per-second diagnostic: is the component found, is the synced Gauge moving, are the
+        -- bound UI components valid? (Temporary — remove once the gauge is confirmed working.)
+        self.dbgFrame += 1
+        if self.dbgFrame % 60 == 0 then
+            local g = -1
+            if ult ~= nil then g = ult.Gauge end
+            log("[PlayerHudUI] ult=" .. tostring(ult ~= nil) .. " Gauge=" .. tostring(g)
+                .. " ultFillValid=" .. tostring(isvalid(self.ultFill))
+                .. " ultLabelValid=" .. tostring(isvalid(self.ultLabel)))
+        end
+
+        if ult == nil then return end
+
+        local maxG = ult.MaxGauge
+        if maxG <= 0 then maxG = 100 end
+        local ratio = ult.Gauge / maxG
+        if ratio < 0 then ratio = 0 end
+        if ratio > 1 then ratio = 1 end
+
+        if isvalid(self.ultFill) then
+            self.ultFill.FillAmount = ratio
+        end
+        if isvalid(self.ultLabel) then
+            if ratio >= 1 then
+                self.ultLabel.Text = "ULT  R!"
+            else
+                self.ultLabel.Text = "ULT  " .. tostring(math.floor(ratio * 100 + 0.5)) .. "%"
+            end
+        end
+    end
+
+end

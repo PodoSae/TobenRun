@@ -1,0 +1,83 @@
+@Component
+script SkillComponent extends Component
+
+    property boolean IsSkill = true
+    property string SkillName = ""
+    property number Cooldown = 1.0
+    -- Stat (from the data table) that scales this skill's attack speed via the effective cooldown.
+    property string SpeedStatKey = "AttackSpeed"
+
+    -- Cooldown state is server-authoritative and synced to clients (for future cooldown UI).
+    @Sync property boolean IsReady = true
+    @Sync property number cooldownRemaining = 0
+
+    -- Cached reference to the player's stat authority (script.PlayerStatManager). Server-side.
+    property any statManager = nil
+
+    method void InitializeSkill()
+        -- Resets cooldown so the skill is usable from the start (server-authoritative).
+        self.IsReady = true
+        self.cooldownRemaining = 0
+        log("[SkillComponent] " .. tostring(self.SkillName) .. " initialized (server)")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Caches the stat manager and initializes cooldown on the server only.
+        self.statManager = self.Entity:GetComponent("script.PlayerStatManager")
+        if self.statManager == nil then
+            log_warning("[SkillComponent] PlayerStatManager not found on entity")
+        end
+        self:InitializeSkill()
+    end
+
+    method number GetEffectiveCooldown()
+        -- Effective cooldown = base cooldown / attack-speed stat (from PlayerStatManager). Floored to avoid 0.
+        local speed = 1.0
+        if self.statManager ~= nil then
+            speed = self.statManager:GetStatValue(self.SpeedStatKey)
+        end
+        if speed < 0.1 then speed = 0.1 end
+        return self.Cooldown / speed
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Ticks the cooldown down on the server; IsReady/cooldownRemaining sync to clients.
+        if self.cooldownRemaining > 0 then
+            self.cooldownRemaining = math.max(0, self.cooldownRemaining - delta)
+            if self.cooldownRemaining <= 0 then
+                self.IsReady = true
+            end
+        end
+    end
+
+    method boolean CanActivate()
+        -- True when the skill is off cooldown.
+        return self.IsReady
+    end
+
+    method boolean ShouldAutoActivate()
+        -- Extra auto-fire gate checked by SkillManager (only when the skill is already off cooldown,
+        -- server-side). Default: always allowed. Override in a subclass to add a fire condition, e.g.
+        -- PowerStrike only fires when a monster is in front. No @ExecSpace so subclass overrides
+        -- byte-match and it runs on the caller (server) side.
+        return true
+    end
+
+    method void Activate()
+        -- Server-side gate; invoked only from SkillManager's server loop, so it runs once on the server.
+        if self:CanActivate() == false then
+            return
+        end
+        self.IsReady = false
+        self.cooldownRemaining = self:GetEffectiveCooldown()
+        self:OnActivate()
+    end
+
+    method void OnActivate()
+        -- Override in subclass. No @ExecSpace so subclass overrides byte-match; runs on the caller side (server).
+        log("[SkillComponent] " .. tostring(self.SkillName) .. " OnActivate - override in subclass")
+    end
+
+end
