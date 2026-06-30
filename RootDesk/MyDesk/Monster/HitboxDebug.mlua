@@ -1,0 +1,97 @@
+@Component
+script HitboxDebug extends Component
+
+    -- Debug overlay: draws the monster's two collision ranges as translucent boxes (model children) so
+    -- they can be eyeballed against the sprite and tuned. Client-only (purely visual). The boxes are
+    -- sized/positioned every refresh from the REAL collision values, so the overlay always matches what
+    -- actually hits — tune ContactHalfWidth/Height (몸박) or HitComponent.BoxSize/ColliderOffset (검기) and
+    -- the overlay follows. Toggle with ShowHitboxes.
+    @DisplayName("히트박스 표시")
+    property boolean ShowHitboxes = true
+
+    -- The marker sprite (20x20, center pivot) is 0.2 world units wide at Scale 1, so a box of W world
+    -- units needs Scale.x = W / 0.2. Keep in sync with the SpriteRUID set on the two child entities.
+    property number boxSpriteUnit = 0.2
+
+    property any contactBox = nil   -- 몸박 (contact) box child — yellow
+    property any hitBox = nil       -- HitComponent (beam target) box child — red
+    @HideFromInspector property number refreshTimer = 0
+
+    method void OnBeginPlay()
+        -- Caches the two debug child entities. Client only — the overlay is visual, never on the server.
+        if not self:IsClient() then return end
+        self.contactBox = self.Entity:GetChildByName("DbgContactBox")
+        self.hitBox = self.Entity:GetChildByName("DbgHitBox")
+        self:RefreshBoxes()
+    end
+
+    method void OnUpdate(number delta)
+        -- Re-applies size/color a few times a second so live inspector tweaks show immediately and the
+        -- children (which may not be ready on the very first frame after spawn) get initialized.
+        if not self:IsClient() then return end
+        self.refreshTimer = self.refreshTimer + delta
+        if self.refreshTimer < 0.3 then return end
+        self.refreshTimer = 0
+        if self.contactBox == nil then self.contactBox = self.Entity:GetChildByName("DbgContactBox") end
+        if self.hitBox == nil then self.hitBox = self.Entity:GetChildByName("DbgHitBox") end
+        self:RefreshBoxes()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RefreshBoxes()
+        -- Sizes/positions each debug box from the live collision values so the outline always equals the
+        -- real hit range. 몸박 box is centered on the monster origin; the HitComponent box uses its offset.
+        local unit = self.boxSpriteUnit
+        if unit <= 0 then unit = 0.2 end
+
+        -- 몸박 (contact) box — yellow. MonsterUnit ContactHalfWidth/Height, centered on origin.
+        if self.contactBox ~= nil and isvalid(self.contactBox) then
+            local hw = 0.6
+            local hh = 0.7
+            local oy = 0.5
+            ---@type MonsterUnit
+            local mu = self.Entity:GetComponent("script.MonsterUnit")
+            if mu ~= nil then
+                hw = mu.ContactHalfWidth
+                hh = mu.ContactHalfHeight
+                oy = mu.ContactOffsetY
+            end
+            local t = self.contactBox.TransformComponent
+            if t ~= nil then
+                t.Position = Vector3(0, oy, 0)
+                t.Scale = Vector3((2 * hw) / unit, (2 * hh) / unit, 1)
+            end
+            local sr = self.contactBox.SpriteRendererComponent
+            if sr ~= nil then
+                sr.Color = Color(1, 1, 0, 0.55)
+                sr.Enable = self.ShowHitboxes
+            end
+        end
+
+        -- HitComponent (검기 타겟) box — red. BoxSize + ColliderOffset.
+        if self.hitBox ~= nil and isvalid(self.hitBox) then
+            local bw = 1.2
+            local bh = 1.5
+            local ox = 0
+            local oy = 0.75
+            local hc = self.Entity.HitComponent
+            if hc ~= nil then
+                bw = hc.BoxSize.x
+                bh = hc.BoxSize.y
+                ox = hc.ColliderOffset.x
+                oy = hc.ColliderOffset.y
+            end
+            local t = self.hitBox.TransformComponent
+            if t ~= nil then
+                t.Position = Vector3(ox, oy, 0)
+                t.Scale = Vector3(bw / unit, bh / unit, 1)
+            end
+            local sr = self.hitBox.SpriteRendererComponent
+            if sr ~= nil then
+                sr.Color = Color(1, 0.25, 0.25, 0.55)
+                sr.Enable = self.ShowHitboxes
+            end
+        end
+    end
+
+end

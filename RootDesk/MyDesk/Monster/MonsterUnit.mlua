@@ -11,11 +11,13 @@ script MonsterUnit extends Component
     @Sync property number Hp = 50
     property number ContactDamage = 10   -- 몸박: damage dealt to a player on contact
     property number MesoReward = 15       -- meso granted to the killer on death
-    -- Contact box half-extents (world units). A box (not a tight circle) is used because the player
-    -- avatar's transform origin (feet) and the monster's origin can differ in Y by ~0.7-1.0, which a
-    -- small radius would never satisfy. Generous defaults so 몸박 reliably triggers on side contact.
-    property number ContactHalfWidth = 1.0
-    property number ContactHalfHeight = 1.2
+    -- Contact box half-extents (world units), sized to the monster sprite footprint so 몸박 matches the
+    -- image. Both player and monster origins sit at the feet (y=0 when grounded), so the box is lifted by
+    -- ContactOffsetY to sit on the body instead of being centered on the feet (which put half the box
+    -- underground). dy is tested against [OffsetY-HalfHeight, OffsetY+HalfHeight].
+    property number ContactHalfWidth = 0.6
+    property number ContactHalfHeight = 0.7
+    property number ContactOffsetY = 0.5
 
     -- Throttle for the contact-debug log (server seconds accumulated in OnUpdate).
     @HideFromInspector property number dbgTimer = 0
@@ -209,7 +211,7 @@ script MonsterUnit extends Component
                     nearestDx = dx
                     nearestDy = dy
                 end
-                if math.abs(dx) <= self.ContactHalfWidth and math.abs(dy) <= self.ContactHalfHeight then
+                if math.abs(dx) <= self.ContactHalfWidth and math.abs(dy - self.ContactOffsetY) <= self.ContactHalfHeight then
                     ---@type PlayerHealth
                     local hp = user:GetComponent("script.PlayerHealth")
                     if isvalid(hp) then
