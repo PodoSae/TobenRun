@@ -26,26 +26,14 @@ property number floorRowOverlap = 0.4
 property string dataSetPrefix = "Course"
 @DisplayName("장애물 RUID")
 property string obstacleRuid = "af921b2251574675834981e2394e05d1"
-@DisplayName("몬스터 RUID")
-property string monsterRuid = "bbdf743f29c749f391ddfb440e10055f"
 @DisplayName("코인 RUID")
 property string coinRuid = "184093654538492ea60617c0e3dd5c51"
 @DisplayName("기본 바닥 타일 RUID")
 property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
-@DisplayName("몬스터 바닥 높이 미세보정(+위/-아래)")
-property number monsterYOff = -0.15
-@DisplayName("walk 좌우 이동 폭")
-property number monWalkRange = 1.2
-@DisplayName("walk 이동 속도")
-property number monWalkSpeed = 2.5
-@DisplayName("jump 점프 높이")
-property number monJumpHeight = 0.8
-@DisplayName("jump 한 사이클 시간(초)")
-property number monJumpPeriod = 1.1
-@DisplayName("jump 착지 대기 비율(0~1)")
-property number monJumpRest = 0.45
--- Server registry of spawned monsters being animated by OnUpdate: { ent, mtype, baseX, baseY, t }.
-property any monsters = nil
+@DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
+property number monsterYOff = 1.0
+@DisplayName("장애물 안착 높이 보정")
+property number obstacleYRest = 0.5
 
 -- Server registry: mapName -> stage currently generated on that map.
 property any mapStage = nil
@@ -54,43 +42,6 @@ property any mapStage = nil
 method void OnBeginPlay()
 	-- Init the per-map "which stage is built" registry on the server.
 	self.mapStage = {}
-	self.monsters = {}
-end
-
-@ExecSpace("ServerOnly")
-method void OnUpdate(number delta)
-	-- Animate spawned monsters by their movement type. They are body-less props, so we write
-	-- TransformComponent.WorldPosition directly (Position is @Sync → server writes replicate to clients).
-	if self.monsters == nil then
-		return
-	end
-	for _, m in ipairs(self.monsters) do
-		if isvalid(m.ent) then
-			m.t = m.t + delta
-			local tr = m.ent.TransformComponent
-			local z = tr.WorldPosition.z
-			if m.mtype == "walk" then
-				-- Patrol left/right around the spawn point.
-				local off = math.sin(m.t * self.monWalkSpeed) * self.monWalkRange
-				tr.WorldPosition = Vector3(m.baseX + off, m.baseY, z)
-				-- Mobs are authored facing left → flip when travelling right (cos = velocity sign).
-				local spr = m.ent.SpriteRendererComponent
-				if spr ~= nil then
-					spr.FlipX = math.cos(m.t * self.monWalkSpeed) > 0
-				end
-			elseif m.mtype == "jump" then
-				-- Rest on the ground, then a parabolic hop, so it clearly SITS on the floor between jumps
-				-- (a plain abs(sin) hovers and reads as floating).
-				local ph = (m.t % self.monJumpPeriod) / self.monJumpPeriod
-				local hop = 0
-				if ph >= self.monJumpRest then
-					local u = (ph - self.monJumpRest) / (1 - self.monJumpRest)
-					hop = 4 * self.monJumpHeight * u * (1 - u)
-				end
-				tr.WorldPosition = Vector3(m.baseX, m.baseY + hop, z)
-			end
-		end
-	end
 end
 
 @ExecSpace("ServerOnly")
@@ -124,8 +75,6 @@ end
 @ExecSpace("ServerOnly")
 method void ClearCourse(Entity map)
 	-- Destroy any previously generated course entities on this map.
-	-- Drop stale monster references first (the entities themselves are destroyed in the loop below).
-	self.monsters = {}
 	for _, e in ipairs(map.Children:ToTable()) do
 		if self:IsCourseEntity(e.Name) then
 			e:Destroy()
@@ -370,23 +319,27 @@ method number PropHalfHeight(string ruid)
 end
 
 @ExecSpace("ServerOnly")
-method string MonsterField(string id, string col)
-	-- Read one column of a monster type from the MonsterDef DataSet ("" if not defined).
-	local ds = _DataService:GetTable("MonsterDef")
+method boolean IsMonster(string id)
+	-- True if `id` is a monster row in the sjy MonsterTable DataSet (normal / mushmom / ...).
+	local ds = _DataService:GetTable("MonsterTable")
 	if ds == nil then
-		return ""
+		return false
 	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
-		return ""
-	end
-	return tostring(row:GetItem(col))
+	return ds:FindRow("id", id) ~= nil
 end
 
 @ExecSpace("ServerOnly")
-method string MonsterRuid(string id)
-	-- Monster's sprite/animation RUID from MonsterDef ("" if this id is not a monster).
-	return self:MonsterField(id, "ruid")
+method number ObstacleDamage(string id)
+	-- Contact damage for a hazard type from the ObstacleDef DataSet (default 10).
+	local ds = _DataService:GetTable("ObstacleDef")
+	if ds == nil then
+		return 10
+	end
+	local row = ds:FindRow("id", id)
+	if row == nil then
+		return 10
+	end
+	return tonumber(row:GetItem("damage")) or 10
 end
 
 @ExecSpace("ServerOnly")
@@ -477,40 +430,42 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		self:SpawnProp(map, "Coin_" .. tostring(math.floor(x)), x, cfg.floorY + 0.6 + self:PropHalfHeight(self.coinRuid), self.coinRuid)
 		return
 	end
-	-- A monster type defined in MonsterDef → spawn its (animated mob) sprite as a contact hazard.
-	-- Interaction (contact damage) is resolved client-side by RunGameHud, like obstacles.
-	local mruid = self:MonsterRuid(kind)
-	if mruid ~= "" then
-		-- Maple mob animationclips pivot at the FEET (bottom-center, ny=0), so the entity Y = where the
-		-- feet rest. Put feet on the walking surface (floorY + floorTopPad) so the mob stands on the floor.
-		local my = cfg.floorY + self.floorTopPad + self.monsterYOff
-		local mon = self:SpawnProp(map, "Monster_" .. tostring(math.floor(x)), x, my, mruid)
-		if isvalid(mon) then
-			-- Register it so OnUpdate animates it per its move type (walk / jump).
-			table.insert(self.monsters, { ent = mon, mtype = self:MonsterField(kind, "move"), baseX = x, baseY = my, t = 0 })
+	-- A monster type (MonsterTable id) → spawn the sjy NormalMonster model. Its in-model MonsterUnit
+	-- reads stats/sprite from MonsterTable by MonsterId (default "normal"), patrols on the foothold, and
+	-- deals contact damage to PlayerHealth server-side. Spawn above the floor so gravity settles it.
+	if self:IsMonster(kind) then
+		local my = cfg.floorY + self.monsterYOff
+		local mon = _SpawnService:SpawnByModelId("normalmonster", "Monster_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
+		if isvalid(mon) == false then
+			log("[CourseGen] monster spawn failed for '" .. tostring(kind) .. "'")
 		end
 		return
 	end
-	local ruid = c.p3
-	if ruid == nil or ruid == "" then
-		ruid = self:ObstacleRuid(kind)
-	end
-	if ruid ~= nil and ruid ~= "" then
-		-- A defined hazard: spawn its sprite at its display scale. yoff lifts the BOTTOM edge above the
-		-- floor (0 = bottom on floor; a ceiling spike uses a positive yoff so it hangs from above).
-		local sc = self:ObstacleScale(kind)
-		local scy = self:ObstacleScaleY(kind)
-		if scy <= 0 then
-			scy = sc
-		end
-		local worldY = cfg.floorY + self:ObstacleYOff(kind) + self:PropHalfHeight(ruid) * scy
-		local prop = self:SpawnProp(map, "Haz_" .. tostring(math.floor(x)), x, worldY, ruid)
-		if isvalid(prop) then
-			local sy = scy
-			if self:ObstacleFlipY(kind) then
-				sy = -scy
+	-- An obstacle type (ObstacleDef id) → spawn the sjy Obstacle model. Its in-model Obstacle script
+	-- damages PlayerHealth on contact. Params (sprite / damage / never-despawn / rest height) are set
+	-- post-spawn — Obstacle reads them in OnUpdate, so this ordering is safe (the component is in-model).
+	local oruid = self:ObstacleRuid(kind)
+	if oruid ~= "" then
+		local restY = cfg.floorY + self.obstacleYRest
+		local o = _SpawnService:SpawnByModelId("obstacle", "Obstacle_" .. tostring(math.floor(x)), Vector3(x, restY, 0), map)
+		if isvalid(o) then
+			---@type Obstacle
+			local oc = o:GetComponent("script.Obstacle")
+			if oc ~= nil then
+				oc.TargetY = restY     -- already at rest height: no rise-from-below for fixed placement
+				oc.Lifetime = 999999   -- fixed course placement must not auto-despawn before the runner arrives
+				oc.Damage = self:ObstacleDamage(kind)
 			end
-			prop.TransformComponent.Scale = Vector3(sc, sy, 1)
+			local spr = o.SpriteRendererComponent
+			if spr ~= nil then
+				spr.SpriteRUID = oruid
+			end
+			local sc = self:ObstacleScale(kind)
+			local scy = self:ObstacleScaleY(kind)
+			if scy <= 0 then
+				scy = sc
+			end
+			o.TransformComponent.Scale = Vector3(sc, scy, 1)
 		end
 		return
 	end
@@ -529,8 +484,16 @@ end
 
 @ExecSpace("ServerOnly")
 method void CmdBoss(Entity map, table cfg, table c)
-	-- "Boss" command — p1=boss model id, p2=x. Reserved for future use.
-	log("[CourseGen] Boss '" .. tostring(c.p1) .. "' @x=" .. tostring(c.p2) .. " (TODO: not implemented yet)")
+	-- "Boss" command — p2=x. Spawns the sjy MushmomBoss model; its in-model MushmomBoss script reads
+	-- "mushmom" from MonsterTable, runs its 2-phase skill AI, and deals contact damage to PlayerHealth.
+	local x = tonumber(c.p2) or 0
+	local my = cfg.floorY + self.monsterYOff
+	local boss = _SpawnService:SpawnByModelId("MushmomBoss", "Boss_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
+	if isvalid(boss) == false then
+		log("[CourseGen] Boss spawn failed @x=" .. tostring(x))
+	else
+		log("[CourseGen] Boss (Mushmom) spawned @x=" .. tostring(x))
+	end
 end
 
 end
