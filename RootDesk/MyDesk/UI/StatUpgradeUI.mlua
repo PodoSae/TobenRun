@@ -1,0 +1,136 @@
+@Logic
+@ExecSpace("ClientOnly")
+script StatUpgradeUI extends Logic
+
+    -- Bound to DefaultGroup UI entities by the UIBuilder (UUIDs injected on write).
+    property ButtonComponent btnPowerUp = "e23a36da-4c74-465d-94c9-fc9757270a1c"
+    property ButtonComponent btnSpeedUp = "5782de51-ef98-46e8-94ea-7e16b2a8a3fb"
+    property ButtonComponent btnReset = "8a337316-845b-4b1a-afff-89af6ba40f71"
+    property TextComponent powerValue = "a8b482e1-f834-4bf5-937b-93768f8a2dd5"
+    property TextComponent speedValue = "966a210e-dd84-45fb-8d82-ce0f7a7bd6f4"
+
+    -- Which data-table stat each button controls.
+    property string powerStatKey = "AttackPower"
+    property string speedStatKey = "AttackSpeed"
+    property string dataSetName = "StatTable"
+
+    -- Client-side definition cache (read from the DataSet for display: name / base / perLevel / maxLevel).
+    property table powerDef = nil
+    property table speedDef = nil
+
+    property any powerHandler = nil
+    property any speedHandler = nil
+    property any resetHandler = nil
+
+    method void OnBeginPlay()
+        -- Caches definitions, labels the buttons from the data table, and wires clicks.
+        self.powerDef = self:LoadDef(self.powerStatKey)
+        self.speedDef = self:LoadDef(self.speedStatKey)
+
+        if self.powerDef ~= nil and isvalid(self.btnPowerUp) then
+            self.btnPowerUp.Entity.TextComponent.Text = tostring(self.powerDef.displayName) .. " +"
+        end
+        if self.speedDef ~= nil and isvalid(self.btnSpeedUp) then
+            self.btnSpeedUp.Entity.TextComponent.Text = tostring(self.speedDef.displayName) .. " +"
+        end
+
+        if isvalid(self.btnPowerUp) then
+            self.powerHandler = self.btnPowerUp.Entity:ConnectEvent(ButtonClickEvent, self.OnPowerUp)
+        end
+        if isvalid(self.btnSpeedUp) then
+            self.speedHandler = self.btnSpeedUp.Entity:ConnectEvent(ButtonClickEvent, self.OnSpeedUp)
+        end
+        if isvalid(self.btnReset) then
+            self.resetHandler = self.btnReset.Entity:ConnectEvent(ButtonClickEvent, self.OnReset)
+        end
+
+        self:RefreshDisplay()
+    end
+
+    method table LoadDef(string statKey)
+        -- Reads one stat row from the DataSet (client-side; the table is the display source of truth).
+        local ds = _DataService:GetTable(self.dataSetName)
+        if ds == nil then return nil end
+        local row = ds:FindRow("key", statKey)
+        if row == nil then return nil end
+        return {
+            displayName = row:GetItem("displayName"),
+            base = tonumber(row:GetItem("base")) or 1.0,
+            perLevel = tonumber(row:GetItem("perLevel")) or 0,
+            maxLevel = tonumber(row:GetItem("maxLevel")) or 0,
+        }
+    end
+
+    method PlayerStatManager GetManager()
+        -- Resolves the local player's stat authority (nil until the player entity is ready).
+        local player = _UserService.LocalPlayer
+        if not isvalid(player) then return nil end
+        ---@type PlayerStatManager
+        local mgr = player:GetComponent("script.PlayerStatManager")
+        return mgr
+    end
+
+    method void OnPowerUp()
+        -- Asks the server (via PlayerStatManager) to upgrade attack power.
+        local mgr = self:GetManager()
+        if mgr ~= nil then
+            mgr:RequestUpgrade(self.powerStatKey)
+        end
+    end
+
+    method void OnSpeedUp()
+        -- Asks the server to upgrade attack speed.
+        local mgr = self:GetManager()
+        if mgr ~= nil then
+            mgr:RequestUpgrade(self.speedStatKey)
+        end
+    end
+
+    method void OnReset()
+        -- Asks the server to reset every stat level back to 1.
+        local mgr = self:GetManager()
+        if mgr ~= nil then
+            mgr:RequestReset()
+        end
+    end
+
+    method void OnUpdate(number delta)
+        -- Reflects the synced levels in the UI labels.
+        self:RefreshDisplay()
+    end
+
+    method void SetValueText(TextComponent label, table def, string statKey)
+        -- Renders "x<value>  Lv.<n>" from the cached def + the synced level.
+        if not isvalid(label) or def == nil then return end
+        local mgr = self:GetManager()
+        local level = mgr ~= nil and mgr:GetLevel(statKey) or 0
+        local value = def.base + def.perLevel * level
+        local suffix = ""
+        if def.maxLevel > 0 and level >= def.maxLevel then
+            suffix = " MAX"
+        else
+            suffix = " Lv." .. tostring(level)
+        end
+        label.Text = "x" .. string.format("%.2f", value) .. suffix
+    end
+
+    method void RefreshDisplay()
+        -- Updates both value labels from the displayed (synced) state.
+        self:SetValueText(self.powerValue, self.powerDef, self.powerStatKey)
+        self:SetValueText(self.speedValue, self.speedDef, self.speedStatKey)
+    end
+
+    method void OnEndPlay()
+        -- Releases button subscriptions.
+        if self.powerHandler ~= nil and isvalid(self.btnPowerUp) then
+            self.btnPowerUp.Entity:DisconnectEvent(ButtonClickEvent, self.powerHandler)
+        end
+        if self.speedHandler ~= nil and isvalid(self.btnSpeedUp) then
+            self.btnSpeedUp.Entity:DisconnectEvent(ButtonClickEvent, self.speedHandler)
+        end
+        if self.resetHandler ~= nil and isvalid(self.btnReset) then
+            self.btnReset.Entity:DisconnectEvent(ButtonClickEvent, self.resetHandler)
+        end
+    end
+
+end

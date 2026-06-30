@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://38f9106d932740bf85dd56c8f5628681",
+  "EntryKey": "directory://79d600ac3694435fbd4ec9289706243d",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://38f9106d932740bf85dd56c8f5628681",
-      "name": "Models",
+      "entry_id": "directory://79d600ac3694435fbd4ec9289706243d",
+      "name": "Monsters",
       "lock": false,
       "folding": false,
       "nameEditable": true

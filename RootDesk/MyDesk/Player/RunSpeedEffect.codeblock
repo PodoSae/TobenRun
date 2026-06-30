@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://08c2d33e-8288-4f6f-b6b7-d44fc9b0d7d1",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "08c2d33e-8288-4f6f-b6b7-d44fc9b0d7d1",
+      "Language": 1,
+      "Name": "RunSpeedEffect",
+      "Type": 1,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

@@ -1,0 +1,120 @@
+@Component
+script DoubleJump extends Component
+
+	-- Mid-air double jump (flash jump), split out of PlayerController as its own skill component.
+	-- Input-driven and client-side, so it is NOT auto-fired by SkillManager (which drives the
+	-- server-side cooldown auto-attack skills). When the unified jump skill is designed, this
+	-- component is the integration point.
+	property string SkillName = "DoubleJump"
+
+	-- Usable only after it is unlocked. For now it is unlocked by pressing keyboard "1";
+	-- later a game condition (stat threshold, item, etc.) can call Unlock() instead of the key.
+	property boolean unlocked = false
+	-- Upward force applied for the mid-air jump (RigidbodyComponent:SetForce Y).
+	property number jumpForce = 10
+	property number runSpeed = 0 
+
+	-- Cached + runtime state (client / local player only).
+	property RigidbodyComponent body = nil
+	property boolean airJumpUsed = false
+	property any keyHandler = nil
+	-- Movement-state arbiter. The air jump is only allowed when the FSM permits JUMP -> DOUBLE_JUMP,
+	-- so a slide (or an already-spent air jump) can never be cancelled into a double jump.
+	property any fsm = nil
+
+	-- NOTE: the double-jump *animation* is played on the avatar body itself via the editor — the
+	-- custom animationclip is mapped to the JUMP/FALL keys of AvatarStateAnimationComponent's
+	-- StateToAvatarBodyActionSheet (BodyAction Picker). No script-side effect overlay is used.
+
+	method void OnBeginPlay()
+		-- Caches the rigidbody + run speed + FSM, and subscribes to keyboard input on the client.
+		self.body = self.Entity.RigidbodyComponent
+		self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
+
+		---@type PlayerController
+		local controller = self.Entity:GetComponent("script.PlayerController")
+		if controller ~= nil then
+			self.runSpeed = controller.speed
+		end
+
+		if self:IsClient() then
+			self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+		end
+	end
+
+	method void OnEndPlay()
+		-- Releases the input subscription created in OnBeginPlay.
+		if self.keyHandler ~= nil then
+			_InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+			self.keyHandler = nil
+		end
+	end
+
+	method void OnUpdate(number delta)
+		-- Recharges the air jump while standing on the ground (local player only).
+		if self.body == nil then return end
+		if self:IsClient() and _UserService.LocalPlayer == self.Entity then
+			if self.body:IsOnGround() then
+				self.airJumpUsed = false
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnKeyDown(KeyDownEvent event)
+		-- Handles the unlock key ("1") and the mid-air double jump (jump keys).
+		-- Only the local player's own instance should react to local keyboard input.
+		if _UserService.LocalPlayer ~= self.Entity then return end
+
+		local pressed = event.key
+		if pressed == KeyboardKey.Alpha1 then
+			self:Unlock()
+			return
+		end
+
+		-- Space / LeftAlt are the jump keys; a press while airborne is the double jump.
+		if pressed == KeyboardKey.Space or pressed == KeyboardKey.LeftAlt then
+			self:TryDoubleJump()
+		end
+	end
+
+	method void Unlock()
+		-- Grants the double jump. Replace the key-1 trigger by calling this from
+		-- whatever condition should unlock it (stat threshold, item pickup, etc.).
+		if self.unlocked then return end
+		self.unlocked = true
+		log("[DoubleJump] UNLOCKED")
+	end
+
+	@ExecSpace("ClientOnly")
+	method void TryDoubleJump()
+		-- Performs one mid-air jump if unlocked, airborne, and not yet used since takeoff.
+		if not self.unlocked then return end
+		if self.body == nil then return end
+		if self.body:IsOnGround() then return end   -- on ground → let the normal jump handle it
+		if self.airJumpUsed then return end
+
+		-- Ask the FSM: only JUMP -> DOUBLE_JUMP is allowed, so this no-ops out of any other state
+		-- (e.g. a slide that got jump-cancelled is in JUMP and is fine; an already-spent air jump is
+		-- in DOUBLE_JUMP and is correctly blocked). Falls back to the airJumpUsed guard if no FSM.
+		if self.fsm ~= nil then
+			if not self.fsm:TryChange("DOUBLE_JUMP") then return end
+		end
+
+		self.airJumpUsed = true
+		-- RigidbodyComponent aerial jump: replace the force with a fresh upward impulse,
+		-- preserving forward run momentum on X. JustJump only fires on terrain, so it silently
+		-- no-ops in mid-air — SetForce does not.
+
+		--self.body:SetForce(Vector2(self.runSpeed * self.jumpForce, self.jumpForce))
+		self.body:SetForce(Vector2(self.runSpeed, self.jumpForce * 1.5))
+
+		-- Skill SFX through the central SoundManager (Logic): the dash / "burst forward" sound.
+		if _SoundManager ~= nil then
+			_SoundManager:PlayFlashJump()
+		end
+
+		log("[DoubleJump] Double jump! force=" .. tostring(self.jumpForce))
+	end
+
+end

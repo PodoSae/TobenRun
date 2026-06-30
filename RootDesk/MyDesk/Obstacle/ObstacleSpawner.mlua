@@ -1,0 +1,95 @@
+@Component
+script ObstacleSpawner extends Component
+
+    -- Random delay bounds between spawns (seconds).
+    property number SpawnIntervalMin = 1.0
+    property number SpawnIntervalMax = 2.4
+    -- Spawn this far ahead (world units, +X) of the front-running player.
+    property number SpawnAheadX = 5.0
+    -- Resting center height of an obstacle once it has fully risen.
+    property number GroundY = 0.4
+    -- How far below GroundY the obstacle starts (the "from below" rise distance).
+    property number RiseDepth = 1.3
+    -- Clamp spawn X within the playable ground span (foothold runs x=-4.37..40.0).
+    property number MinSpawnX = -4.0
+    property number MaxSpawnX = 38.0
+    -- Model id spawned for each obstacle.
+    property string ObstacleModelId = "obstacle"
+
+    property number countdown = 0
+    property integer spawnCount = 0
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Starts the random spawn timer.
+        self.countdown = self:NextInterval()
+        self.spawnCount = 0
+        log("[ObstacleSpawner] OnBeginPlay - first spawn in " .. string.format("%.2f", self.countdown) .. "s")
+    end
+
+    method number NextInterval()
+        -- Returns a random delay within [min, max].
+        local span = self.SpawnIntervalMax - self.SpawnIntervalMin
+        if span < 0 then span = 0 end
+        return self.SpawnIntervalMin + _UtilLogic:RandomDouble() * span
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Counts down and spawns an obstacle when the timer elapses.
+        self.countdown = self.countdown - delta
+        if self.countdown > 0 then return end
+        self.countdown = self:NextInterval()
+        self:SpawnObstacle()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SpawnObstacle()
+        -- Spawns one obstacle below ground ahead of the lead player; the obstacle rises into view.
+        local map = self.Entity.CurrentMap
+        if map == nil then return end
+        local mapComp = map.MapComponent
+        if mapComp == nil then return end
+
+        -- Find the front-running player's X (largest X among players on this map).
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+        local leadX = 0
+        local found = false
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local x = user.TransformComponent.WorldPosition.x
+                if not found or x > leadX then
+                    leadX = x
+                    found = true
+                end
+            end
+        end
+        if not found then return end  -- no players on the map yet
+
+        local spawnX = leadX + self.SpawnAheadX
+        if spawnX > self.MaxSpawnX then spawnX = self.MaxSpawnX end
+        if spawnX < self.MinSpawnX then spawnX = self.MinSpawnX end
+
+        local startY = self.GroundY - self.RiseDepth
+        local pos = Vector3(spawnX, startY, 0)
+
+        self.spawnCount = self.spawnCount + 1
+        local name = "Obstacle_" .. tostring(self.spawnCount)
+        local obstacle = _SpawnService:SpawnByModelId(self.ObstacleModelId, name, pos, map)
+        if obstacle == nil then
+            log_warning("[ObstacleSpawner] SpawnByModelId returned nil for id=" .. tostring(self.ObstacleModelId))
+            return
+        end
+
+        ---@type Obstacle
+        local comp = obstacle:GetComponent("script.Obstacle")
+        if comp ~= nil then
+            comp.TargetY = self.GroundY
+        end
+
+        -- log("[ObstacleSpawner] spawned " .. name .. " at x=" .. string.format("%.2f", spawnX)
+        --    .. " (lead=" .. string.format("%.2f", leadX) .. ")")
+    end
+
+end

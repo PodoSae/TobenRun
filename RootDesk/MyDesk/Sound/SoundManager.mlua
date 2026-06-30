@@ -1,0 +1,40 @@
+@Logic
+script SoundManager extends Logic
+
+	-- Central sound manager. A @Logic global singleton (accessed as _SoundManager), not bound
+	-- to any entity, so any script can play SFX through one place. Sound playback is client-side
+	-- (_SoundService methods are @ExecSpace("Client")); call these from client-side code.
+
+	-- Master multiplier applied to every PlaySound call (0..1+).
+	property number masterVolume = 1.0
+
+	-- Flash jump (double jump) SFX — a sharp dash/whoosh that reads as "bursting forward".
+	-- RUID is centralized here so it can be swapped without touching the skill code.
+	property string flashJumpSoundRUID = "e7edafdf05c843e0aadbe703ba74b31f"
+
+	-- Slide SFX — a low "whoosh/scrape" as the runner drops into a slide. Empty until a RUID is set
+	-- (PlaySound guards empty, so the slide stays silent rather than erroring on a bad RUID).
+	property string slideSoundRUID = ""
+
+	method void OnBeginPlay()
+		-- Marks the manager as live (helps confirm the singleton registered).
+		log("[SoundManager] ready")
+	end
+
+	method void PlaySound(string ruid, number volume)
+		-- Central entry point: plays a one-shot SFX on the local client, scaled by masterVolume.
+		if ruid == "" then return end
+		_SoundService:PlaySound(ruid, volume * self.masterVolume)
+	end
+
+	method void PlayFlashJump()
+		-- Flash jump (double jump) dash sound.
+		self:PlaySound(self.flashJumpSoundRUID, 1.0)
+	end
+
+	method void PlaySlide()
+		-- Ground slide whoosh.
+		self:PlaySound(self.slideSoundRUID, 1.0)
+	end
+
+end

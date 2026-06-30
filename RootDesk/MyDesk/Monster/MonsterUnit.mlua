@@ -1,0 +1,233 @@
+@Component
+script MonsterUnit extends Component
+
+    -- Data-table driven monster. HP / contact damage / meso reward are read from MonsterTable by MonsterId,
+    -- so balance is tuned in the CSV without touching code. Server-authoritative.
+    property string DataSetName = "MonsterTable"
+    property string MonsterId = "normal"
+
+    -- Resolved from the table on begin play (the .model defaults are only fallbacks).
+    @Sync property number MaxHp = 50
+    @Sync property number Hp = 50
+    property number ContactDamage = 10   -- 몸박: damage dealt to a player on contact
+    property number MesoReward = 15       -- meso granted to the killer on death
+    -- Contact box half-extents (world units). A box (not a tight circle) is used because the player
+    -- avatar's transform origin (feet) and the monster's origin can differ in Y by ~0.7-1.0, which a
+    -- small radius would never satisfy. Generous defaults so 몸박 reliably triggers on side contact.
+    property number ContactHalfWidth = 1.0
+    property number ContactHalfHeight = 1.2
+
+    -- Throttle for the contact-debug log (server seconds accumulated in OnUpdate).
+    @HideFromInspector property number dbgTimer = 0
+
+    -- Patrol movement (left/right on the foothold, bounded around the spawn point).
+    -- Both are inspector-tunable per monster instance (Maker property window).
+    @DisplayName("패트롤 속도")
+    @Description("패트롤 이동 속도 (MovementComponent.InputSpeed). 클수록 빠르게 이동")
+    @MinValue(0)
+    @MaxValue(10)
+    @Delta(0.1)
+    property number PatrolSpeed = 1.0
+
+    @DisplayName("패트롤 범위")
+    @Description("스폰 지점 기준 좌우 왕복 반경(월드 유닛). 클수록 더 멀리 왕복")
+    @MinValue(0)
+    @MaxValue(50)
+    @Delta(0.5)
+    property number PatrolRange = 5.0
+
+    @HideFromInspector property boolean movingRight = true
+    @HideFromInspector property number spawnX = 0
+
+    -- Server-only caches / guards.
+    property any movement = nil
+    property any body = nil
+    property boolean dead = false
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Loads stats from the data table, fills HP, and caches movement components for patrol. Server only.
+        self.dead = false
+        self:LoadFromTable()
+        self.Hp = self.MaxHp
+
+        self.movement = self.Entity.MovementComponent
+        self.body = self.Entity.RigidbodyComponent
+        self.spawnX = self.Entity.TransformComponent.WorldPosition.x
+        if isvalid(self.movement) then self.movement.InputSpeed = self.PatrolSpeed end
+        self.movingRight = (_UtilLogic:RandomDouble() < 0.5)
+        self:ApplyFacing()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LoadFromTable()
+        -- Reads this monster's row (matched by MonsterId) and applies HP / contact damage / meso / sprite.
+        local ds = _DataService:GetTable(self.DataSetName)
+        if ds == nil then
+            log_warning("[MonsterUnit] DataSet not found: " .. tostring(self.DataSetName))
+            return
+        end
+
+        local row = ds:FindRow("id", self.MonsterId)
+        if row == nil then
+            log_warning("[MonsterUnit] Monster id not found in table: " .. tostring(self.MonsterId))
+            return
+        end
+
+        self.MaxHp = tonumber(row:GetItem("maxHp")) or self.MaxHp
+        self.ContactDamage = tonumber(row:GetItem("contactDamage")) or self.ContactDamage
+        self.MesoReward = tonumber(row:GetItem("mesoReward")) or self.MesoReward
+
+        local ruid = row:GetItem("spriteRUID")
+        if ruid ~= nil and ruid ~= "" then
+            local sprite = self.Entity.SpriteRendererComponent
+            if isvalid(sprite) then sprite.SpriteRUID = ruid end
+        end
+
+        log("[MonsterUnit] Loaded '" .. tostring(self.MonsterId) .. "' hp=" .. tostring(self.MaxHp)
+            .. " contact=" .. tostring(self.ContactDamage) .. " meso=" .. tostring(self.MesoReward))
+    end
+
+    @ExecSpace("ServerOnly")
+    @EventSender("Self")
+    handler HandleHitEvent(HitEvent event)
+        -- Beam (or any HitBox attack) damages the monster. On HP<=0, grant meso to the killer and die.
+        if self.dead then return end
+        self.Hp = self.Hp - event.TotalDamage
+        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' hit -" .. tostring(event.TotalDamage)
+            .. " -> hp=" .. tostring(self.Hp))
+        if self.Hp <= 0 then
+            self.Hp = 0
+            self:Die(event.AttackerEntity)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Die(Entity attacker)
+        -- Marks dead, credits meso to the attacker's owner, then removes the monster entity.
+        if self.dead then return end
+        self.dead = true
+        self:GrantMeso(attacker)
+        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' died")
+        -- Small delay so the killing-blow damage number can render before the entity is removed.
+        self.Entity:Destroy(0.4)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void GrantMeso(Entity attacker)
+        -- The attacker entity is the SwordBeam projectile; resolve its owner player and credit meso.
+        if not isvalid(attacker) then return end
+
+        ---@type SwordBeam
+        local beam = attacker:GetComponent("script.SwordBeam")
+        if not isvalid(beam) or not isvalid(beam.OwnerEntity) then return end
+
+        ---@type PlayerWallet
+        local wallet = beam.OwnerEntity:GetComponent("script.PlayerWallet")
+        if isvalid(wallet) then
+            wallet:AddMeso(self.MesoReward)
+            log("[MonsterUnit] Granted " .. tostring(self.MesoReward) .. " meso to "
+                .. tostring(beam.OwnerEntity.Name))
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Drives patrol movement and 몸박 (contact) damage. Server-authoritative.
+        if self.dead then return end
+        self:Patrol()
+        self:ContactCheck(delta)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Patrol()
+        -- Walks back and forth within PatrolRange of the spawn point, reversing at the band edge or a
+        -- foothold end. MoveToDirection's second arg is 0 (deltaTime applies only on ladders).
+        if not isvalid(self.movement) then return end
+        if isvalid(self.body) and self.body:IsOnGround() == false then return end
+
+        local x = self.Entity.TransformComponent.WorldPosition.x
+        local prev = self.movingRight
+        if x > self.spawnX + self.PatrolRange then self.movingRight = false end
+        if x < self.spawnX - self.PatrolRange then self.movingRight = true end
+
+        -- Reverse before walking off the foothold edge. PredictFootholdEnd returns true when the body
+        -- CAN still move `distance` in that direction, so reverse only when it CANNOT (== false = at edge).
+        -- (Reversing on the true case would flip every frame mid-foothold → rapid left/right jitter.)
+        if isvalid(self.body) and self.body:PredictFootholdEnd(0.5, self.movingRight) == false then
+            self.movingRight = not self.movingRight
+        end
+
+        if self.movingRight ~= prev then self:ApplyFacing() end
+
+        local dir = self.movingRight and 1 or -1
+        self.movement:MoveToDirection(Vector2(dir, 0), 0)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplyFacing()
+        -- Sprite resources face left by default, so moving right flips Scale.x negative (keeps collider aligned).
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return end
+        local dir = self.movingRight and 1 or -1
+        local s = t.Scale
+        t.Scale = Vector3(math.abs(s.x) * -dir, s.y, s.z)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ContactCheck(number delta)
+        -- 몸박: damages any player overlapping the monster (axis-aligned box around the monster origin).
+        -- PlayerHealth's own invulnerability window throttles repeat hits, so a per-frame check is safe.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return end
+
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        -- Once per second, log the nearest player's separation so the contact box can be calibrated.
+        self.dbgTimer = self.dbgTimer + delta
+        local logNow = false
+        if self.dbgTimer >= 1.0 then
+            self.dbgTimer = 0
+            logNow = true
+        end
+
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        local nearestD = 99999
+        local nearestDx = 0
+        local nearestDy = 0
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local dx = up.x - myPos.x
+                local dy = up.y - myPos.y
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d < nearestD then
+                    nearestD = d
+                    nearestDx = dx
+                    nearestDy = dy
+                end
+                if math.abs(dx) <= self.ContactHalfWidth and math.abs(dy) <= self.ContactHalfHeight then
+                    ---@type PlayerHealth
+                    local hp = user:GetComponent("script.PlayerHealth")
+                    if isvalid(hp) then
+                        log("[MonsterUnit] CONTACT player dx=" .. string.format("%.2f", dx)
+                            .. " dy=" .. string.format("%.2f", dy) .. " -> TakeDamage " .. tostring(self.ContactDamage))
+                        hp:TakeDamage(self.ContactDamage)
+                    else
+                        log_warning("[MonsterUnit] player in box but has no script.PlayerHealth")
+                    end
+                end
+            end
+        end
+
+        if logNow then
+            log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' users=" .. tostring(#users)
+                .. " nearest dx=" .. string.format("%.2f", nearestDx) .. " dy=" .. string.format("%.2f", nearestDy)
+                .. " (box hw=" .. tostring(self.ContactHalfWidth) .. " hh=" .. tostring(self.ContactHalfHeight) .. ")")
+        end
+    end
+
+end

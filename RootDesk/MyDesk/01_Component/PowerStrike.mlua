@@ -1,0 +1,223 @@
+@Component
+script PowerStrike extends SkillComponent
+
+    property string SkillName = "PowerStrike"
+    property number Cooldown = 1.5
+    -- Stat (from the data table) that scales this skill's damage.
+    property string PowerStatKey = "AttackPower"
+    property number Damage = 100
+
+    -- Auto-fire gate: fire only when a monster is within DetectRange ahead of the player.
+    @DisplayName("감지 거리")
+    @Description("이 거리(월드 유닛) 안 전방에 몬스터가 있을 때만 검기 발사")
+    @MinValue(0)
+    @MaxValue(50)
+    @Delta(0.5)
+    property number DetectRange = 6.0
+
+    -- Startup grace: hold fire for this long after begin play so the map finishes loading first.
+    @DisplayName("시작 지연")
+    @Description("플레이 시작 후 이 시간(초)이 지나야 검기 발사 시작 (맵 로딩 대기)")
+    @MinValue(0)
+    @MaxValue(10)
+    @Delta(0.1)
+    property number StartupDelay = 1.0
+
+    -- === Sword-beam (검기) projectile settings ===
+    -- EntryKey of the beam .model spawned at runtime (RootDesk/MyDesk/Models/Skill/SwordBeam.model).
+    property string BeamModelId = "SwordBeam"
+    -- Spawn offset in front of / above the player where the beam is born. Flight speed, lifetime,
+    -- hitbox size and AttackInfo are owned by SwordBeam itself (the single source of truth) — PowerStrike
+    -- only decides WHERE the beam spawns, which way it faces, and how much damage it carries.
+    property number BeamForwardOffset = 0.8
+    property number BeamVerticalOffset = 0.2
+
+    -- Launch flourish particle attached to the player (visual only). Empty disables it.
+    property number ParticleScaleX = 1.2
+    property number ParticleScaleY = 1.2
+    property number ParticleScaleZ = 1
+    property number ParticleZRotation = 0
+    property string EffectResourceId = "88a17d40d6e34abd948cac09724b22fa"
+
+    property PlayerControllerComponent controller = nil
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Initializes cooldown (base), caches the controller, and prepares the beam object pool. Server only.
+        __base:OnBeginPlay()
+
+        self.controller = self.Entity.PlayerControllerComponent
+
+        -- Object pool: every SwordBeam this skill ever spawns, reused instead of destroyed.
+        self._T.beams = {}
+        self._T.beamCount = 0
+
+        -- Hold fire until the startup grace elapses (counted down in OnUpdate) so the map can finish loading.
+        self._T.ready = false
+        self._T.startupRemain = self.StartupDelay
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Ticks the base cooldown (SkillComponent) plus the startup grace timer. Once the grace elapses,
+        -- ShouldAutoActivate is allowed to fire (gated further by monster range).
+        __base:OnUpdate(delta)
+        if self._T.ready ~= true then
+            self._T.startupRemain = self._T.startupRemain - delta
+            if self._T.startupRemain <= 0 then
+                self._T.ready = true
+                log("[PowerStrike] startup grace elapsed - ready to fire")
+            end
+        end
+    end
+
+    method number GetFacingDirection()
+        -- The player's facing along X as +1 (right) / -1 (left), read from the controller. Defaults to
+        -- +1 when the controller is unavailable. Shared by OnActivate (beam aim) and HasMonsterInRange.
+        if self.controller ~= nil and self.controller.LookDirectionX ~= nil then
+            return self.controller.LookDirectionX >= 0 and 1 or -1
+        end
+        return 1
+    end
+
+    method void OnActivate()
+        -- Server-side (called from base Activate inside the Server RPC). Fires one sword beam.
+        log("[PowerStrike] OnActivate (server) by " .. tostring(self.Entity and self.Entity.Name or "unknown"))
+
+        -- Scale base damage by the attack-power stat from PlayerStatManager (data-table driven).
+        local power = 1.0
+        if self.statManager ~= nil then
+            power = self.statManager:GetStatValue(self.PowerStatKey)
+        end
+        local effectiveDamage = self.Damage * power
+
+        local direction = self:GetFacingDirection()
+
+        self:FireBeam(direction, effectiveDamage)
+
+        -- Optional cast flourish attached to the player.
+        local localOffset = Vector3(direction * self.BeamForwardOffset, self.BeamVerticalOffset, 0)
+        --self:PlaySkillEffect(localOffset, direction)
+
+        log("[PowerStrike] Fired beam direction=" .. tostring(direction) .. " damage=" .. tostring(effectiveDamage)
+            .. " (x" .. tostring(power) .. ") cooldown=" .. tostring(self:GetEffectiveCooldown()))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FireBeam(number direction, number damage)
+        -- Acquires a pooled (or fresh) beam and launches it in the facing direction. The beam owns its
+        -- own flight/hit config (Speed, MaxLifetime, hitbox, AttackInfo); PowerStrike supplies only the
+        -- spawn point, direction, and stat-scaled damage.
+        local beam = self:AcquireBeam()
+        if beam == nil then
+            log("[PowerStrike] Could not acquire a beam")
+            return
+        end
+
+        -- Tag the firing player so monster kills credit meso to the right wallet.
+        beam.OwnerEntity = self.Entity
+
+        local wp = self.Entity.TransformComponent.WorldPosition
+        local startPos = Vector3(wp.x + direction * self.BeamForwardOffset, wp.y + self.BeamVerticalOffset, wp.z)
+        beam:Launch(startPos, direction, damage)
+    end
+
+    @ExecSpace("ServerOnly")
+    method any AcquireBeam()
+        -- Returns an idle beam from the pool, or spawns a new one (parented to the current map) and
+        -- registers it. This is the "재사용 가능" (reusable) core: beams are never destroyed mid-game.
+        for i, beam in ipairs(self._T.beams) do
+            if beam ~= nil and isvalid(beam) and beam:IsIdle() then
+                return beam
+            end
+        end
+
+        local map = self.Entity.CurrentMap
+        if map == nil then
+            log("[PowerStrike] CurrentMap is nil; cannot spawn beam")
+            return nil
+        end
+
+        self._T.beamCount = self._T.beamCount + 1
+        local name = "SwordBeam_" .. tostring(self.Entity.Name) .. "_" .. tostring(self._T.beamCount)
+        -- Spawn parked off-screen; Launch repositions it.
+        local proj = _SpawnService:SpawnByModelId(self.BeamModelId, name, Vector3(0, 99999, 999), map)
+        if proj == nil then
+            log("[PowerStrike] SpawnByModelId returned nil for '" .. tostring(self.BeamModelId) .. "'")
+            return nil
+        end
+
+        ---@type SwordBeam
+        local beam = proj:GetComponent("script.SwordBeam")
+        if beam == nil then
+            log("[PowerStrike] Spawned beam is missing script.SwordBeam")
+            return nil
+        end
+
+        table.insert(self._T.beams, beam)
+        log("[PowerStrike] Spawned new pooled beam (pool size=" .. tostring(#self._T.beams) .. ")")
+        return beam
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Destroys every pooled beam so they do not leak when the player leaves the map / world.
+        if self._T.beams ~= nil then
+            for i, beam in ipairs(self._T.beams) do
+                if beam ~= nil and isvalid(beam) and isvalid(beam.Entity) then
+                    beam.Entity:Destroy()
+                end
+            end
+            self._T.beams = {}
+        end
+    end
+
+    method boolean ShouldAutoActivate()
+        -- Server-side auto-fire gate (SkillManager calls only when off cooldown). Hold fire until the
+        -- startup grace has elapsed (map fully loaded), then fire only when a monster is within range.
+        if self._T.ready ~= true then return false end
+        return self:HasMonsterInRange()
+    end
+
+    method boolean HasMonsterInRange()
+        -- True when a monster (a non-player entity carrying a HitComponent) is within DetectRange AND
+        -- ahead of the player in the facing direction. CollisionSimulator:OverlapAll is non-damaging. Server-side.
+        local tr = self.Entity.TransformComponent
+        if tr == nil then return false end
+
+        local sim = _CollisionService:GetSimulator(self.Entity)
+        if sim == nil then return false end
+
+        local dir = self:GetFacingDirection()
+        local wp = tr.WorldPosition
+        local shape = CircleShape(Vector2(wp.x, wp.y), self.DetectRange)
+
+        local hits = sim:OverlapAll(CollisionGroups.HitBox, shape)
+        if hits == nil then return false end
+
+        for i, comp in ipairs(hits) do
+            if comp ~= nil and isvalid(comp) then
+                local e = comp.Entity
+                -- A monster carries a HitComponent but is neither the player itself nor a player.
+                if e ~= nil and isvalid(e) and e ~= self.Entity and e.PlayerComponent == nil then
+                    -- Only fire at monsters ahead in the facing direction (the beam flies forward).
+                    local mp = e.TransformComponent.WorldPosition
+                    if (mp.x - wp.x) * dir >= -0.2 then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    @ExecSpace("Multicast")
+    method void PlaySkillEffect(Vector3 localOffset, number direction)
+        -- Plays the launch flourish on every client, attached to the player so it follows the runner.
+        if self.EffectResourceId == "" then return end
+        local effectScale = Vector3(self.ParticleScaleX, self.ParticleScaleY, self.ParticleScaleZ)
+        local options = { ["FlipX"] = direction < 0 }
+        _EffectService:PlayEffectAttached(self.EffectResourceId, self.Entity, localOffset, self.ParticleZRotation, effectScale, false, options)
+    end
+
+end

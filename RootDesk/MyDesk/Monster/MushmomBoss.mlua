@@ -1,0 +1,815 @@
+@Component
+script MushmomBoss extends Component
+
+    -- Boss monster "머쉬맘 (Mushmom)". Data-table driven stats (HP / contact damage / meso) like MonsterUnit,
+    -- plus a 2-phase skill system. Phase 2 (below PhaseThreshold HP) fires skills more often.
+    -- Pattern A animation: this script assigns SpriteRendererComponent.SpriteRUID directly (telegraph etc.),
+    -- so StateComponent is only used for IDLE/DEAD. Server-authoritative.
+
+    property string DataSetName = "MonsterTable"
+    property string MonsterId = "mushmom"
+
+    -- Stats resolved from the table on begin play (the .model defaults are only fallbacks).
+    @Sync property number MaxHp = 500
+    @Sync property number Hp = 500
+    property number ContactDamage = 20    -- 몸박: damage dealt to a player on contact
+    property number MesoReward = 200       -- meso granted to the killer on death
+
+    -- 몸박 contact box half-extents (world units). Boss is large, so generous.
+    property number ContactHalfWidth = 1.1
+    property number ContactHalfHeight = 1.4
+
+    -- === Animation RUIDs (Mushmom resource pack mob/6130101.img) ===
+    @DisplayName("기본 이미지")
+    property string StandRUID = "86015373d23b4b05bb8fcc6086354652"
+    @DisplayName("이동 이미지")
+    @Description("플레이어를 따라 이동할 때 재생되는 동작 (move 클립)")
+    property string MoveRUID = "c745828d831b42739b9a58c07f334864"
+    @DisplayName("시전(텔레그래프) 이미지")
+    @Description("스킬 발동 전 재생되는 인지용 애니메이션 (skill1)")
+    property string TelegraphRUID = "b9345875a8134c7c9a1b6aed8551d808"
+    @DisplayName("죽음 이미지")
+    property string DieRUID = "ec90f0b64a814c4980de89f496d360ec"
+    -- Skill cast sound (Mushmom Skill1).
+    property string CastSoundRUID = "5da7bb48092947f395e9f76f601323ca"
+
+    -- === Phase system ===
+    @DisplayName("2페이즈 전환 HP 비율")
+    @Description("현재 HP가 (최대HP * 이 값) 이하로 떨어지면 2페이즈로 전환")
+    @MinValue(0)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number PhaseThreshold = 0.5
+    @DisplayName("2페이즈 스킬 간격 배율")
+    @Description("2페이즈에서 스킬 발동 간격에 곱하는 값(작을수록 빠르게 발동). 0.6 = 40% 더 빠름")
+    @MinValue(0.1)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number Phase2IntervalScale = 0.6
+    @HideFromInspector property integer phase = 1
+
+    -- === Skill scheduler ===
+    @DisplayName("스킬 발동 간격(초)")
+    @Description("1페이즈 기준. 2페이즈에서는 배율이 곱해진다")
+    @MinValue(0.5)
+    @MaxValue(20)
+    @Delta(0.5)
+    property number SkillInterval = 4.0
+    @DisplayName("시전 시간(초)")
+    @Description("텔레그래프 애니메이션 재생 후 포자가 발사되기까지의 시간")
+    @MinValue(0)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number TelegraphDuration = 0.7
+
+    -- === Skill 1: spore spray ===
+    property string SporeModelId = "MushmomSpore"
+    @DisplayName("포자 발사 개수")
+    @MinValue(1)
+    @MaxValue(15)
+    @Delta(1)
+    property integer SporeCount = 5
+    @DisplayName("포자 속도")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number SporeSpeed = 8.0
+    @DisplayName("포자 데미지")
+    @MinValue(1)
+    @MaxValue(100)
+    @Delta(1)
+    property number SporeDamage = 15
+    @DisplayName("포자 상하 퍼짐")
+    @Description("부채꼴 상단/하단 수직 속도 폭. 클수록 위아래로 넓게 퍼진다")
+    @MinValue(0)
+    @MaxValue(15)
+    @Delta(0.5)
+    property number SporeVerticalSpread = 5.0
+    -- Spawn offset in front of / above the boss where spores are born.
+    property number SporeForwardOffset = 1.0
+    property number SporeVerticalOffset = 1.0
+
+    -- === Skill 2: body slam (몸통박치기) ===
+    @DisplayName("몸통박치기 시전 시간(초)")
+    @Description("돌진 전 웅크리는(사전 예고) 동작 시간. 길수록 회피하기 쉽다")
+    @MinValue(0)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number SlamTelegraphDuration = 0.9
+    @DisplayName("돌진 속도")
+    @Description("돌진 중 MovementComponent.InputSpeed 로 적용되는 속도(평상시 1)")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number ChargeSpeed = 11.0
+    @DisplayName("몸통박치기 데미지")
+    @Description("돌진이 플레이어에게 명중했을 때 주는 피해(몸박 접촉 피해보다 크게)")
+    @MinValue(1)
+    @MaxValue(200)
+    @Delta(1)
+    property number BodySlamDamage = 35
+    @DisplayName("돌진 최대 시간(초)")
+    @Description("이 시간 안에 충돌/벽 도달이 없으면 회피로 간주하고 그로기에 들어간다(안전장치)")
+    @MinValue(0.5)
+    @MaxValue(10)
+    @Delta(0.5)
+    property number ChargeMaxTime = 3.0
+    @DisplayName("몸통박치기 발동 확률")
+    @Description("스킬 발동 시 몸통박치기를 고를 확률(나머지는 포자 분사)")
+    @MinValue(0)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number BodySlamChance = 0.5
+
+    @DisplayName("돌진 통과 판정 여유(회피)")
+    @Description("돌진이 플레이어 X를 이만큼 지나치면 '회피 성공'으로 보고 그로기에 들어간다")
+    @MinValue(0)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number PassMargin = 0.6
+
+    -- Map-edge safety bounds (map01 foothold spans ~-4.4 .. 40.4). Follow/charge never push the boss past
+    -- these, so it can't run off the foothold into the void. A charge that reaches an edge also -> groggy.
+    @DisplayName("스테이지 왼쪽 끝 X")
+    property number StageMinX = -4.0
+    @DisplayName("스테이지 오른쪽 끝 X")
+    property number StageMaxX = 40.0
+    property number StageEndMargin = 0.6
+
+    -- === Running-game positioning (player-relative follow) ===
+    -- The player auto-runs right and the camera follows, so the boss tracks the player horizontally.
+    @DisplayName("평상시 추적 오프셋 X(화면 오른쪽)")
+    @Description("평상시 보스가 머무는 위치 = 플레이어 X + 이 값. 양수=플레이어 오른쪽(화면 오른쪽). PC 화면 폭은 약 12.8유닛")
+    @MinValue(0)
+    @MaxValue(12)
+    @Delta(0.5)
+    property number NormalOffsetX = 5.0
+    @DisplayName("돌진/그로기 추적 오프셋 X(바로 앞)")
+    @Description("돌진 시작/그로기 중 보스 위치 = 플레이어 X + 이 값. 플레이어 바로 오른쪽 앞")
+    @MinValue(0)
+    @MaxValue(8)
+    @Delta(0.5)
+    property number FrontOffsetX = 2.0
+    @DisplayName("추적 가속 계수")
+    @Description("목표까지 거리에 비례한 추적 속도(클수록 빨리 따라붙음). 플레이어 달리기 속도보다 빨라야 뒤처지지 않음")
+    @MinValue(0.5)
+    @MaxValue(10)
+    @Delta(0.5)
+    property number FollowGain = 2.5
+    @DisplayName("추적 최대 속도")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number FollowMaxSpeed = 14.0
+    @DisplayName("추적 정지 여유")
+    @Description("목표 X와 이 거리 이내면 멈춤(미세 떨림 방지)")
+    @MinValue(0.05)
+    @MaxValue(2)
+    @Delta(0.05)
+    property number FollowDeadzone = 0.3
+
+    -- === Groggy (그로기) — reward for dodging the charge ===
+    @DisplayName("그로기 지속 시간(초)")
+    @Description("회피 성공 시 스테이지 끝에 무방비로 멈춰 있는 시간")
+    @MinValue(0.5)
+    @MaxValue(15)
+    @Delta(0.5)
+    property number GroggyDuration = 3.0
+    @DisplayName("그로기 피해 배율")
+    @Description("그로기 상태에서 받는 데미지에 곱하는 값(클수록 약점 크게 노출)")
+    @MinValue(1)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number GroggyDamageMultiplier = 2.0
+
+    -- Body-slam animation RUIDs (Mushmom pack mob/6130101.img). No literal crouch clip exists, so the
+    -- 'jump' clip (a crouch-and-spring compress) is used as the wind-up, attack1 as the lunge, hit1 as the daze.
+    @DisplayName("웅크리기(예고) 이미지")
+    @Description("돌진 직전 웅크리는 사전 예고 동작 (jump 클립)")
+    property string CrouchRUID = "5ecbcc4002a5491aafd7e1d3191c6ddc"
+    @DisplayName("돌진 이미지")
+    @Description("돌진 중 재생되는 동작 (attack1 클립)")
+    property string ChargeRUID = "90c5456e2a8a45478df02500797a9afd"
+    @DisplayName("그로기 이미지")
+    @Description("그로기 상태에서 재생되는 비틀거리는 동작 (hit1 클립)")
+    property string GroggyRUID = "90fee9416184420a9796a679751d1ec5"
+
+    -- Server-only caches / guards.
+    property any movement = nil
+    property boolean dead = false
+    @HideFromInspector property boolean casting = false
+    @HideFromInspector property number skillTimer = 0
+    @HideFromInspector property number dbgTimer = 0
+    -- Body-slam state machine: slamWindup = approaching/crouching before the dash, charging = mid-dash,
+    -- groggy = stunned & vulnerable, chargeDir = locked dash direction.
+    @HideFromInspector property boolean slamWindup = false
+    @HideFromInspector property boolean charging = false
+    @HideFromInspector property boolean groggy = false
+    @HideFromInspector property number chargeDir = -1
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Loads stats from the data table, fills HP, primes the spore pool and the skill timer. Server only.
+        self.dead = false
+        self.casting = false
+        self.slamWindup = false
+        self.charging = false
+        self.groggy = false
+        self.phase = 1
+        self:LoadFromTable()
+        self.Hp = self.MaxHp
+
+        self._T.spores = {}
+        self._T.sporeCount = 0
+
+        -- First cast happens after one full interval (gives the map time to load + the player time to approach).
+        self.skillTimer = self.SkillInterval
+
+        self:SetSprite(self.StandRUID)
+        log("[MushmomBoss] OnBeginPlay hp=" .. tostring(self.MaxHp) .. " phase=1")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LoadFromTable()
+        -- Reads this boss's row (matched by MonsterId) and applies HP / contact damage / meso / sprite.
+        local ds = _DataService:GetTable(self.DataSetName)
+        if ds == nil then
+            log_warning("[MushmomBoss] DataSet not found: " .. tostring(self.DataSetName))
+            return
+        end
+        local row = ds:FindRow("id", self.MonsterId)
+        if row == nil then
+            log_warning("[MushmomBoss] Monster id not found in table: " .. tostring(self.MonsterId))
+            return
+        end
+
+        self.MaxHp = tonumber(row:GetItem("maxHp")) or self.MaxHp
+        self.ContactDamage = tonumber(row:GetItem("contactDamage")) or self.ContactDamage
+        self.MesoReward = tonumber(row:GetItem("mesoReward")) or self.MesoReward
+
+        local ruid = row:GetItem("spriteRUID")
+        if ruid ~= nil and ruid ~= "" then
+            self.StandRUID = ruid
+            self:SetSprite(ruid)
+        end
+
+        log("[MushmomBoss] Loaded '" .. tostring(self.MonsterId) .. "' hp=" .. tostring(self.MaxHp)
+            .. " contact=" .. tostring(self.ContactDamage) .. " meso=" .. tostring(self.MesoReward))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Drives facing, the skill scheduler, 몸박 (contact) damage, and the body-slam charge / groggy states.
+        if self.dead then return end
+
+        -- Phase promotion is checked in every state (groggy hits can cross the threshold too).
+        self:UpdatePhase()
+
+        -- Groggy: stunned & vulnerable after a dodged charge. Follows the player's front (handled in
+        -- UpdateGroggy) but deals no contact damage and takes bonus damage.
+        if self.groggy then
+            self:UpdateGroggy(delta)
+            return
+        end
+
+        -- Charging: committed body-slam dash. Movement + slam hit are handled here; normal logic is suspended.
+        if self.charging then
+            self:UpdateCharge(delta)
+            return
+        end
+
+        self:ContactCheck(delta)
+
+        -- Mid-cast (telegraph wind-up).
+        if self.casting then
+            if self.slamWindup then
+                -- Body-slam wind-up: walk to the player's right-front, then crouch in place (see UpdateSlamWindup).
+                self:UpdateSlamWindup(delta)
+            else
+                -- Ranged cast (spore spray): hold position and let the cast pose read clearly.
+                self:FacePlayer()
+                local m = self.Entity.MovementComponent
+                if isvalid(m) then m:Stop() end
+            end
+            return
+        end
+
+        -- Runner positioning: between attacks the boss returns to / keeps pace at the right of the screen
+        -- (player X + NormalOffsetX), since the player auto-runs right and the camera follows.
+        local moving = self:FollowAnchor(self.NormalOffsetX)
+        self:SetSprite(moving and self.MoveRUID or self.StandRUID)
+
+        -- Skill scheduler: fire when the timer elapses, then reset to the phase-scaled interval.
+        self.skillTimer = self.skillTimer - delta
+        if self.skillTimer <= 0 then
+            self:FireNextSkill()
+            self.skillTimer = self:EffectiveInterval()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method boolean FollowAnchor(number offsetX)
+        -- Player-relative horizontal follow for a Rigidbody entity: drive the boss toward (playerX + offsetX)
+        -- via MovementComponent (never a direct Position write). Proportional speed so it catches up when far
+        -- and settles smoothly when near. Clamped to the map-edge bounds so it can't run off the foothold.
+        -- Returns true while actively moving (caller can pick the move vs idle clip).
+        local movement = self.Entity.MovementComponent
+        if not isvalid(movement) then return false end
+
+        local player = self:FindNearestPlayer()
+        if not isvalid(player) then
+            movement:Stop()
+            return false
+        end
+
+        local px = player.TransformComponent.WorldPosition.x
+        local desiredX = px + offsetX
+        if desiredX < self.StageMinX then desiredX = self.StageMinX end
+        if desiredX > self.StageMaxX then desiredX = self.StageMaxX end
+
+        local bossX = self.Entity.TransformComponent.WorldPosition.x
+        local err = desiredX - bossX
+        if math.abs(err) <= self.FollowDeadzone then
+            movement:Stop()
+            self:ApplyFacing(self:DirectionToPlayer())   -- settled: keep watching the player
+            return false
+        end
+
+        local dir = (err > 0) and 1 or -1
+        local speed = math.abs(err) * self.FollowGain
+        if speed > self.FollowMaxSpeed then speed = self.FollowMaxSpeed end
+        movement.InputSpeed = speed
+        self:ApplyFacing(dir)
+        movement:MoveToDirection(Vector2(dir, 0), 0)
+        return true
+    end
+
+    method number EffectiveInterval()
+        -- Skill interval after the phase-2 speed-up.
+        if self.phase >= 2 then return self.SkillInterval * self.Phase2IntervalScale end
+        return self.SkillInterval
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdatePhase()
+        -- Promotes to phase 2 once HP crosses the threshold (one-way). Phase 2 = faster skills.
+        if self.phase == 1 and self.Hp <= self.MaxHp * self.PhaseThreshold then
+            self.phase = 2
+            log("[MushmomBoss] >>> PHASE 2 <<< (hp=" .. tostring(self.Hp) .. ") skills speed up x"
+                .. tostring(self.Phase2IntervalScale))
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FireNextSkill()
+        -- Randomly picks the next boss skill: body slam (몸통박치기 charge) vs spore spray (ranged fan).
+        if _UtilLogic:RandomDouble() < self.BodySlamChance then
+            self:SkillBodySlam()
+        else
+            self:SkillSporeSpray()
+        end
+    end
+
+    -- === Skill 1: spore spray (상/중/하단 부채꼴 5발) ===
+    @ExecSpace("ServerOnly")
+    method void SkillSporeSpray()
+        -- Telegraph first (play the cast animation + sound) so the player can react, then after
+        -- TelegraphDuration spawn the spore fan and return to the idle pose.
+        self.casting = true
+        self:SetSprite(self.TelegraphRUID)
+        self:PlayCastSound()
+        log("[MushmomBoss] telegraph (skill1) - spores in " .. tostring(self.TelegraphDuration) .. "s")
+
+        _TimerService:SetTimerOnce(function()
+            if not isvalid(self.Entity) or self.dead then return end
+            self:SpawnSporeFan()
+            self:SetSprite(self.StandRUID)
+            self.casting = false
+        end, self.TelegraphDuration)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SpawnSporeFan()
+        -- Fires SporeCount spores toward the player, fanned vertically from top to bottom so they cover
+        -- the upper / middle / lower lanes in one spray.
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return end
+        local wp = t.WorldPosition
+
+        local dir = self:DirectionToPlayer()
+        local startPos = Vector3(wp.x + dir * self.SporeForwardOffset, wp.y + self.SporeVerticalOffset, wp.z)
+        local vx = dir * self.SporeSpeed
+
+        for i = 0, self.SporeCount - 1 do
+            -- frac goes +1 (top) .. -1 (bottom); a single spore fires straight ahead.
+            local frac = 0
+            if self.SporeCount > 1 then
+                frac = 1 - 2 * (i / (self.SporeCount - 1))
+            end
+            local vy = frac * self.SporeVerticalSpread
+            local spore = self:AcquireSpore()
+            if spore ~= nil then
+                spore:Launch(startPos, vx, vy, self.SporeDamage)
+            end
+        end
+        log("[MushmomBoss] sprayed " .. tostring(self.SporeCount) .. " spores dir=" .. tostring(dir))
+    end
+
+    @ExecSpace("ServerOnly")
+    method any AcquireSpore()
+        -- Returns an idle spore from the pool, or spawns a new one (parented to the current map) and
+        -- registers it. Spores are reused, never destroyed mid-game.
+        for i, spore in ipairs(self._T.spores) do
+            if spore ~= nil and isvalid(spore) and spore:IsIdle() then
+                return spore
+            end
+        end
+
+        local map = self.Entity.CurrentMap
+        if map == nil then
+            log("[MushmomBoss] CurrentMap is nil; cannot spawn spore")
+            return nil
+        end
+
+        self._T.sporeCount = self._T.sporeCount + 1
+        local name = "MushmomSpore_" .. tostring(self._T.sporeCount)
+        local proj = _SpawnService:SpawnByModelId(self.SporeModelId, name, Vector3(0, 99999, 999), map)
+        if proj == nil then
+            log("[MushmomBoss] SpawnByModelId returned nil for '" .. tostring(self.SporeModelId) .. "'")
+            return nil
+        end
+
+        ---@type MushmomSpore
+        local spore = proj:GetComponent("script.MushmomSpore")
+        if spore == nil then
+            log("[MushmomBoss] Spawned spore is missing script.MushmomSpore")
+            return nil
+        end
+        table.insert(self._T.spores, spore)
+        return spore
+    end
+
+    -- === Skill 2: body slam (몸통박치기) — telegraph → charge → hit / dodge → groggy ===
+    @ExecSpace("ServerOnly")
+    method void SkillBodySlam()
+        -- Begin the body-slam: first WALK to the player's right-front (so the slam happens up close), then
+        -- crouch there as a readable wind-up, then charge. Driven per-frame by UpdateSlamWindup.
+        self.casting = true
+        self.slamWindup = true
+        self._T.slamPhase = "approach"
+        self._T.windupTime = 0
+        log("[MushmomBoss] body-slam: approaching player's front")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateSlamWindup(number delta)
+        -- Phase 1 "approach": follow to the player's right-front (FrontOffsetX). On arrival (or a safety
+        -- timeout) → phase 2 "crouch": hold the crouch pose for SlamTelegraphDuration, then BeginCharge.
+        self._T.windupTime = (self._T.windupTime or 0) + delta
+
+        if self._T.slamPhase == "approach" then
+            local moving = self:FollowAnchor(self.FrontOffsetX)
+            self:SetSprite(moving and self.MoveRUID or self.StandRUID)
+            -- Arrived at the front, or the player out-ran the follow for too long → crouch anyway.
+            if (not moving) or self._T.windupTime >= 2.0 then
+                self._T.slamPhase = "crouch"
+                local m = self.Entity.MovementComponent
+                if isvalid(m) then m:Stop() end
+                self:SetSprite(self.CrouchRUID)
+                self:PlayCastSound()
+                log("[MushmomBoss] body-slam telegraph (crouch) - charge in " .. tostring(self.SlamTelegraphDuration) .. "s")
+                _TimerService:SetTimerOnce(function()
+                    if not isvalid(self.Entity) or self.dead then return end
+                    self.slamWindup = false
+                    self:BeginCharge()
+                end, self.SlamTelegraphDuration)
+            end
+        end
+        -- Phase 2 "crouch": the boss holds still until the scheduled timer fires BeginCharge. Nothing per-frame.
+    end
+
+    @ExecSpace("ServerOnly")
+    method void BeginCharge()
+        -- Locks the charge direction toward the player and accelerates into the dash.
+        self.casting = false
+        self.slamWindup = false
+        self.charging = true
+        self._T.chargeTime = 0
+        self.chargeDir = self:DirectionToPlayer()
+        self:ApplyFacing(self.chargeDir)
+        self:SetSprite(self.ChargeRUID)
+
+        local movement = self.Entity.MovementComponent
+        if isvalid(movement) then
+            movement.InputSpeed = self.ChargeSpeed
+        end
+        log("[MushmomBoss] CHARGE begin dir=" .. tostring(self.chargeDir) .. " speed=" .. tostring(self.ChargeSpeed))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateCharge(number delta)
+        -- Per-frame dash toward the player. On contact -> heavy hit + recover. If the player dodges (the boss
+        -- charges past the player's X without connecting) -> groggy. Map-edge / timeout safeties also -> groggy.
+        self._T.chargeTime = (self._T.chargeTime or 0) + delta
+
+        local movement = self.Entity.MovementComponent
+        if isvalid(movement) then
+            movement:MoveToDirection(Vector2(self.chargeDir, 0), 0)
+        end
+
+        -- Slam hit: any player overlapping the boss body takes heavy damage; the charge then recovers.
+        if self:SlamContactCheck() then
+            self:EndChargeRecover()
+            return
+        end
+
+        local bossX = self.Entity.TransformComponent.WorldPosition.x
+
+        -- Player-relative dodge: the charge swept past the player's X (player jumped / slipped by) -> dodged.
+        local player = self:FindNearestPlayer()
+        if isvalid(player) then
+            local px = player.TransformComponent.WorldPosition.x
+            if (self.chargeDir < 0 and bossX <= px - self.PassMargin)
+                or (self.chargeDir > 0 and bossX >= px + self.PassMargin) then
+                log("[MushmomBoss] charge passed player (bossX=" .. string.format("%.2f", bossX)
+                    .. " playerX=" .. string.format("%.2f", px) .. ") -> GROGGY")
+                self:EnterGroggy()
+                return
+            end
+        end
+
+        -- Safety: never charge off the foothold — stop at the map edge (also counts as a dodge).
+        if (self.chargeDir > 0 and bossX >= self.StageMaxX - self.StageEndMargin)
+            or (self.chargeDir < 0 and bossX <= self.StageMinX + self.StageEndMargin) then
+            log("[MushmomBoss] charge reached map edge (x=" .. string.format("%.2f", bossX) .. ") -> GROGGY")
+            self:EnterGroggy()
+            return
+        end
+
+        -- Safety: charge never resolved (e.g. no player) → groggy anyway.
+        if self._T.chargeTime >= self.ChargeMaxTime then
+            log("[MushmomBoss] charge timed out -> GROGGY")
+            self:EnterGroggy()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method boolean SlamContactCheck()
+        -- Returns true if any player is inside the boss body box, dealing BodySlamDamage to each such player.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return false end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return false end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return false end
+
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        local hitAny = false
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                if math.abs(up.x - myPos.x) <= self.ContactHalfWidth
+                    and math.abs(up.y - myPos.y) <= self.ContactHalfHeight then
+                    ---@type PlayerHealth
+                    local hp = user:GetComponent("script.PlayerHealth")
+                    if isvalid(hp) then
+                        hp:TakeDamage(self.BodySlamDamage)
+                        log("[MushmomBoss] body-slam HIT player -> " .. tostring(self.BodySlamDamage))
+                    end
+                    hitAny = true
+                end
+            end
+        end
+        return hitAny
+    end
+
+    @ExecSpace("ServerOnly")
+    method void StopCharge()
+        -- Common charge teardown: clear the flag, stop movement, restore the idle pose. (InputSpeed is
+        -- re-set every frame by FollowAnchor in the following state, so no restore is needed here.)
+        self.charging = false
+        local movement = self.Entity.MovementComponent
+        if isvalid(movement) then movement:Stop() end
+        self:SetSprite(self.StandRUID)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void EndChargeRecover()
+        -- Ends a charge that connected: stop, restore pose, and resume the normal skill cadence.
+        self:StopCharge()
+        self.skillTimer = self:EffectiveInterval()
+        log("[MushmomBoss] charge connected -> recover")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void EnterGroggy()
+        -- Player dodged: stop the charge at the stage edge and enter the vulnerable groggy state.
+        self:StopCharge()
+        self.groggy = true
+        self._T.groggyTimer = self.GroggyDuration
+        self:SetSprite(self.GroggyRUID)
+        self:StartGroggyVfx()
+        log("[MushmomBoss] >>> GROGGY <<< for " .. tostring(self.GroggyDuration) .. "s (takes x"
+            .. tostring(self.GroggyDamageMultiplier) .. " damage)")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateGroggy(number delta)
+        -- Stays at the player's right-front (FrontOffsetX) so the auto-running player keeps it in reach and
+        -- can punish it, then counts down the groggy window. (Sprite stays the dizzy hit1 set in EnterGroggy.)
+        self:FollowAnchor(self.FrontOffsetX)
+        self._T.groggyTimer = (self._T.groggyTimer or 0) - delta
+        if self._T.groggyTimer <= 0 then
+            self:ExitGroggy()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ExitGroggy()
+        -- Leaves groggy: clear the flag, stop the dizzy VFX, restore the idle pose, and resume the scheduler.
+        self.groggy = false
+        self:StopGroggyVfx()
+        self:SetSprite(self.StandRUID)
+        self.skillTimer = self:EffectiveInterval()
+        log("[MushmomBoss] groggy ended - resume")
+    end
+
+    @ExecSpace("Multicast")
+    method void StartGroggyVfx()
+        -- Dizzy swirl above the boss head (client-side cue for the groggy window). Serial kept per client.
+        if not isvalid(self.Entity) then return end
+        self._T.groggySerial = _ParticleService:PlayBasicParticleAttached(
+            BasicParticleType.SpinField, self.Entity, Vector3(0, 1.9, 0), 0, Vector3(0.8, 0.8, 0.8), true, {})
+    end
+
+    @ExecSpace("Multicast")
+    method void StopGroggyVfx()
+        -- Removes the looping dizzy swirl started in StartGroggyVfx (per-client serial).
+        if self._T.groggySerial ~= nil then
+            _ParticleService:RemoveParticle(self._T.groggySerial)
+            self._T.groggySerial = nil
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method number DirectionToPlayer()
+        -- +1 if the nearest player is to the right, -1 if to the left. Defaults to -1 (sprites face left).
+        local player = self:FindNearestPlayer()
+        if not isvalid(player) then return -1 end
+        local px = player.TransformComponent.WorldPosition.x
+        local mx = self.Entity.TransformComponent.WorldPosition.x
+        return (px >= mx) and 1 or -1
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FacePlayer()
+        -- Faces the boss toward the nearest player.
+        self:ApplyFacing(self:DirectionToPlayer())
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplyFacing(number dir)
+        -- Flip Scale.x so the (left-facing) sprite points toward dir (+1 right / -1 left); keeps colliders aligned.
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return end
+        local s = t.Scale
+        t.Scale = Vector3(math.abs(s.x) * -dir, s.y, s.z)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetSprite(string ruid)
+        -- Swaps the sprite clip ONLY when it actually changes. Reassigning the same SpriteRUID every frame
+        -- restarts the animation at frame 0 (looks frozen), so the per-frame follow loop must go through this.
+        if self._T.curSprite == ruid then return end
+        self._T.curSprite = ruid
+        local sprite = self.Entity.SpriteRendererComponent
+        if isvalid(sprite) then sprite.SpriteRUID = ruid end
+    end
+
+    @ExecSpace("ServerOnly")
+    method Entity FindNearestPlayer()
+        -- Nearest player on this map by squared distance, or nil if none.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return nil end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return nil end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return nil end
+
+        local mp = self.Entity.TransformComponent.WorldPosition
+        local best = nil
+        local bestD = 999999
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local dx = up.x - mp.x
+                local dy = up.y - mp.y
+                local d = dx * dx + dy * dy
+                if d < bestD then
+                    bestD = d
+                    best = user
+                end
+            end
+        end
+        return best
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ContactCheck(number delta)
+        -- 몸박: damages any player overlapping the boss (axis-aligned box). PlayerHealth's own invuln
+        -- window throttles repeat hits, so a per-frame check is safe.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local dx = up.x - myPos.x
+                local dy = up.y - myPos.y
+                if math.abs(dx) <= self.ContactHalfWidth and math.abs(dy) <= self.ContactHalfHeight then
+                    ---@type PlayerHealth
+                    local hp = user:GetComponent("script.PlayerHealth")
+                    if isvalid(hp) then
+                        hp:TakeDamage(self.ContactDamage)
+                    end
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    @EventSender("Self")
+    handler HandleHitEvent(HitEvent event)
+        -- Player's SwordBeam (or any HitBox attack) damages the boss. On HP<=0, grant meso and die.
+        -- While groggy the boss is a wide-open weak point, so incoming damage is multiplied.
+        if self.dead then return end
+        local dmg = event.TotalDamage
+        if self.groggy then
+            dmg = dmg * self.GroggyDamageMultiplier
+            log("[MushmomBoss] GROGGY hit x" .. tostring(self.GroggyDamageMultiplier)
+                .. " (" .. tostring(event.TotalDamage) .. " -> " .. tostring(dmg) .. ")")
+        end
+        self.Hp = self.Hp - dmg
+        log("[MushmomBoss] hit -" .. tostring(dmg) .. " -> hp=" .. tostring(self.Hp))
+        if self.Hp <= 0 then
+            self.Hp = 0
+            self:Die(event.AttackerEntity)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Die(Entity attacker)
+        -- Marks dead, credits meso to the attacker's owner, plays the death pose, then removes the boss.
+        if self.dead then return end
+        self.dead = true
+        self.slamWindup = false
+        self.charging = false
+        self.groggy = false
+        self:StopGroggyVfx()
+        self:GrantMeso(attacker)
+        self:SetSprite(self.DieRUID)
+        log("[MushmomBoss] died")
+        self.Entity:Destroy(1.0)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void GrantMeso(Entity attacker)
+        -- The attacker entity is the SwordBeam projectile; resolve its owner player and credit meso.
+        if not isvalid(attacker) then return end
+        ---@type SwordBeam
+        local beam = attacker:GetComponent("script.SwordBeam")
+        if not isvalid(beam) or not isvalid(beam.OwnerEntity) then return end
+        ---@type PlayerWallet
+        local wallet = beam.OwnerEntity:GetComponent("script.PlayerWallet")
+        if isvalid(wallet) then
+            wallet:AddMeso(self.MesoReward)
+            log("[MushmomBoss] Granted " .. tostring(self.MesoReward) .. " meso to " .. tostring(beam.OwnerEntity.Name))
+        end
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayCastSound()
+        -- Plays the skill cast sound on every client (boss telegraph cue). _SoundService:PlaySound is Client-space.
+        if self.CastSoundRUID == "" then return end
+        _SoundService:PlaySound(self.CastSoundRUID, 1.0)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Destroys every pooled spore so they do not leak when the boss is removed.
+        if self._T.spores ~= nil then
+            for i, spore in ipairs(self._T.spores) do
+                if spore ~= nil and isvalid(spore) and isvalid(spore.Entity) then
+                    spore.Entity:Destroy()
+                end
+            end
+            self._T.spores = {}
+        end
+    end
+
+end

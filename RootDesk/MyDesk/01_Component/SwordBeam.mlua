@@ -1,0 +1,148 @@
+@Component
+script SwordBeam extends Component
+
+    -- The beam owns its own flight/hit config (single source of truth). PowerStrike no longer copies
+    -- these per-launch — it only supplies spawn position, direction, and damage via Launch().
+
+    -- Flight speed in world units per second.
+    property number Speed = 14
+    -- Hard safety lifetime (seconds): the beam recycles even if it never leaves the map or hits anything.
+    -- Sized so range (Speed * MaxLifetime) exceeds the map width — the map bounds are the real range limit.
+    property number MaxLifetime = 8.0
+    -- Ad-hoc hitbox size (world units) tested each frame at the beam's position.
+    -- Sized to the tall vertical sword-beam sprite.
+    property number HitWidth = 1.2
+    property number HitHeight = 2.6
+    -- The beam sprite's pivot is at its bottom (blade rises upward from the entity position), so the
+    -- hit test is lifted by this amount to sit on the visible blade instead of the empty base.
+    property number HitVerticalOffset = 1.2
+    -- attackInfo forwarded to SwordBeamAttack.CalcDamage (must equal SwordBeamAttack.SkillTag).
+    property string AttackInfo = "PowerStrike"
+
+    -- The player who fired this beam. Set by PowerStrike at launch so kill rewards (meso) can be
+    -- credited to the right player. Server-side only; not synced.
+    @HideFromInspector property Entity OwnerEntity = nil
+
+    -- Map rectangle: the beam recycles the instant it leaves this area ("맵을 벗어나면 사라진다").
+    -- Defaults cover map01's tile extent (X[-9,89]) plus vertical margin. Tune per map if needed.
+    property number BoundMinX = -10
+    property number BoundMaxX = 90
+    property number BoundMinY = -12
+    property number BoundMaxY = 16
+
+    -- Parking spot for an idle (pooled) beam: far off any camera so it is invisible while waiting to be reused.
+    property Vector3 ParkPosition = Vector3(0, 99999, 999)
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- One-time idle initialization. Guarded so it can never clobber a beam that PowerStrike already
+        -- Launched on the same frame it was spawned (Launch may run before OnBeginPlay for a fresh entity).
+        if self._T.fired ~= nil then return end
+        self._T.fired = false
+        self._T.lifetime = 0
+        self._T.dirX = 1
+        self:Park()
+    end
+
+    method boolean IsIdle()
+        -- True when this beam is parked and free for the pool to hand out again (server-side query).
+        return self._T.fired ~= true
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Launch(Vector3 startPos, number dir, number damage)
+        -- Activates a pooled (or fresh) beam: position it, aim it along dir (+1 right / -1 left),
+        -- set its damage, and make it visible. Movement and hit detection are server-authoritative.
+        self._T.fired = true
+        self._T.lifetime = 0
+        self._T.dirX = (dir >= 0) and 1 or -1
+
+        self.Entity.TransformComponent.Position = startPos
+
+        local renderer = self.Entity.SpriteRendererComponent
+        if renderer ~= nil then
+            renderer.FlipX = self._T.dirX < 0
+            renderer.Enable = true
+        end
+
+        ---@type SwordBeamAttack
+        local ac = self.Entity.AttackComponent
+        if ac ~= nil then
+            ac.BaseDamage = damage
+        end
+
+        log("[SwordBeam] Launch dir=" .. tostring(self._T.dirX) .. " dmg=" .. tostring(damage)
+            .. " at x=" .. string.format("%.2f", startPos.x) .. " y=" .. string.format("%.2f", startPos.y))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Server-authoritative flight loop: move, hit-test, then recycle on hit / lifetime / out-of-map.
+        if self._T.fired ~= true then return end
+
+        self._T.lifetime = self._T.lifetime + delta
+        if self._T.lifetime >= self.MaxLifetime then
+            self:Deactivate()
+            return
+        end
+
+        -- Move. Body-less entity -> Translate (direct transform write replicates to clients).
+        self.Entity.TransformComponent:Translate(self._T.dirX * self.Speed * delta, 0)
+
+        local pos = self.Entity.TransformComponent.Position
+
+        -- Recycle when the beam leaves the map rectangle.
+        if pos.x < self.BoundMinX or pos.x > self.BoundMaxX
+            or pos.y < self.BoundMinY or pos.y > self.BoundMaxY then
+            log("[SwordBeam] left map bounds -> recycle")
+            self:Deactivate()
+            return
+        end
+
+        -- Hit test: ad-hoc box at the beam position vs the HitBox group. Damage flows through the
+        -- normal HitEvent pipeline (SwordBeamAttack), so hit effect / damage skin / i-frame keep working.
+        local ac = self.Entity.AttackComponent
+        if ac == nil then ac = self.Entity:GetComponent("script.SwordBeamAttack") end
+        if ac ~= nil then
+            -- Lift the hit center onto the visible blade (sprite pivot is at the bottom).
+            local hitCenter = Vector2(pos.x, pos.y + self.HitVerticalOffset)
+            local hits = ac:AttackFrom(Vector2(self.HitWidth, self.HitHeight), hitCenter, self.AttackInfo, CollisionGroups.HitBox)
+            if hits ~= nil and #hits > 0 then
+                log("[SwordBeam] hit " .. tostring(#hits) .. " target(s) at x=" .. string.format("%.2f", pos.x)
+                    .. " hitY=" .. string.format("%.2f", pos.y + self.HitVerticalOffset))
+                self:ShowHitEffect(pos.x, pos.y + self.HitVerticalOffset, pos.z)
+                self:Deactivate()
+                return
+            end
+        else
+            log_warning("[SwordBeam] AttackComponent missing on beam entity")
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Deactivate()
+        -- Recycles the beam: mark it idle and park it off-screen so the pool can reuse it.
+        -- Intentionally NOT Destroy()ed — reusability is a requirement.
+        self._T.fired = false
+        self:Park()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Park()
+        -- Hides the beam (disabled renderer + parked off any camera) while it waits idle in the pool.
+        local renderer = self.Entity.SpriteRendererComponent
+        if renderer ~= nil then
+            renderer.Enable = false
+        end
+        self.Entity.TransformComponent.Position = self.ParkPosition
+    end
+
+    @ExecSpace("Client")
+    method void ShowHitEffect(number px, number py, number pz)
+        -- Fixed-position spark at the impact point (survives the beam recycling). Built-in particle = no RUID.
+        local mapEntity = self.Entity.CurrentMap
+        if mapEntity == nil then return end
+        _ParticleService:PlayBasicParticle(BasicParticleType.SparkExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(1, 1, 1), false, {})
+    end
+
+end

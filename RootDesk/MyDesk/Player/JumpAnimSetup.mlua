@@ -1,0 +1,43 @@
+@Component
+script JumpAnimSetup extends Component
+
+    -- Registers a CUSTOM animationclip as the avatar's air (JUMP/FALL) body motion.
+    --
+    -- Why a script instead of the editor: the BodyAction Picker UI only lists the 14 native body
+    -- actions (stand/walk/fall/...), so a custom animationclip cannot be chosen there. The script API
+    -- AvatarStateAnimationComponent:SetActionSheet(key, animationClipRuid) DOES accept a clip RUID, so
+    -- we map JUMP and FALL to the custom clip here. PlayerControllerComponent auto-enters JUMP/FALL
+    -- while the player is airborne (normal jump AND double jump), so the avatar body plays this clip
+    -- for the whole air time — no per-jump scripting needed.
+    --
+    -- Must run on the SERVER: StateToAvatarBodyActionSheet is a @Sync property, so SetActionSheet only
+    -- propagates to clients when called server-side. Set once in OnBeginPlay (before any jump), so the
+    -- mapping is in place by the time a JUMP/FALL transition first resolves it (SetActionSheet only
+    -- edits the table; it does not retrigger a clip already playing).
+
+    -- The custom air animation (animationclip RUID). Empty = leave the native fall motion untouched.
+    property string clipRUID = "461ade5dd89a47ea8a6f30ff75e7ec4c"
+
+    -- Which air states to override. Cover both so the clip shows for the entire air time.
+    property boolean applyToJump = true
+    property boolean applyToFall = true
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Maps the custom clip onto the avatar's JUMP/FALL body-action states (server-side, syncs to clients).
+        if self.clipRUID == "" then return end
+
+        local asac = self.Entity.AvatarStateAnimationComponent
+        if asac == nil then
+            log_warning("[JumpAnimSetup] AvatarStateAnimationComponent not found")
+            return
+        end
+
+        if self.applyToJump then asac:SetActionSheet("JUMP", self.clipRUID) end
+        if self.applyToFall then asac:SetActionSheet("FALL", self.clipRUID) end
+
+        log("[JumpAnimSetup] air animation set clip=" .. self.clipRUID
+            .. " JUMP=" .. tostring(self.applyToJump) .. " FALL=" .. tostring(self.applyToFall))
+    end
+
+end

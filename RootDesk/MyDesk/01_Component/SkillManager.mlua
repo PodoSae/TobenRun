@@ -1,0 +1,42 @@
+@Component
+script SkillManager extends Component
+
+    property table skills = nil
+
+    method void OnBeginPlay()
+        -- Collects skill components. Auto-attack is driven server-side in OnUpdate.
+        -- Stat values are owned by PlayerStatManager; skills read them directly.
+        self.skills = {}
+        if self.Entity ~= nil then
+            local candidates = {
+                self.Entity.PowerStrike,
+            }
+
+            for i, comp in ipairs(candidates) do
+                if comp ~= nil then
+                    table.insert(self.skills, comp)
+                    log("[SkillManager] Collected skill: " .. tostring(comp.SkillName))
+                end
+            end
+        end
+
+        log("[SkillManager] Collected " .. tostring(#self.skills) .. " skills")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Auto-attack: server-authoritative. Runs only on the server, so each ready skill
+        -- fires exactly once per cooldown. Activate() self-gates on cooldown.
+        if self.skills == nil then return end
+
+        for i, skill in ipairs(self.skills) do
+            -- IsReady gates on cooldown; ShouldAutoActivate is the per-skill fire condition
+            -- (e.g. PowerStrike requires a monster in front). Short-circuit keeps the (possibly
+            -- costly) condition check off the cooldown frames.
+            if skill ~= nil and skill.IsReady and skill:ShouldAutoActivate() then
+                skill:Activate()
+            end
+        end
+    end
+
+end

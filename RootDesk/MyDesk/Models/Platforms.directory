@@ -1,20 +1,20 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://38f9106d932740bf85dd56c8f5628681",
+  "EntryKey": "directory://9ce73fc7ec784382af436373a51868b3",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
   "UsePublish": 1,
   "UseService": 0,
   "CoreVersion": "26.5.0.0",
-  "StudioVersion": "0.1.0.0",
+  "StudioVersion": "",
   "DynamicLoading": 0,
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://38f9106d932740bf85dd56c8f5628681",
-      "name": "Models",
+      "entry_id": "directory://9ce73fc7ec784382af436373a51868b3",
+      "name": "Platforms",
       "lock": false,
       "folding": false,
       "nameEditable": true

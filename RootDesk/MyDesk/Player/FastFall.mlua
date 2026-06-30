@@ -1,0 +1,139 @@
+@Component
+script FastFall extends Component
+
+    -- Fast-fall / dive skill: while airborne, press the dive key (Down / S) to plunge straight to
+    -- the ground. Input-driven and client-side for the LOCAL player only, exactly like DoubleJump
+    -- (movement authority for a Rigidbody LocalPlayer is the owning client).
+    --
+    -- Key reuse: Down / S is the SLIDE key on the GROUND (script.Slide) and the DIVE key in the AIR
+    -- here. The two never overlap — Slide only starts while IsOnGround() is true, FastFall only while
+    -- it is false — so holding Down through a jump dives, then auto-resumes the slide on landing.
+    --
+    -- Mechanism: a one-shot downward SetForce is capped by RigidbodyComponent.FallSpeedMaxY, so a
+    -- snappy dive needs the speed cap AND gravity temporarily boosted. Both are raised on dive and
+    -- restored the instant the player lands. The forward run speed is untouched (PlayerController
+    -- keeps writing MoveVelocity.x every frame), so the dive only steepens the descent.
+    property string SkillName = "FastFall"
+
+    -- Tuning (inspector-editable). Multipliers are relative to the player's normal Rigidbody values,
+    -- so they adapt to whatever gravity DefaultPlayer is configured with.
+    property number diveGravityMul = 4   -- gravity multiplier while diving
+    property number diveMaxFallMul = 4   -- FallSpeedMaxY multiplier while diving (lifts the speed cap)
+    property number diveImpulse = 10     -- immediate downward kick on activation (instant response)
+
+    -- Cached refs + captured originals (client / local player only).
+    property RigidbodyComponent body = nil
+    property any fsm = nil
+    property boolean isLocal = false
+    property boolean diving = false
+
+    -- Slide-suppression latch. Set the moment a dive starts and held until the dive key is released,
+    -- so the player runs (not slides) on landing even while still holding Down/S. script.Slide reads
+    -- this before starting a slide. Set at dive START (not landing) to avoid a same-frame ordering race.
+    property boolean slideLatched = false
+    property number origGravity = 0
+    property number origMaxFallY = 0
+    property any keyHandler = nil
+
+    method void OnBeginPlay()
+        -- Caches the rigidbody + FSM + normal gravity/fall-cap, and subscribes to keyboard input on the client.
+        self.body = self.Entity.RigidbodyComponent
+        self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
+        self.isLocal = self:IsClient() and _UserService.LocalPlayer == self.Entity
+
+        if self.body ~= nil then
+            self.origGravity = self.body.Gravity
+            self.origMaxFallY = self.body.FallSpeedMaxY
+        end
+
+        if self:IsClient() then
+            self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+        end
+
+        log("[FastFall] OnBeginPlay local=" .. tostring(self.isLocal)
+            .. " body=" .. tostring(self.body ~= nil)
+            .. " gravity=" .. tostring(self.origGravity) .. " maxFallY=" .. tostring(self.origMaxFallY))
+    end
+
+    method void OnEndPlay()
+        -- Releases the input subscription and restores any in-progress dive on removal.
+        if self.keyHandler ~= nil then
+            _InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+            self.keyHandler = nil
+        end
+        if self.diving then self:EndDive() end
+    end
+
+    method boolean IsDiveKey(any key)
+        -- True for either dive key (Down / S) — the same keys Slide uses on the ground.
+        return key == KeyboardKey.DownArrow or key == KeyboardKey.S
+    end
+
+    method boolean IsDiveKeyHeld()
+        -- True while either dive key (Down / S) is currently held down on this client.
+        return _InputService:IsKeyPressed(KeyboardKey.DownArrow) or _InputService:IsKeyPressed(KeyboardKey.S)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnKeyDown(KeyDownEvent event)
+        -- Starts a dive on a dive-key press, but only for the local player's own instance.
+        if _UserService.LocalPlayer ~= self.Entity then return end
+        if self:IsDiveKey(event.key) then
+            self:TryDive()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void TryDive()
+        -- Begins a fast fall when airborne. No-op on the ground (that's Slide's territory).
+        if self.body == nil then return end
+        if self.diving then return end
+        if self.body:IsOnGround() then return end
+
+        self.diving = true
+        -- Consume this key-hold so Slide won't fire on landing until the key is released.
+        self.slideLatched = true
+
+        -- Lift the fall-speed cap and boost gravity so the descent is actually fast (a plain
+        -- downward force would otherwise be clamped by FallSpeedMaxY).
+        self.body.Gravity = self.origGravity * self.diveGravityMul
+        self.body.FallSpeedMaxY = self.origMaxFallY * self.diveMaxFallMul
+
+        -- Immediate downward kick for an instant-response dive; preserve current forward X.
+        local v = self.body.MoveVelocity
+        self.body:SetForce(Vector2(v.x, -self.diveImpulse))
+
+        log("[FastFall] dive start gravity=" .. tostring(self.body.Gravity)
+            .. " maxFallY=" .. tostring(self.body.FallSpeedMaxY))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void EndDive()
+        -- Restores the normal gravity and fall-speed cap once the dive is over, then drops the player
+        -- back into the RUN state. TryChange("RUN") is allowed from JUMP / DOUBLE_JUMP / SLIDE and is a
+        -- harmless no-op if already running (e.g. the FSM's own grounded auto-transition beat us to it).
+        self.diving = false
+        if self.body ~= nil then
+            self.body.Gravity = self.origGravity
+            self.body.FallSpeedMaxY = self.origMaxFallY
+        end
+        if self.fsm ~= nil then self.fsm:TryChange("RUN") end
+        log("[FastFall] dive end -> RUN")
+    end
+
+    method void OnUpdate(number delta)
+        -- Ends the dive the moment the local player lands.
+        if not self.isLocal then return end
+        if self.body == nil then return end
+
+        -- Release the slide-suppression latch once the dive key is let go.
+        if self.slideLatched and not self:IsDiveKeyHeld() then
+            self.slideLatched = false
+        end
+
+        if self.diving and self.body:IsOnGround() then
+            self:EndDive()
+        end
+    end
+
+end

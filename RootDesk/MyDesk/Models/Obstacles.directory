@@ -1,20 +1,20 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://38f9106d932740bf85dd56c8f5628681",
+  "EntryKey": "directory://d905ccd86d7f4196aeead4670077922b",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
   "UsePublish": 1,
   "UseService": 0,
   "CoreVersion": "26.5.0.0",
-  "StudioVersion": "0.1.0.0",
+  "StudioVersion": "",
   "DynamicLoading": 0,
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://38f9106d932740bf85dd56c8f5628681",
-      "name": "Models",
+      "entry_id": "directory://d905ccd86d7f4196aeead4670077922b",
+      "name": "Obstacles",
       "lock": false,
       "folding": false,
       "nameEditable": true

@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://38f9106d932740bf85dd56c8f5628681",
+  "EntryKey": "directory://4acff32011314f678ba3b718f8642474",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://38f9106d932740bf85dd56c8f5628681",
-      "name": "Models",
+      "entry_id": "directory://4acff32011314f678ba3b718f8642474",
+      "name": "Skill",
       "lock": false,
       "folding": false,
       "nameEditable": true

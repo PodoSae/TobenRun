@@ -1,0 +1,90 @@
+@Component
+script Obstacle extends Component
+
+    -- Y the obstacle rises up to (its resting center height). Set by the spawner at spawn time.
+    property number TargetY = 0.4
+    -- Rising speed in world units per second ("coming out from below").
+    property number RiseSpeed = 4.0
+    -- Damage dealt to a player on contact.
+    property number Damage = 20
+    -- Contact radius (world units) for the player-overlap check.
+    property number HitRadius = 0.6
+    -- Safety auto-despawn after this many seconds.
+    property number Lifetime = 12.0
+
+    property number aliveTime = 0
+    property boolean consumed = false
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Logs spawn; the obstacle starts below ground and rises to TargetY.
+        self.aliveTime = 0
+        self.consumed = false
+        local p = self.Entity.TransformComponent.Position
+        log("[Obstacle] spawned at x=" .. string.format("%.2f", p.x)
+            .. " y=" .. string.format("%.2f", p.y) .. " targetY=" .. string.format("%.2f", self.TargetY))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Rises from below to TargetY, checks player contact, and self-destructs on lifetime.
+        if self.consumed then return end
+
+        -- Rise toward TargetY. Body-less entity -> direct transform writes are allowed and replicate.
+        local tr = self.Entity.TransformComponent
+        local pos = tr.Position
+        if pos.y < self.TargetY then
+            local ny = pos.y + self.RiseSpeed * delta
+            if ny > self.TargetY then ny = self.TargetY end
+            tr.Position = Vector3(pos.x, ny, pos.z)
+        end
+
+        -- Lifetime cleanup.
+        self.aliveTime = self.aliveTime + delta
+        if self.aliveTime >= self.Lifetime then
+            self:Despawn()
+            return
+        end
+
+        self:CheckHit()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void CheckHit()
+        -- Damages the first player within HitRadius, then consumes the obstacle.
+        local map = self.Entity.CurrentMap
+        if map == nil then return end
+        local mapComp = map.MapComponent
+        if mapComp == nil then return end
+
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local dx = up.x - myPos.x
+                local dy = up.y - myPos.y
+                if (dx * dx + dy * dy) <= (self.HitRadius * self.HitRadius) then
+                    ---@type PlayerHealth
+                    local hp = user:GetComponent("script.PlayerHealth")
+                    if hp ~= nil then
+                        hp:TakeDamage(self.Damage)
+                    end
+                    self:Despawn()
+                    return
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Despawn()
+        -- Marks consumed and removes the obstacle entity.
+        if self.consumed then return end
+        self.consumed = true
+        self.Entity:Destroy()
+    end
+
+end

@@ -1,0 +1,224 @@
+@Component
+script Slide extends Component
+
+    -- Ground slide skill — HOLD to slide. While the slide key (Down / S) is held and the runner is
+    -- on the ground, the player keeps sliding; releasing the key ends it. Client-input driven (like
+    -- DoubleJump) and gated through PlayerStateMachine so it can never overlap jump / double-jump.
+    -- While sliding the runner keeps moving forward at a tunable speed multiplier, the avatar is
+    -- squashed low (duck pose), and a one-shot SFX plays on entry. Other systems can read
+    -- PlayerStateMachine:Is("SLIDE") to treat the player as a low target.
+    --
+    -- Held-state is polled every frame via _InputService:IsKeyPressed (instead of KeyDown/KeyUp
+    -- events) so a missed release can't leave the slide stuck on, and so holding the key through a
+    -- jump auto-resumes the slide the moment the player lands.
+    property string SkillName = "Slide"
+
+    -- Tuning (inspector-editable).
+    property number speedMultiplier = 1.3   -- forward-speed factor applied to PlayerController while sliding
+    property number squashY = 0.55          -- vertical avatar scale during the slide (1 = no squash)
+
+    -- Slide body pose. The runner is permanently in the engine MOVE state (PlayerController forces
+    -- forward velocity every frame), and AvatarStateAnimationComponent re-sends the walk motion for
+    -- MOVE continuously. A per-frame client crouch event alone races that walk re-send (component
+    -- update order is not stable) → the crouch intermittently fails to show. The robust fix is to make
+    -- the engine itself the single authority: while sliding, remap THIS player's MOVE state to the
+    -- crouch body action (server-side, @Sync, so it also shows to other clients), then restore it to
+    -- walk on slide end. The client crouch event is kept as instant local feedback — it now agrees
+    -- with the engine (both produce crouch) instead of fighting it, so there is no race.
+    property boolean playSlidePose = true   -- false = keep only the squash, no pose change
+    property number slidePlayRate = 1       -- playback speed of the crouch pose
+
+    -- Optional dust effect (animationclip RUID) played attached to the player. Empty = none.
+    property string effectRUID = ""
+    property Vector3 effectOffset = Vector3(0, 0, 0)
+    property number effectScale = 1
+
+    -- Cached refs + runtime state (local player / client only).
+    property RigidbodyComponent body = nil
+    property any fsm = nil
+    property any controller = nil
+    property any fastfall = nil
+    property AvatarStateAnimationComponent asac = nil
+    property boolean isLocal = false
+    property boolean active = false
+    property Vector3 origScale = Vector3(1, 1, 1)
+    -- Original PlayRate of the MOVE (walk) body action, captured server-side so the remap can be
+    -- restored without resetting the run-animation speed (SetActionSheet would reset it to 1).
+    property number origMovePlayRate = 1.68
+
+    method void OnBeginPlay()
+        -- Caches movement refs. Input is polled in OnUpdate, so no event subscription is needed.
+        self.body = self.Entity.RigidbodyComponent
+        self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
+        self.controller = self.Entity:GetComponent("script.PlayerController")
+        self.fastfall = self.Entity:GetComponent("script.FastFall")
+        self.asac = self.Entity.AvatarStateAnimationComponent
+        self.origScale = self.Entity.TransformComponent.Scale
+        self.isLocal = self:IsClient() and _UserService.LocalPlayer == self.Entity
+
+        -- Capture the walk PlayRate on the server (state-anim authority) so the slide remap can
+        -- restore it exactly. StateToAvatarBodyActionSheet is server-authoritative (@Sync).
+        if self:IsServer() and self.asac ~= nil then
+            local el = self.asac.StateToAvatarBodyActionSheet["MOVE"]
+            if el ~= nil then self.origMovePlayRate = el.PlayRate end
+        end
+
+        log("[Slide] OnBeginPlay local=" .. tostring(self.isLocal)
+            .. " fsm=" .. tostring(self.fsm ~= nil) .. " controller=" .. tostring(self.controller ~= nil)
+            .. " asac=" .. tostring(self.asac ~= nil))
+    end
+
+    method void OnEndPlay()
+        -- Restores any in-progress slide (scale / run speed) on removal.
+        if self.active then self:EndSlide() end
+    end
+
+    method boolean IsSlideKeyHeld()
+        -- True while either slide key (Down / S) is currently held down on this client.
+        return _InputService:IsKeyPressed(KeyboardKey.DownArrow) or _InputService:IsKeyPressed(KeyboardKey.S)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartSlide()
+        -- Begins a slide only from a grounded run state; the FSM arbitrates the transition.
+        if self.active then return end
+        if self.body == nil then return end
+        if not self.body:IsOnGround() then return end
+
+        if self.fsm ~= nil then
+            if not self.fsm:TryChange("SLIDE") then return end
+        end
+
+        self.active = true
+
+        -- Forward-speed change for the slide (PlayerController reads speedMultiplier each frame).
+        if self.controller ~= nil then
+            self.controller.speedMultiplier = self.speedMultiplier
+        end
+
+        -- Duck the avatar by squashing vertical scale (avatar pivot is at the feet, so the head lowers).
+        self.Entity.TransformComponent.Scale =
+            Vector3(self.origScale.x, self.origScale.y * self.squashY, self.origScale.z)
+
+        -- Drop into the slide (prone/crouch) body pose. The server remap (MOVE->crouch) makes the
+        -- engine drive crouch for the whole slide; the local event is just instant feedback.
+        if self.playSlidePose then
+            self:RequestSlideAnim(true)
+            self:PlaySlidePose()
+        end
+
+        -- Optional dust effect + SFX through the central SoundManager.
+        if self.effectRUID ~= "" then
+            _EffectService:PlayEffectAttached(self.effectRUID, self.Entity, self.effectOffset, 0,
+                Vector3(self.effectScale, self.effectScale, self.effectScale), false)
+        end
+        if _SoundManager ~= nil then
+            _SoundManager:PlaySlide()
+        end
+
+        log("[Slide] start mul=" .. tostring(self.speedMultiplier))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void EndSlide()
+        -- Restores run speed and avatar scale. Does NOT force an FSM state — the caller decides
+        -- (key released -> RUN, interrupted by a jump -> the FSM already moved to JUMP).
+        self.active = false
+        if self.controller ~= nil then
+            self.controller.speedMultiplier = 1
+        end
+        self.Entity.TransformComponent.Scale = self.origScale
+        if self.playSlidePose then
+            self:RequestSlideAnim(false)
+            self:RestoreRunPose()
+        end
+        log("[Slide] end")
+    end
+
+    method void OnUpdate(number delta)
+        -- Hold-to-slide loop for the local player: start while held on the ground, end on release
+        -- or interruption.
+        if not self.isLocal then return end
+
+        local holding = self:IsSlideKeyHeld()
+
+        if self.active then
+            -- Something else moved us out of SLIDE (jump cancel / land logic) -> clean up.
+            if self.fsm ~= nil and not self.fsm:Is("SLIDE") then
+                self:EndSlide()
+                return
+            end
+            -- Key released -> finish the slide and return to running.
+            if not holding then
+                if self.fsm ~= nil then self.fsm:TryChange("RUN") end
+                self:EndSlide()
+            elseif self.playSlidePose then
+                -- Still sliding: keep asserting crouch locally. The server MOVE->crouch remap is the
+                -- real fix, but it takes an RPC round-trip to apply; this covers that window (and once
+                -- the remap lands the engine also sends crouch, so the two agree — no race).
+                self:PlaySlidePose()
+            end
+        else
+            -- Holding the slide key while grounded and running begins (or auto-resumes) the slide,
+            -- UNLESS a fast-fall is suppressing it: after a dive landing the player runs, and the
+            -- slide stays blocked until the key is released (so a held Down/S can't slide on landing).
+            if holding then
+                local diveSuppressed = self.fastfall ~= nil and self.fastfall.slideLatched
+                if not diveSuppressed then
+                    self:StartSlide()
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void PlaySlidePose()
+        -- Forces the avatar into the native CROUCH (prone) body action — the slide pose.
+        -- BodyActionStateChangeEvent is a high-level body-state event, so it is sent to the avatar
+        -- ROOT entity (self.Entity), not the body entity. needResetAction=false keeps it from
+        -- restarting when it's already the crouch pose (so re-asserting every frame is flicker-free).
+        local ev = BodyActionStateChangeEvent()
+        ev.ActionState = MapleAvatarBodyActionState.Crouch
+        ev.needResetAction = false
+        ev.playRate = self.slidePlayRate
+        self.Entity:SendEvent(ev)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RestoreRunPose()
+        -- Snaps the avatar back to the walk motion the instant the slide ends, so it doesn't stay
+        -- stuck in the prone pose for a frame. Skipped while airborne: a jump-cancelled slide is
+        -- already owned by the controller's air pose, so don't fight it.
+        if self.body ~= nil and not self.body:IsOnGround() then return end
+        local ev = BodyActionStateChangeEvent()
+        ev.ActionState = MapleAvatarBodyActionState.Walk
+        ev.needResetAction = true
+        self.Entity:SendEvent(ev)
+    end
+
+    @ExecSpace("Server")
+    method void RequestSlideAnim(boolean on)
+        -- Remaps THIS player's MOVE body action so the engine itself drives the slide pose for the
+        -- whole slide (the single animation authority — no client/engine race). Server-side because
+        -- StateToAvatarBodyActionSheet is @Sync; the remap also reaches other clients.
+        if on then
+            self:SetMoveAction("crouch", self.slidePlayRate)
+        else
+            self:SetMoveAction("walk", self.origMovePlayRate)
+        end
+    end
+
+    method void SetMoveAction(string name, number rate)
+        -- Sets the MOVE body action and preserves an explicit PlayRate (SetActionSheet alone resets
+        -- PlayRate to 1, which would slow the run animation). Runs server-side (called only from the
+        -- server RPC RequestSlideAnim), where StateToAvatarBodyActionSheet has sync authority.
+        if self.asac == nil then return end
+        self.asac:SetActionSheet("MOVE", name)
+        local el = self.asac.StateToAvatarBodyActionSheet["MOVE"]
+        if el ~= nil then
+            el.PlayRate = rate
+            self.asac.StateToAvatarBodyActionSheet["MOVE"] = el
+        end
+    end
+
+end

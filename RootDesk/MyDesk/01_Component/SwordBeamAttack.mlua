@@ -1,0 +1,54 @@
+@Component
+script SwordBeamAttack extends AttackComponent
+
+    -- Damage applied per hit. Set by PowerStrike at launch (stat-scaled), so the .model default
+    -- is only a fallback when a beam is fired without configuration.
+    property number BaseDamage = 100
+    property number CriticalRate = 1.5
+    -- Must match the attackInfo the beam passes to AttackFrom (PowerStrike.AttackInfo / SwordBeam.AttackInfo).
+    property string SkillTag = "PowerStrike"
+
+    method integer CalcDamage(Entity attacker, Entity defender, string attackInfo)
+        -- Returns the configured beam damage for our skill tag; anything else is treated as a stray 1.
+        -- ⚠ No @ExecSpace: parent AttackComponent.CalcDamage is ExecSpace=All; adding one => LEA-3014.
+        if attackInfo == self.SkillTag then
+            return self.BaseDamage
+        end
+        return 1
+    end
+
+    method float GetCriticalDamageRate()
+        -- Critical multiplier (unused unless CalcCritical returns true).
+        return self.CriticalRate
+    end
+
+    method boolean CalcCritical(Entity attacker, Entity defender, string attackInfo)
+        -- Beams do not crit by default.
+        return false
+    end
+
+    method boolean IsAttackTarget(Entity defender, string attackInfo)
+        -- Only damage non-player entities that carry a HitComponent (i.e. monsters). Excludes players,
+        -- the beam itself, and anything without a hitbox. The beam is the attacker entity here, so
+        -- player exclusion must be explicit (it is NOT the same entity as the firing player).
+        if defender == nil then
+            return false
+        end
+        if defender == self.Entity then
+            return false
+        end
+        if defender.HitComponent == nil then
+            return false
+        end
+        if defender.PlayerComponent ~= nil then
+            return false
+        end
+        return true
+    end
+
+    method void OnAttack(Entity defender)
+        -- Per-hit log for verification.
+        log("[SwordBeamAttack] OnAttack -> " .. tostring(defender and defender.Name or "unknown"))
+    end
+
+end

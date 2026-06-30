@@ -1,0 +1,241 @@
+@Component
+script RunSpeedEffect extends Component
+
+	-- Client-side "sense of speed" visuals for the auto-runner.
+	-- Two layered effects, both driven by the player's ACTUAL horizontal velocity so they
+	-- automatically intensify when a stat upgrade raises the run speed and stop when the
+	-- runner is killed / halted:
+	--   1) Afterimage trail (잔상) — a fading streak left behind the moving character.
+	--      Spawned via PlayEffect (NOT attached) at the player's current world position, so
+	--      the player runs ahead and leaves the streak behind = a true motion trail.
+	--   2) Speed lines (스스슥) — cyan streaks flicking past around the camera, spread across
+	--      the screen. Local player only (it is a camera/view garnish, not a per-avatar effect).
+	-- Effects are one-shot (isLoop = false) and auto-expire, so there is nothing to RemoveEffect.
+
+	-- ───────── Toggles ─────────
+	property boolean enableAfterimage = true
+	property boolean enableSpeedLines = true
+	-- Afterimage style:
+	--   "ghost"  → fading copies of the REAL avatar (clones the player's costume). Default.
+	--   "streak" → cheap cyan motion streaks (no avatar reference; the original fallback).
+	-- If the ghost trail misbehaves in a playtest, flip this to "streak" for an instant, safe revert.
+	property string afterimageMode = "ghost"
+	-- By default the (streak) afterimage shows for every visible player. Ghost mode is always
+	-- driven by each player's own client (so there is exactly one networked ghost per player).
+	-- Set true to restrict the streak afterimage to the local player only.
+	property boolean onlyLocalPlayer = false
+	-- Minimum |horizontal velocity| (world units/sec) before any effect plays — gates out the
+	-- standing/dead state so no trail is drawn when the runner is not actually moving.
+	property number minSpeed = 0.3
+
+	-- ───────── Afterimage trail (잔상) ─────────
+	-- animationclip RUID. Default = clean cyan light-beam streak. Swap for a different look:
+	--   "45ee59f106bd46ae9d0ca94254d6b725" = compact diagonal motion dash
+	--   "df03296854a442e0843e03761af114fe" = textured cyan brush streak
+	property string afterimageRUID = "18e8229f0c23452bb3fbe5d88b8a3c56"
+	-- World-unit distance the player must travel before the next ghost is dropped. Smaller =
+	-- denser/smoother trail. Distance-based (not time-based) so spacing is even at any speed/FPS.
+	property number afterimageSpacing = 0.35
+	property number afterimageAlpha = 0.45
+	property number afterimageScale = 0.7
+	-- The default streak extends to the right; flipping it makes the tail trail behind a
+	-- right-moving runner.
+	property boolean afterimageFlipX = true
+	-- Render offset relative to the avatar's OrderInLayer (negative = behind the character).
+	property integer afterimageOrderOffset = -1
+
+	-- ───────── Ghost trail (잔상, true-avatar mode) ─────────
+	-- Spawns fading copies of the runner's actual avatar. The ghost model ("runghost") clones the
+	-- player's costume via CostumeManagerComponent.DefaultEquipUserId, so it always matches the
+	-- current look. Heavier than streaks (each ghost is an avatar entity) — keep the pool small.
+	property string ghostModelId = "runghost"
+	-- World-unit distance between ghosts. Larger = fewer ghosts alive at once (cheaper). With
+	-- ghostDuration 0.45s at run speed ~2 u/s and 0.5 spacing, ~2 ghosts are alive at a time.
+	property number ghostSpacing = 0.5
+	-- Ghost lifetime (seconds). MUST equal RunGhost.Duration on the ghost model so the fade
+	-- finishes exactly as the server destroys it.
+	property number ghostDuration = 0.45
+	property integer ghostCount = 0
+
+	-- ───────── Speed lines (스스슥, ambient) ─────────
+	property string speedLineRUID = "df03296854a442e0843e03761af114fe"
+	-- Base seconds between lines; shortened automatically as the run speed climbs.
+	property number speedLineInterval = 0.13
+	property number speedLineAlpha = 0.55
+	property number speedLineScaleMin = 0.8
+	property number speedLineScaleMax = 1.8
+	-- Horizontal spawn band relative to the player (negative = behind, positive = ahead). Lines
+	-- placed ahead are overtaken by the camera and flick past, selling the "rushing by" feel.
+	property number lineAheadMin = -3.0
+	property number lineAheadMax = 7.0
+	-- Vertical spread (± world units) so lines appear across the whole screen height.
+	property number lineYRange = 3.2
+	-- The reference speed the interval scaling is normalized against (≈ the base run speed).
+	property number speedReference = 2.0
+
+	-- ───────── Cached / runtime state ─────────
+	property RigidbodyComponent body = nil
+	property AvatarRendererComponent avatar = nil
+	property string sortingLayer = ""
+	property integer avatarOrder = 4
+	property Vector3 lastGhostPos = Vector3(0, 0, 0)
+	property number lineTimer = 0
+	property boolean loggedGhost = false
+	property boolean loggedLine = false
+
+	method void OnBeginPlay()
+		-- Caches the body + avatar renderer and seeds the trail anchor (client-side only).
+		if not self:IsClient() then return end
+
+		self.body = self.Entity.RigidbodyComponent
+		self.avatar = self.Entity.AvatarRendererComponent
+		if isvalid(self.avatar) then
+			self.sortingLayer = self.avatar.SortingLayer
+			self.avatarOrder = self.avatar.OrderInLayer
+		end
+		self.lastGhostPos = self.Entity.TransformComponent.WorldPosition
+
+		log("[RunSpeedEffect] OnBeginPlay - body: " .. tostring(self.body ~= nil)
+			.. " avatar: " .. tostring(isvalid(self.avatar))
+			.. " layer: " .. tostring(self.sortingLayer))
+	end
+
+	method void OnUpdate(number delta)
+		-- Drives both speed effects from the player's real horizontal velocity each frame.
+		if not self:IsClient() then return end
+		if self.body == nil then return end
+
+		local speed = math.abs(self.body.MoveVelocity.x)
+		if speed < self.minSpeed then return end
+
+		local isLocalPlayer = (_UserService.LocalPlayer == self.Entity)
+
+		if self.enableAfterimage then
+			if self.afterimageMode == "ghost" then
+				-- Networked avatar ghost: only the owner client drives it, so there is exactly
+				-- one ghost per player (the server spawn is then visible to everyone).
+				if isLocalPlayer then self:UpdateGhostTrail() end
+			else
+				if isLocalPlayer or not self.onlyLocalPlayer then self:UpdateAfterimage() end
+			end
+		end
+
+		if self.enableSpeedLines and isLocalPlayer then
+			self.lineTimer = self.lineTimer - delta
+			if self.lineTimer <= 0 then
+				self:SpawnSpeedLine()
+				-- Faster run → more frequent lines (interval shrinks, clamped at the base speed).
+				local factor = math.max(1.0, speed / self.speedReference)
+				self.lineTimer = self.speedLineInterval / factor
+			end
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateAfterimage()
+		-- Drops a fading streak at the current position once the player has moved far enough.
+		local pos = self.Entity.TransformComponent.WorldPosition
+		local dx = pos.x - self.lastGhostPos.x
+		local dy = pos.y - self.lastGhostPos.y
+		if (dx * dx + dy * dy) < (self.afterimageSpacing * self.afterimageSpacing) then
+			return
+		end
+		self.lastGhostPos = pos
+
+		local options = {
+			["Alpha"] = self.afterimageAlpha,
+			["FlipX"] = self.afterimageFlipX,
+		}
+		if self.sortingLayer ~= "" then
+			options["SortingLayer"] = self.sortingLayer
+			options["OrderInLayer"] = self.avatarOrder + self.afterimageOrderOffset
+		end
+
+		local scale = Vector3(self.afterimageScale, self.afterimageScale, self.afterimageScale)
+		_EffectService:PlayEffect(self.afterimageRUID, self.Entity, pos, 0, scale, false, options)
+
+		if not self.loggedGhost then
+			self.loggedGhost = true
+			log("[RunSpeedEffect] afterimage spawned at x=" .. tostring(pos.x))
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateGhostTrail()
+		-- Distance-gated request to spawn one fading avatar ghost behind the runner. Runs on the
+		-- owner client only; the actual spawn happens on the server (so every client sees it).
+		local pos = self.Entity.TransformComponent.WorldPosition
+		local dx = pos.x - self.lastGhostPos.x
+		local dy = pos.y - self.lastGhostPos.y
+		if (dx * dx + dy * dy) < (self.ghostSpacing * self.ghostSpacing) then
+			return
+		end
+		self.lastGhostPos = pos
+
+		-- The player's UserId drives the ghost's costume clone (DefaultEquipUserId).
+		local userId = ""
+		local pc = self.Entity.PlayerComponent
+		if isvalid(pc) then userId = pc.UserId end
+
+		self:SpawnGhostServer(pos, userId)
+
+		if not self.loggedGhost then
+			self.loggedGhost = true
+			log("[RunSpeedEffect] ghost spawn requested userId=" .. tostring(userId))
+		end
+	end
+
+	@ExecSpace("Server")
+	method void SpawnGhostServer(Vector3 pos, string userId)
+		-- Spawns the avatar ghost on the server, clones the player's look, sets a running pose,
+		-- and schedules its removal so the client-side fade finishes exactly on destroy.
+		local map = self.Entity.CurrentMap
+		if not isvalid(map) then return end
+
+		self.ghostCount = self.ghostCount + 1
+		local ghost = _SpawnService:SpawnByModelId(self.ghostModelId, "RunGhost_" .. tostring(self.ghostCount), pos, map)
+		
+		
+		if not isvalid(ghost) then
+			log_warning("[RunSpeedEffect] ghost spawn failed for modelId=" .. tostring(self.ghostModelId))
+			return
+		end
+
+		-- Mirror the runner's avatar appearance (clones this user's equipped costume).
+		local costume = ghost.CostumeManagerComponent
+		if isvalid(costume) and userId ~= "" then
+			costume.DefaultEquipUserId = userId
+		end
+
+		-- Pose is set client-side by the ghost's own RunGhost component (BodyActionStateChangeEvent),
+		-- NOT via StateComponent:ChangeState — avatar state authority is client-side, so a server
+		-- ChangeState would throw [LEA-3022], and "MOVE" isn't registered without a controller ([LEA-3005]).
+
+		-- Auto-remove after the fade duration.
+		ghost:Destroy(self.ghostDuration)
+	end
+
+	@ExecSpace("ClientOnly")
+	method void SpawnSpeedLine()
+		-- Flicks one cyan streak past the camera at a random height across the screen.
+		local p = self.Entity.TransformComponent.WorldPosition
+		local aheadX = self.lineAheadMin + _UtilLogic:RandomDouble() * (self.lineAheadMax - self.lineAheadMin)
+		local offY = (_UtilLogic:RandomDouble() * 2 - 1) * self.lineYRange
+		local pos = Vector3(p.x + aheadX, p.y + offY, p.z)
+
+		local s = self.speedLineScaleMin + _UtilLogic:RandomDouble() * (self.speedLineScaleMax - self.speedLineScaleMin)
+		local scale = Vector3(s, s, s)
+		local options = {
+			["Alpha"] = self.speedLineAlpha,
+			["FlipX"] = true,
+		}
+
+		_EffectService:PlayEffect(self.speedLineRUID, self.Entity, pos, 0, scale, false, options)
+
+		if not self.loggedLine then
+			self.loggedLine = true
+			log("[RunSpeedEffect] speed line spawned at y-offset=" .. tostring(offY))
+		end
+	end
+
+end
