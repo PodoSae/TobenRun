@@ -15,7 +15,7 @@
     "Json": {
       "Name": "defaultuserenterleavelogic",
       "PlayerUri": "model://defaultplayer",
-      "StartPoint": "/maps/TestMap",
+      "StartPoint": "/maps/RunStage",
       "worldCoreVersion": "26.5.0.0",
       "worldStudioVersion": "0.1.0.0",
       "useService": 0
