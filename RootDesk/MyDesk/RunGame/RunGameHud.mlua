@@ -17,6 +17,9 @@ property number fallDropMargin = 2.0
 property number lastGroundedX = 0
 
 property Entity scoreText = "2de4eed6-7a29-4a36-be9b-57cc5f3bf397"
+-- Distance-progress HUD (how far along the course the runner is): a fill bar + "x cur / goal" label.
+property Entity progressFill = "e0c5255c-5d64-4a00-a646-26fc75c6e869"
+property Entity progressText = "2aad731c-6936-4da9-aabe-98f98371ae33"
 property Entity gameOverPanel = "133f65c0-d55e-41f2-b3f2-1ae708139b40"
 property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
 property Entity restartButton = "27d7a562-4150-42d1-8716-a3bab2ccc588"
@@ -37,6 +40,21 @@ property number spawnX = 0
 property number spawnY = 0
 property number bestX = 0
 property number goalX = 0
+-- Boss course (Set,goal,boss): no fixed clear line — keep running while the floor auto-extends, and
+-- Clear only once the boss that appeared has been defeated. bossSeen tracks "a boss has existed".
+property boolean bossMode = false
+property boolean bossSeen = false
+-- Boss intro cutscene: when the runner nears the arena end (goalX == triggerX in boss mode), briefly
+-- freeze the run and show the BossIntroGroup banner, then hide it, resume, and ask the server to spawn
+-- the boss. State: 0 = not started, 1 = playing (runner frozen), 2 = done (boss requested).
+@DisplayName("보스 등장 연출 시작 접근거리")
+property number bossIntroApproach = 8
+@DisplayName("보스 등장 연출 시간(초)")
+property number bossIntroDuration = 1.8
+property integer bossIntroState = 0
+property number bossIntroCountdown = 0
+-- BossIntroGroup root (DefaultShow=false → Enable to show the banner). Injected by the UI builder.
+property Entity bossIntroGroup = "5f0e1d04-cf84-447a-8e4f-a0fd31ac5c58"
 property integer score = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
@@ -116,20 +134,28 @@ method void OnUpdate(number delta)
 		self.score = newScore
 		self:SetScore(self.score)
 	end
+	self:UpdateProgress()
 
-	-- Coins: collect when the runner passes within range.
-	if self.coins ~= nil then
-		for _, cn in ipairs(self.coins) do
-			if cn.got == false and math.abs(x - cn.x) <= self.coinWindow then
-				cn.got = true
-				self.coinScore = self.coinScore + self.coinBonus
-				self:HideCourseEntity("Coin_" .. tostring(math.floor(cn.x)))
+	-- Coins are collected by each Coin pickup's own box-overlap (script.Coin → AddCoin); no loop here.
+
+	-- End condition. Normal course: reaching goalX clears. Boss course: never clear at goalX — keep
+	-- running (the floor auto-extends server-side) and clear only when the boss is defeated.
+	if self.bossMode then
+		-- Boss intro cutscene gate. While it plays (state 1) keep the runner frozen and skip normal
+		-- boss-clear / gap handling; the countdown ends it, which resumes the run and spawns the boss.
+		if self.bossIntroState == 1 then
+			self.bossIntroCountdown = self.bossIntroCountdown - delta
+			if self.bossIntroCountdown <= 0 then
+				self:EndBossIntro()
 			end
+			return
 		end
-	end
-
-	-- Reached the end of the course → clear (game finished).
-	if self.goalX > self.spawnX and x >= self.goalX then
+		if self.bossIntroState == 0 and self.goalX > self.spawnX and x >= self.goalX - self.bossIntroApproach then
+			self:BeginBossIntro()
+			return
+		end
+		self:CheckBossClear()
+	elseif self.goalX > self.spawnX and x >= self.goalX then
 		self:Clear()
 		return
 	end
@@ -236,9 +262,18 @@ method void OnArriveMap(Entity player)
 	self.coinScore = 0
 	self.goalX = cfg.goalX
 	self.courseSpeed = cfg.speed
+	self.bossMode = cfg.bossMode
+	self.bossSeen = false
+	-- Reset the boss-intro cutscene for the new stage and make sure its banner is hidden.
+	self.bossIntroState = 0
+	self.bossIntroCountdown = 0
+	if isvalid(self.bossIntroGroup) then
+		self.bossIntroGroup.Enable = false
+	end
 	-- Rebuild coin / gap interactions for this stage.
 	self:BuildCourseInteractions(self.curStage)
 	self:SetScore(0)
+	self:UpdateProgress()
 	log("[RunGameHud] arrived map=" .. tostring(self.curMapName) .. " spawnX=" .. tostring(self.spawnX) .. " goalX=" .. tostring(self.goalX))
 	-- If a stage was selected (teleport in flight), auto-start the run on arrival.
 	if self.pendingStart then
@@ -347,7 +382,10 @@ end
 @ExecSpace("ClientOnly")
 method table ResolveStageConfig(string stage)
 	-- Resolve a stage's floorY / startX / goalX from CourseGen defaults + the stage's "Set" commands.
-	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0, speed = self.courseSpeed }
+	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0, speed = self.courseSpeed, length = 120.0, bossMode = false }
+	if _CourseGen ~= nil then
+		cfg.length = _CourseGen.defLength
+	end
 	if _CourseGen ~= nil then
 		cfg.floorY = _CourseGen.defFloorY
 		cfg.startX = _CourseGen.defStartX
@@ -364,19 +402,31 @@ method table ResolveStageConfig(string stage)
 	for i = 1, n do
 		if ds:GetCell(i, "cmd") == "Set" then
 			local key = ds:GetCell(i, "p1")
-			local v = tonumber(ds:GetCell(i, "p2"))
-			if v ~= nil then
-				if key == "floorY" then
-					cfg.floorY = v
-				elseif key == "startX" then
-					cfg.startX = v
-				elseif key == "goal" then
-					cfg.goalX = v
-				elseif key == "speed" then
-					cfg.speed = v
+			local raw = ds:GetCell(i, "p2")
+			if key == "goal" and raw == "boss" then
+				cfg.bossMode = true
+			else
+				local v = tonumber(raw)
+				if v ~= nil then
+					if key == "floorY" then
+						cfg.floorY = v
+					elseif key == "startX" then
+						cfg.startX = v
+					elseif key == "length" then
+						cfg.length = v
+					elseif key == "goal" then
+						cfg.goalX = v
+					elseif key == "speed" then
+						cfg.speed = v
+					end
 				end
 			end
 		end
+	end
+	-- Boss course: no fixed clear line — the progress bar fills up to where the boss appears
+	-- (startX + length); winning happens when the boss is defeated (see CheckBossClear).
+	if cfg.bossMode then
+		cfg.goalX = cfg.startX + cfg.length
 	end
 	return cfg
 end
@@ -392,27 +442,22 @@ method void BuildCourseInteractions(string stage)
 	if stage == nil or stage == "" then
 		return
 	end
-	local ds = _DataService:GetTable(self:CourseTableName(stage))
-	if ds == nil then
+	if _CourseGen == nil then
 		return
 	end
-	local n = ds:GetRowCount()
-	for i = 1, n do
-		local cmd = ds:GetCell(i, "cmd")
-		if cmd == "Spawn" then
-			local kind = ds:GetCell(i, "p1")
-			local cx = tonumber(ds:GetCell(i, "p2")) or 0
-			if kind == "coin" then
-				table.insert(self.coins, { x = cx, got = false })
-			end
-		elseif cmd == "Gap" then
+	-- Read the SAME expanded rows the server builds from (Place bundles expanded, x offset applied),
+	-- so gaps authored inside a pattern are detected client-side too. Coins are NOT tracked here anymore
+	-- — each coin is a real entity (script.Coin) that collects itself on box-overlap and calls AddCoin.
+	local rows = _CourseGen:ExpandCourseRows(stage)
+	for _, r in ipairs(rows) do
+		if r.cmd == "Gap" then
 			-- Param order matches Spawn: p1 = gap length, p2 = x (so p2 is ALWAYS the x-coordinate).
-			local glen = tonumber(ds:GetCell(i, "p1")) or 3
-			local gx = tonumber(ds:GetCell(i, "p2")) or 0
+			local glen = tonumber(r.p1) or 3
+			local gx = tonumber(r.p2) or 0
 			table.insert(self.gapZones, { x1 = gx, x2 = gx + glen, hit = false })
 		end
 	end
-	log("[RunGameHud] interactions stage=" .. tostring(stage) .. " coins=" .. tostring(#self.coins) .. " gaps=" .. tostring(#self.gapZones))
+	log("[RunGameHud] interactions stage=" .. tostring(stage) .. " gaps=" .. tostring(#self.gapZones))
 end
 
 @ExecSpace("ClientOnly")
@@ -430,6 +475,96 @@ method void SetScore(integer score)
 	if isvalid(self.scoreText) then
 		self.scoreText.TextComponent.Text = "SCORE  " .. tostring(score)
 	end
+end
+
+@ExecSpace("ClientOnly")
+method void AddCoin(integer amount)
+	-- Called by a Coin pickup (script.Coin) when the runner touches it. Add to the coin score and
+	-- refresh the on-screen total immediately.
+	self.coinScore = self.coinScore + amount
+	local distScore = math.floor((self.bestX - self.spawnX) * 10)
+	if distScore < 0 then
+		distScore = 0
+	end
+	self.score = distScore + self.coinScore
+	self:SetScore(self.score)
+end
+
+@ExecSpace("ClientOnly")
+method void UpdateProgress()
+	-- Update the course-progress HUD: fill bar (0..1) + "x cur / goal" label, from the runner's
+	-- best (furthest) x relative to the goal. Called each frame while running and on map arrival.
+	local prog = 0
+	if self.goalX > self.spawnX then
+		prog = (self.bestX - self.spawnX) / (self.goalX - self.spawnX)
+		if prog < 0 then
+			prog = 0
+		end
+		if prog > 1 then
+			prog = 1
+		end
+	end
+	if isvalid(self.progressFill) and self.progressFill.SpriteGUIRendererComponent ~= nil then
+		self.progressFill.SpriteGUIRendererComponent.FillAmount = prog
+	end
+	if isvalid(self.progressText) and self.progressText.TextComponent ~= nil then
+		self.progressText.TextComponent.Text = "x " .. tostring(math.floor(self.bestX)) .. " / " .. tostring(math.floor(self.goalX))
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void CheckBossClear()
+	-- Boss course win detection: once a boss (script.MushmomBoss) has appeared on the map, the run is
+	-- cleared the moment it is gone (the boss destroys itself on death). MushmomBoss.Hp is @Sync, but
+	-- "entity no longer present" is the simplest robust signal.
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	local map = player.CurrentMap
+	if isvalid(map) == false then
+		return
+	end
+	local bosses = map:GetChildComponentsByTypeName("script.MushmomBoss", false)
+	local alive = (bosses ~= nil and #bosses > 0)
+	if alive then
+		self.bossSeen = true
+	elseif self.bossSeen then
+		self.bossSeen = false
+		self:Clear()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void BeginBossIntro()
+	-- Freeze the runner and show the boss-approach banner. A per-frame countdown in OnUpdate ends it.
+	self.bossIntroState = 1
+	self.bossIntroCountdown = self.bossIntroDuration
+	self:SetRunnerActive(false)
+	local player = _UserService.LocalPlayer
+	if isvalid(player) and player.RigidbodyComponent ~= nil then
+		player.RigidbodyComponent.MoveVelocity = Vector2(0, 0)
+	end
+	if isvalid(self.bossIntroGroup) then
+		self.bossIntroGroup.Enable = true
+	end
+	log("[RunGameHud] boss intro begin")
+end
+
+@ExecSpace("ClientOnly")
+method void EndBossIntro()
+	-- Hide the banner, resume the run, and ask the server to spawn the boss now.
+	self.bossIntroState = 2
+	if isvalid(self.bossIntroGroup) then
+		self.bossIntroGroup.Enable = false
+	end
+	if self.isAlive then
+		self:SetRunnerActive(true)
+	end
+	if _CourseGen ~= nil then
+		_CourseGen:RequestBossSpawn(self.curMapName)
+	end
+	log("[RunGameHud] boss intro end -> request boss spawn")
 end
 
 @ExecSpace("ClientOnly")

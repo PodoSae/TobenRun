@@ -24,9 +24,11 @@ script SwordBeam extends Component
     @HideFromInspector property Entity OwnerEntity = nil
 
     -- Map rectangle: the beam recycles the instant it leaves this area ("맵을 벗어나면 사라진다").
-    -- Defaults cover map01's tile extent (X[-9,89]) plus vertical margin. Tune per map if needed.
-    property number BoundMinX = -10
-    property number BoundMaxX = 90
+    -- The running course extends far to the right (boss arena is effectively infinite), so the X bounds
+    -- are opened up wide — the real range limit is Speed * MaxLifetime (~112 units). Y bounds still cull
+    -- any beam that somehow flies off vertically.
+    property number BoundMinX = -100000
+    property number BoundMaxX = 100000
     property number BoundMinY = -12
     property number BoundMaxY = 16
 

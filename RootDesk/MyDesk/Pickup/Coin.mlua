@@ -1,0 +1,66 @@
+@Component
+script Coin extends Component
+
+    -- Score awarded when the runner touches this coin.
+    property integer Bonus = 50
+    -- Pickup box half-extents (world units); self-sized from the sprite footprint in OnBeginPlay.
+    property number PickHalfWidth = 0.4
+    property number PickHalfHeight = 0.4
+    -- Pickup box = sprite footprint * this fraction (1.0 = exact image size).
+    property number PickFairness = 1.0
+    -- Runner body half-extents used for the overlap test (so a near pass still grabs the coin).
+    property number PlayerHalfWidth = 0.4
+    property number PlayerHalfHeight = 0.7
+    property boolean consumed = false
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- Coin is collected client-side (the score lives on the client @Logic RunGameHud).
+        self.consumed = false
+        self:AutoSize()
+        log("[Coin] ready box=" .. string.format("%.2f", self.PickHalfWidth) .. "x" .. string.format("%.2f", self.PickHalfHeight))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void AutoSize()
+        -- Size the pickup box to the coin sprite footprint: (px / PixelPerUnit) * Transform.Scale * fairness.
+        local spr = self.Entity.SpriteRendererComponent
+        if spr == nil then
+            return
+        end
+        local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
+        if sp == nil or sp.PixelPerUnit <= 0 then
+            return
+        end
+        local sc = self.Entity.TransformComponent.Scale
+        self.PickHalfWidth = (sp.Width / sp.PixelPerUnit) * math.abs(sc.x) * 0.5 * self.PickFairness
+        self.PickHalfHeight = (sp.Height / sp.PixelPerUnit) * math.abs(sc.y) * 0.5 * self.PickFairness
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- Collect when the local runner's body actually overlaps this coin's box (real x AND y overlap,
+        -- unlike the old x-only proximity). Body-less coin, so we compare world positions directly.
+        if self.consumed then
+            return
+        end
+        local player = _UserService.LocalPlayer
+        if isvalid(player) == false then
+            return
+        end
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        local up = player.TransformComponent.WorldPosition
+        local dx = up.x - myPos.x
+        local dy = up.y - myPos.y
+        if math.abs(dx) <= (self.PickHalfWidth + self.PlayerHalfWidth) and math.abs(dy) <= (self.PickHalfHeight + self.PlayerHalfHeight) then
+            self.consumed = true
+            if _RunGameHud ~= nil then
+                _RunGameHud:AddCoin(self.Bonus)
+            end
+            -- Hide locally (server keeps the entity until the course is rebuilt / cleared).
+            self.Entity.Enable = false
+            log("[Coin] collected +" .. tostring(self.Bonus))
+        end
+    end
+
+end
