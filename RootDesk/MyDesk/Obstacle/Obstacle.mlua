@@ -29,6 +29,22 @@ script Obstacle extends Component
     property number aliveTime = 0
     property boolean consumed = false
 
+    -- ── Ultimate knockback (launched fly-off) ──
+    -- When the ultimate dash hits this obstacle it is LAUNCHED instead of destroyed: it flies off in the
+    -- dash direction with an upward pop, spinning, then despawns. Body-less entity, so the per-frame
+    -- transform writes (Position + ZRotation) replicate to clients.
+    property boolean launched = false
+    property number KnockSpeedX = 12.0     -- initial horizontal launch speed (world u/s)
+    property number KnockSpeedY = 9.0      -- initial upward pop (world u/s)
+    property number KnockGravity = 30.0    -- downward accel applied during the launch (u/s^2)
+    property number KnockSpin = 720.0      -- spin rate (degrees/sec)
+    property number KnockLifetime = 1.5    -- seconds the launched obstacle lives before despawn
+    property number knockVX = 0
+    property number knockVY = 0
+    property number knockTime = 0
+    property number knockAngle = 0
+    property number knockSpinSign = -1
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
         -- Logs spawn; the obstacle starts below ground and rises to TargetY.
@@ -59,6 +75,11 @@ script Obstacle extends Component
     @ExecSpace("ServerOnly")
     method void OnUpdate(number delta)
         -- Rises from below to TargetY, checks player contact, and self-destructs on lifetime.
+        -- Once launched by the ultimate, the knockback fly-off takes over all movement.
+        if self.launched then
+            self:UpdateLaunch(delta)
+            return
+        end
         if self.consumed then return end
 
         -- Rise toward TargetY. Body-less entity -> direct transform writes are allowed and replicate.
@@ -107,6 +128,38 @@ script Obstacle extends Component
                     return
                 end
             end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LaunchKnockback(number dir)
+        -- Called by the ultimate dash on contact: launch this obstacle in the dash direction (dir = +1
+        -- right / -1 left) with an upward pop + spin, instead of a plain destroy. Idempotent — a repeat
+        -- hit while already airborne is ignored so its velocity is not re-seeded every frame.
+        if self.launched or self.consumed then return end
+        self.launched = true
+        self.knockVX = self.KnockSpeedX * dir
+        self.knockVY = self.KnockSpeedY
+        self.knockTime = 0
+        self.knockAngle = self.Entity.TransformComponent.ZRotation
+        -- Tumble forward in the travel direction (rightward flight spins clockwise).
+        self.knockSpinSign = -dir
+        log("[Obstacle] launched knockback dir=" .. tostring(dir))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateLaunch(number delta)
+        -- Drives the fly-off each frame: horizontal drift + upward pop pulled down by gravity, spinning as
+        -- it goes, then despawns after KnockLifetime. Body-less entity -> transform writes replicate.
+        local tr = self.Entity.TransformComponent
+        self.knockVY = self.knockVY - self.KnockGravity * delta
+        local pos = tr.Position
+        tr.Position = Vector3(pos.x + self.knockVX * delta, pos.y + self.knockVY * delta, pos.z)
+        self.knockAngle = self.knockAngle + self.KnockSpin * self.knockSpinSign * delta
+        tr.ZRotation = self.knockAngle
+        self.knockTime = self.knockTime + delta
+        if self.knockTime >= self.KnockLifetime then
+            self:Despawn()
         end
     end
 

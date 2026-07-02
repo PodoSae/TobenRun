@@ -15,6 +15,9 @@ script UltimateSkill extends Component
     @Sync property number Gauge = 0
     property number MaxGauge = 100
     property number GaugeFillPerSec = 12.5     -- ~8s from empty to full
+    -- Boss fight: the time-based fill is paused so the gauge only charges from landed boss hits
+    -- (AddGauge). Toggled by MushmomBoss on begin/death. AddGauge still works while paused.
+    @Sync property boolean AutoFillPaused = false
 
     -- ── Dash tuning ──
     property number DashDuration = 1.2         -- seconds the dash lasts
@@ -36,6 +39,13 @@ script UltimateSkill extends Component
     -- The rigidbody's WalkSpeed is the MAX ground speed: it clamps MoveVelocity, so the dash speed
     -- boost is silently capped unless we also raise this limit for the dash. Captured on begin play.
     property number origWalkSpeed = 0
+    -- The player's NORMAL gravity, captured on begin play. During the dash we set Gravity = 0 so the
+    -- player receives no downward force and simply holds altitude (no falling, no position snapping —
+    -- snapping fought tile collision and pushed the player down). Restored exactly when the dash ends.
+    property number origGravity = 0
+    -- The rigidbody's normal IsolatedMove flag. During the dash we force it TRUE so the player does not
+    -- fall off the end of a foothold — the charge crosses pits at foothold height. Restored on dash end.
+    property boolean origIsolatedMove = false
     property any fsm = nil
     property any controller = nil
     property boolean isLocal = false
@@ -51,9 +61,12 @@ script UltimateSkill extends Component
         -- raise it on the server while dashing.
         self.controller = self.Entity:GetComponent("script.PlayerController")
         self.body = self.Entity.RigidbodyComponent
-        -- Remember the normal max ground speed so the dash can raise it and then restore it exactly.
+        -- Remember the normal max ground speed + gravity so the dash can raise the WalkSpeed cap for its
+        -- boosted velocity, toggle gravity to hold the floor, and restore both exactly.
         if self.body ~= nil then
             self.origWalkSpeed = self.body.WalkSpeed
+            self.origGravity = self.body.Gravity
+            self.origIsolatedMove = self.body.IsolatedMove
         end
 
         if self:IsServer() then
@@ -87,24 +100,52 @@ script UltimateSkill extends Component
     end
 
     method void ApplyDashSpeed()
-        -- Raises BOTH the run-speed multiplier AND the rigidbody's max ground speed (WalkSpeed). The
-        -- multiplier alone is not enough: MoveVelocity is clamped by WalkSpeed, so without lifting the
-        -- cap the dash velocity is silently limited to the normal run speed. No @ExecSpace → runs on
-        -- the caller's side (server dash loop or owning client), which is where movement is applied.
+        -- Raises the run-speed multiplier AND the rigidbody's max ground speed (WalkSpeed), and ZEROES
+        -- gravity so the dash holds its altitude. The multiplier alone is not enough: MoveVelocity is
+        -- clamped by WalkSpeed, so without lifting the cap the dash velocity is silently limited to the
+        -- normal run speed. No @ExecSpace → runs on the caller's side (server dash loop or owning
+        -- client), which is where movement is applied.
         if self.controller ~= nil then self.controller.speedMultiplier = self.DashSpeedMul end
-        if self.body ~= nil then self.body.WalkSpeed = self.origWalkSpeed * self.DashSpeedMul end
+        if self.body ~= nil then
+            self.body.WalkSpeed = self.origWalkSpeed * self.DashSpeedMul
+            -- Native anti-fall: keep the player from dropping off foothold ends so the charge crosses
+            -- pits at foothold height instead of falling in.
+            self.body.IsolatedMove = true
+            -- No gravity during the dash: the player receives NO downward force. We do NOT snap the Y
+            -- position anymore — SetWorldPosition fought the tile collision and pushed the player DOWN.
+            self.body.Gravity = 0
+            -- Gravity=0 only stops NEW downward acceleration; any velocity already accumulated keeps
+            -- dragging the player down. Kill the downward component of the move input every frame too so
+            -- the altitude actually holds.
+            local v = self.body.MoveVelocity
+            if v.y < 0 then self.body.MoveVelocity = Vector2(v.x, 0) end
+            -- DEBUG: one line with everything needed to find WHY the player still descends.
+            -- gravity=0 is proven; if realVelY≈0 while y drops → following the ground (terrain), if
+            -- realVelY<0 → some force. onGround distinguishes grounded terrain-follow vs airborne.
+            log("[UltimateSkill] g=" .. tostring(self.body.Gravity)
+                .. " isolated=" .. tostring(self.body.IsolatedMove)
+                .. " onGround=" .. tostring(self.body:IsOnGround())
+                .. " realVelY=" .. tostring(self.body.RealMoveVelocity.y)
+                .. " y=" .. tostring(self.Entity.TransformComponent.WorldPosition.y)
+                .. " server=" .. tostring(self:IsServer()))
+        end
     end
 
     method void RestoreDashSpeed()
-        -- Restores the normal run-speed multiplier and the original max ground speed cap.
+        -- Restores the normal run-speed multiplier, the original max ground speed cap, and gravity
+        -- (the dash zeroed it to hold altitude) so the player falls normally again after.
         if self.controller ~= nil then self.controller.speedMultiplier = 1 end
-        if self.body ~= nil then self.body.WalkSpeed = self.origWalkSpeed end
+        if self.body ~= nil then
+            self.body.WalkSpeed = self.origWalkSpeed
+            self.body.Gravity = self.origGravity
+            self.body.IsolatedMove = self.origIsolatedMove
+        end
     end
 
     method void OnUpdate(number delta)
         -- Server: fill the gauge, tick the dash timer, destroy targets in the path.
         if self:IsServer() then
-            if not self.Active and self.Gauge < self.MaxGauge then
+            if not self.Active and not self.AutoFillPaused and self.Gauge < self.MaxGauge then
                 self.Gauge = math.min(self.MaxGauge, self.Gauge + self.GaugeFillPerSec * delta)
             end
             if self.Active then
@@ -149,10 +190,32 @@ script UltimateSkill extends Component
 
     @ExecSpace("ServerOnly")
     method void AddGauge(number amount)
-        -- Public hook to charge the gauge from gameplay events (e.g. a kill). Ignored while dashing.
+        -- Public hook to charge the gauge from gameplay events (e.g. a kill or a boss hit). Ignored while
+        -- dashing. Works even when AutoFillPaused is true (boss hits are the intended source during a fight).
         if self.Active then return end
         if amount <= 0 then return end
         self.Gauge = math.min(self.MaxGauge, self.Gauge + amount)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetAutoFillPaused(boolean paused)
+        -- Pause/resume the time-based gauge fill. MushmomBoss pauses it for the duration of the boss fight
+        -- so the gauge only charges from landed hits, then resumes it on boss death / removal.
+        self.AutoFillPaused = paused
+    end
+
+    @ExecSpace("Server")
+    method void ResetGauge()
+        -- Clears the ultimate charge so it does NOT carry across stages. Called from the client
+        -- (RunGameHud) at each stage/run start; the @Server hop lands the write on the authoritative
+        -- server, and the @Sync flip pushes Gauge=0 to the HUD. If a dash is somehow active, end it
+        -- cleanly (restore speed/gravity) so the reset can't leave the player stuck in dash state.
+        if self.Active then
+            self:EndDashServer()
+        end
+        self.Gauge = 0
+        self.remaining = 0
+        log("[UltimateSkill] gauge reset (stage start)")
     end
 
     @ExecSpace("ServerOnly")
@@ -214,9 +277,11 @@ script UltimateSkill extends Component
         if tr == nil then return end
         local wp = tr.WorldPosition
 
+        -- Always dash/hit FORWARD (+X). The runner only ever moves right, and PlayerControllerComponent's
+        -- LookDirectionX is corrupted by hit-knockback (sticks at -1 with nothing to reset it), which would aim
+        -- the dash box BEHIND the player. Forcing +1 keeps the ultimate a forward attack and never hits enemies
+        -- the player has already run past (matches PowerStrike's front-only rule).
         local direction = 1
-        local pcc = self.Entity.PlayerControllerComponent
-        if pcc ~= nil and pcc.LookDirectionX < 0 then direction = -1 end
 
         local cx = wp.x + direction * self.DashHitOffset
         local cy = wp.y
@@ -231,7 +296,7 @@ script UltimateSkill extends Component
                     if comp ~= nil and isvalid(comp) then
                         local e = comp.Entity
                         if e ~= nil and isvalid(e) and e ~= self.Entity and e.PlayerComponent == nil then
-                            self:DestroyTarget(e)
+                            self:DestroyTarget(e, direction)
                         end
                     end
                 end
@@ -251,7 +316,7 @@ script UltimateSkill extends Component
                         if isvalid(oe) then
                             local op = oe.TransformComponent.WorldPosition
                             if math.abs(op.x - cx) <= halfW and math.abs(op.y - cy) <= halfH then
-                                self:DestroyTarget(oe)
+                                self:DestroyTarget(oe, direction)
                             end
                         end
                     end
@@ -261,7 +326,15 @@ script UltimateSkill extends Component
     end
 
     @ExecSpace("ServerOnly")
-    method void DestroyTarget(Entity e)
+    method void DestroyTarget(Entity e, number dir)
+        -- Obstacles are LAUNCHED (spin + fly off in the dash direction) instead of destroyed, so they read
+        -- as being knocked away rather than vanishing. Other targets (monsters) are destroyed outright.
+        ---@type Obstacle
+        local obs = e:GetComponent("script.Obstacle")
+        if obs ~= nil then
+            obs:LaunchKnockback(dir)
+            return
+        end
         -- Removes one target, with an optional burst effect at its position.
         if self.destroyEffectRUID ~= "" then
             self:PlayDestroyEffect(e.TransformComponent.WorldPosition)

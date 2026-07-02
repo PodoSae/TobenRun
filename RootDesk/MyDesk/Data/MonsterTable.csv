@@ -1,3 +1,5 @@
-﻿id,displayName,maxHp,contactDamage,mesoReward,spriteRUID
-normal,슬라임,50,10,15,d4ffccd5bfb64413aab571dfd8722fe9
-mushmom,머쉬맘,500,20,200,86015373d23b4b05bb8fcc6086354652
+id,displayName,maxHp,contactDamage,mesoReward,spriteRUID,patrolSpeed,patrolRange,jumpInterval,jumpForce,jumpFwd
+spore,스포아,20,10,5,f84d50d06d1c45308d8497e8bf226308,0,0,0,0,0
+normal,슬라임,50,10,15,d4ffccd5bfb64413aab571dfd8722fe9,1,5,0,0,0
+orange,주황버섯,50,20,15,a95cfed2c8fe4d2cb64cbb62db051f92,2,5,2,7,2
+mushmom,머쉬맘,1000,20,200,86015373d23b4b05bb8fcc6086354652,0,0,0,0,0

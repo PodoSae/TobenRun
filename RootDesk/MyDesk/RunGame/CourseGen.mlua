@@ -34,6 +34,16 @@ property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
 property number monsterYOff = 1.0
 @DisplayName("장애물 안착 높이 보정")
 property number obstacleYRest = 0.5
+@DisplayName("진흙 안착 높이 보정")
+@Description("진흙 웅덩이 중심이 바닥에서 이만큼 위에 놓인다(바닥에 깔린 것처럼 보이도록 낮게)")
+property number mudYRest = 0.15
+@DisplayName("진흙 모델 id")
+property string mudModelId = "Mud"
+@DisplayName("포자 탄막 모델 id")
+property string barrageModelId = "ScreenSporeBarrage"
+@DisplayName("포자 탄막 발사점 높이 보정")
+@Description("보이지 않는 발사점의 기준 Y가 바닥에서 이만큼 위. 상/중/하 레인 높이는 여기서부터의 오프셋")
+property number barrageYRest = 0.0
 
 -- Server registry: mapName -> stage currently generated on that map.
 property any mapStage = nil
@@ -85,7 +95,7 @@ end
 @ExecSpace("ServerOnly")
 method boolean IsCourseEntity(string nm)
 	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_" }
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_" }
 	for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
@@ -371,13 +381,56 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		self:SpawnProp(map, "Coin_" .. tostring(math.floor(x)), x, cfg.floorY + 0.6 + self:PropHalfHeight(self.coinRuid), self.coinRuid)
 		return
 	end
+	-- Mud patch (non-lethal terrain): a ground puddle that SLOWS the runner while walking through it
+	-- (MudObstacle sends a terrain-slow RPC to the player's client). Sits flat on the floor; jumping over
+	-- it avoids the slow. Fixed course placement, so it must not auto-despawn before the runner arrives.
+	if kind == "mud" then
+		local my = cfg.floorY + self.mudYRest
+		local mud = _SpawnService:SpawnByModelId(self.mudModelId, "Mud_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
+		if isvalid(mud) then
+			---@type MudObstacle
+			local mc = mud:GetComponent("script.MudObstacle")
+			if mc ~= nil then
+				mc.Lifetime = 0   -- 0 = permanent; course placement waits for the runner (no timed despawn)
+			end
+		else
+			log("[CourseGen] mud spawn failed @x=" .. tostring(x))
+		end
+		return
+	end
+	-- Screen spore barrage (ranged hazard): an INVISIBLE emitter that fires spores from the FRONT of the screen
+	-- toward the runner, cycling 상/중/하 screen-height lanes. The runner dodges each incoming spore by jump
+	-- timing. Keyword is "sporewall" (NOT "spore" — "spore" is a MonsterTable id, 스포아 monster, spawned via the
+	-- IsMonster branch below). p3 = optional spore damage override. Fixed placement, so no early auto-despawn.
+	if kind == "sporewall" then
+		local sy = cfg.floorY + self.barrageYRest
+		local sm = _SpawnService:SpawnByModelId(self.barrageModelId, "Spore_" .. tostring(math.floor(x)), Vector3(x, sy, 0), map)
+		if isvalid(sm) then
+			---@type ScreenSporeBarrage
+			local sc = sm:GetComponent("script.ScreenSporeBarrage")
+			if sc ~= nil then
+				sc.Lifetime = 999999
+				local dmg = tonumber(c.p3)
+				if dmg ~= nil then sc.SporeDamage = dmg end
+			end
+		else
+			log("[CourseGen] sporewall spawn failed @x=" .. tostring(x))
+		end
+		return
+	end
 	-- A monster type (MonsterTable id) → spawn the sjy NormalMonster model. Its in-model MonsterUnit
 	-- reads stats/sprite from MonsterTable by MonsterId (default "normal"), patrols on the foothold, and
 	-- deals contact damage to PlayerHealth server-side. Spawn above the floor so gravity settles it.
 	if self:IsMonster(kind) then
 		local my = cfg.floorY + self.monsterYOff
 		local mon = _SpawnService:SpawnByModelId("normalmonster", "Monster_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
-		if isvalid(mon) == false then
+		if isvalid(mon) then
+			-- Tell the shared monster shell WHICH MonsterTable row to be (spore / normal / ...). Without this
+			-- every spawn stayed the model default ("normal"=슬라임) regardless of the stage's requested kind.
+			---@type MonsterUnit
+			local mu = mon:GetComponent("script.MonsterUnit")
+			if mu ~= nil then mu:SetMonster(kind) end
+		else
 			log("[CourseGen] monster spawn failed for '" .. tostring(kind) .. "'")
 		end
 		return
@@ -429,9 +482,18 @@ method void CmdBoss(Entity map, table cfg, table c)
 	local boss = _SpawnService:SpawnByModelId("MushmomBoss", "Boss_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
 	if isvalid(boss) == false then
 		log("[CourseGen] Boss spawn failed @x=" .. tostring(x))
-	else
-		log("[CourseGen] Boss (Mushmom) spawned @x=" .. tostring(x))
+		return
 	end
+	-- Size the boss's follow / charge arena to THIS course so it tracks the auto-running player across the
+	-- whole stage instead of clamping to its default (short) map01 bounds.
+	---@type MushmomBoss
+	local bc = boss:GetComponent("script.MushmomBoss")
+	if bc ~= nil then
+		bc.StageMinX = cfg.startX - 10
+		bc.StageMaxX = cfg.startX + cfg.length
+	end
+	log("[CourseGen] Boss (Mushmom) spawned @x=" .. tostring(x)
+		.. " arena=[" .. tostring(cfg.startX - 10) .. "," .. tostring(cfg.startX + cfg.length) .. "]")
 end
 
 end

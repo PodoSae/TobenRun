@@ -9,6 +9,24 @@ script PlayerController extends Component
 	-- restores it to 1). Read every frame in OnUpdate, so the writer's update order doesn't matter.
 	property number speedMultiplier = 1
 
+	-- Terrain speed factor — a SEPARATE channel from speedMultiplier so terrain (mud) and skills (slide,
+	-- ultimate) compose by multiplication and never clobber each other. MudObstacle sends AddTerrainSlow /
+	-- RemoveTerrainSlow (Client RPC) as the player enters / leaves each patch; terrainMultiplier is the
+	-- lowest (slowest) of all patches the player currently overlaps, or 1 when on none. terrainSlows maps
+	-- sourceId -> that patch's multiplier so overlapping patches ref-count independently.
+	property number terrainMultiplier = 1
+	property any terrainSlows = nil
+	-- On MapleTile, WalkSpeed is the MAX ground speed and the native walk drives the runner at it — a
+	-- MoveVelocity write ABOVE it is clamped (see UltimateSkill, which must RAISE WalkSpeed to dash faster).
+	-- The mirror is true for a SLOW: lowering only MoveVelocity does nothing because the native walk keeps
+	-- pushing at WalkSpeed, so terrain slow must scale WalkSpeed down too.
+	-- The base is SNAPSHOTTED at slow-enter (not at OnBeginPlay): the real run WalkSpeed is set later by
+	-- RunGameHud.SetRunnerActive (= per-course speed), so an OnBeginPlay capture grabs the higher model
+	-- default and restoring to it makes the runner too fast on mud exit. slowBaseWalkSpeed = the WalkSpeed
+	-- captured the moment the first slow applied; WalkSpeed = slowBaseWalkSpeed * terrainMultiplier while
+	-- slowed, restored to exactly slowBaseWalkSpeed and cleared once all slows are gone.
+	property number slowBaseWalkSpeed = 0
+
 	-- Auto-runner input locks. The runner only ever moves right, so backward movement
 	-- (A / Left arrow) and crouch (S / Down arrow) are stripped from the engine
 	-- PlayerControllerComponent. Toggle off in the inspector to restore either.
@@ -29,6 +47,7 @@ script PlayerController extends Component
 
 	method void OnBeginPlay()
 		-- Caches the movement + rigidbody components used for constant forward auto-run.
+		self.terrainSlows = {}
 		self.movement = self.Entity.MovementComponent
 		self.body = self.Entity.RigidbodyComponent
 		log("[PlayerController] OnBeginPlay - movement: " .. tostring(self.movement ~= nil)
@@ -86,7 +105,10 @@ script PlayerController extends Component
 		-- its speed during attacks. Y input is preserved so gravity/jump are unaffected.
 		if self.body ~= nil then
 			local v = self.body.MoveVelocity
-			self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier, v.y)
+			-- speedMultiplier = skill channel (slide/ultimate), terrainMultiplier = terrain channel (mud).
+			-- Multiplied so e.g. sliding through mud stacks (1.3 * 0.5). Terrain slow (<1) stays under the
+			-- Rigidbody WalkSpeed cap, so no WalkSpeed-clamp issue (that only bites speed BUFFS > WalkSpeed).
+			self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier * self.terrainMultiplier, v.y)
 		end
 
 		-- Drive the avatar animation state for the local player. The runner moves via MoveVelocity (no
@@ -120,6 +142,68 @@ script PlayerController extends Component
 		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
 			if self.body ~= nil and self.body:IsOnGround() then
 				self.body:AddForce(Vector2(self.jumpFwdForce, self.jumpForce))
+			end
+		end
+	end
+
+	-- Terrain slow is applied on BOTH sides (server + owning client). MudObstacle detects on the server
+	-- and calls SetTerrainSlow (runs server-side) AND AddTerrainSlow (Client RPC → owning client), so the
+	-- run speed is slowed no matter which side's MoveVelocity write is authoritative for this player.
+
+	method void SetTerrainSlow(string sourceId, number mult)
+		-- Local (caller-side) apply: register patch `sourceId`'s slow and recompute. No @ExecSpace so it
+		-- runs on whichever side calls it (server via MudObstacle, or client via AddTerrainSlow).
+		if self.terrainSlows == nil then self.terrainSlows = {} end
+		self.terrainSlows[sourceId] = mult
+		self:RecomputeTerrain()
+		log("[PlayerController] SetTerrainSlow '" .. tostring(sourceId) .. "' mult=" .. tostring(mult)
+			.. " -> terrainMultiplier=" .. tostring(self.terrainMultiplier)
+			.. " server=" .. tostring(self:IsServer()) .. " client=" .. tostring(self:IsClient()))
+	end
+
+	method void ClearTerrainSlow(string sourceId)
+		-- Local (caller-side) clear: drop patch `sourceId`'s slow and recompute.
+		if self.terrainSlows == nil then self.terrainSlows = {} end
+		self.terrainSlows[sourceId] = nil
+		self:RecomputeTerrain()
+	end
+
+	@ExecSpace("Client")
+	method void AddTerrainSlow(string sourceId, number mult)
+		-- Server (MudObstacle) → this player's client: apply the slow on the owning client.
+		self:SetTerrainSlow(sourceId, mult)
+	end
+
+	@ExecSpace("Client")
+	method void RemoveTerrainSlow(string sourceId)
+		-- Server (MudObstacle) → this player's client: clear the slow on the owning client.
+		self:ClearTerrainSlow(sourceId)
+	end
+
+	method void RecomputeTerrain()
+		-- terrainMultiplier = the slowest (min) of all patches currently overlapped, or 1 when on none.
+		-- No @ExecSpace: recomputes on whichever side its state changed (server and/or client).
+		local m = 1
+		if self.terrainSlows ~= nil then
+			for sourceId, mult in pairs(self.terrainSlows) do
+				if mult < m then m = mult end
+			end
+		end
+		self.terrainMultiplier = m
+		-- Scale the native max ground speed too, else the native walk keeps pushing at full WalkSpeed and
+		-- the MoveVelocity slow is meaningless (same reason UltimateSkill must raise WalkSpeed to dash).
+		-- Snapshot the real WalkSpeed the moment the first slow lands (RunGameHud has already set it to the
+		-- per-course speed by then), scale from it, and restore EXACTLY that on full exit — never a stale
+		-- OnBeginPlay/model-default value (which would make the runner too fast after leaving the mud).
+		if self.body ~= nil then
+			if m < 1 then
+				if self.slowBaseWalkSpeed <= 0 then
+					self.slowBaseWalkSpeed = self.body.WalkSpeed
+				end
+				self.body.WalkSpeed = self.slowBaseWalkSpeed * m
+			elseif self.slowBaseWalkSpeed > 0 then
+				self.body.WalkSpeed = self.slowBaseWalkSpeed
+				self.slowBaseWalkSpeed = 0
 			end
 		end
 	end

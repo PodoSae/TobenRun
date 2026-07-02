@@ -1,0 +1,149 @@
+@Component
+script MushmomShockWave extends Component
+
+    -- Mushmom's ground shockwave. Spawns at the boss's feet the moment it LANDS from the shockwave hop, then
+    -- slides along the floor TOWARD the player (constant velocity in the launch direction). A grounded player is
+    -- hit as the wave passes their column; jumping over it (feet above HitTopY) is the dodge — a running-game
+    -- "jump the wave". Pooled and reused by script.MushmomBoss (never Destroy()ed mid-game). Server-authoritative.
+
+    -- Travel speed along the floor (world units / sec), toward the player. Set per-launch by the boss.
+    property number Speed = 9.0
+    -- Hard safety lifetime (seconds): recycles even if it never leaves the arena.
+    property number MaxLifetime = 4.0
+    -- Max distance (world units) from the launch point before it recycles (relative, not a fixed world rect, so
+    -- it works anywhere the endless runner scrolls to).
+    property number MaxRange = 22.0
+    -- Horizontal half-width (world units) of the contact band around the wave's current column.
+    property number HitHalfWidth = 0.7
+    -- Damage dealt to a player on contact (overwritten per-launch by the boss).
+    property number Damage = 25
+
+    -- Ground band (absolute world Y). A player is hit only when its feet Y is <= HitTopY as the wave passes —
+    -- i.e. standing on / near the floor. Set per-launch by the boss to groundY + ShockwaveSafeHeight; a player
+    -- above it (mid-jump) is safe. HitBottomY guards against a player reading far below the floor.
+    property number HitTopY = 1.0
+    property number HitBottomY = -3.0
+
+    -- Parking spot for an idle (pooled) wave: far off any camera while it waits to be reused.
+    property Vector3 ParkPosition = Vector3(0, 99999, 999)
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- One-time idle init. Guarded so it can't clobber a wave the boss Launched on the same frame it was
+        -- spawned (Launch may run before OnBeginPlay for a fresh entity).
+        if self._T.fired ~= nil then return end
+        self._T.fired = false
+        self._T.lifetime = 0
+        self._T.dirX = -1
+        self._T.startX = 0
+        self:Park()
+    end
+
+    method boolean IsIdle()
+        -- True when this wave is parked and free for the pool to hand out again (server-side query).
+        return self._T.fired ~= true
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Launch(Vector3 startPos, number dir, number damage, number hitTopY)
+        -- Activates a pooled (or fresh) wave: place it at the boss's feet, lock the travel direction (+1 right /
+        -- -1 left = toward the player), set damage + the ground band used for the "jumped over it?" check, and
+        -- make it visible. From here it slides in dir at Speed every frame.
+        self._T.fired = true
+        self._T.lifetime = 0
+        self._T.dirX = (dir >= 0) and 1 or -1
+        self._T.startX = startPos.x
+        self.Damage = damage
+        self.HitTopY = hitTopY
+
+        self.Entity.TransformComponent.Position = startPos
+
+        local renderer = self.Entity.SpriteRendererComponent
+        if renderer ~= nil then
+            renderer.FlipX = self._T.dirX < 0
+            renderer.Enable = true
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Server-authoritative travel loop: slide toward the player, hit-test grounded players, recycle on
+        -- lifetime / max travel distance.
+        if self._T.fired ~= true then return end
+
+        self._T.lifetime = self._T.lifetime + delta
+        if self._T.lifetime >= self.MaxLifetime then
+            self:Deactivate()
+            return
+        end
+
+        -- Move. Body-less entity -> Translate (direct transform write replicates to clients).
+        self.Entity.TransformComponent:Translate(self._T.dirX * self.Speed * delta, 0)
+
+        local pos = self.Entity.TransformComponent.Position
+        if math.abs(pos.x - (self._T.startX or pos.x)) >= self.MaxRange then
+            self:Deactivate()
+            return
+        end
+
+        self:CheckPlayerHit(pos)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void CheckPlayerHit(Vector3 pos)
+        -- Damages grounded players the wave is currently passing over. A player whose feet are above HitTopY
+        -- (mid-jump) is skipped, so jumping as the wave arrives is the dodge. NOT recycled on hit — it keeps
+        -- sliding — and PlayerHealth's own invuln window prevents the few overlapping frames from multi-hitting.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return end
+
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                -- Vertical: feet on / near the floor (jumped-over players up.y > HitTopY are safe).
+                -- Horizontal: the wave's column is passing this player.
+                if up.y <= self.HitTopY and up.y >= self.HitBottomY
+                    and math.abs(up.x - pos.x) <= self.HitHalfWidth then
+                    ---@type PlayerHealth
+                    local hp = user:GetComponent("script.PlayerHealth")
+                    if isvalid(hp) then
+                        log("[MushmomShockWave] hit grounded player -> TakeDamage " .. tostring(self.Damage))
+                        hp:TakeDamage(self.Damage)
+                    end
+                    self:ShowHitEffect(up.x, up.y, pos.z)
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Deactivate()
+        -- Recycles the wave: mark idle and park it off-screen so the pool can reuse it.
+        self._T.fired = false
+        self:Park()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Park()
+        -- Hides the wave (disabled renderer + parked off any camera) while it waits idle in the pool.
+        local renderer = self.Entity.SpriteRendererComponent
+        if renderer ~= nil then
+            renderer.Enable = false
+        end
+        self.Entity.TransformComponent.Position = self.ParkPosition
+    end
+
+    @ExecSpace("Client")
+    method void ShowHitEffect(number px, number py, number pz)
+        -- Fixed-position burst at the impact point (survives the wave recycling). Built-in particle = no RUID.
+        local mapEntity = self.Entity.CurrentMap
+        if mapEntity == nil then return end
+        _ParticleService:PlayBasicParticle(BasicParticleType.SmallExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(0.4, 0.4, 0.4), false, {})
+    end
+
+end

@@ -19,16 +19,21 @@ script SwordBeam extends Component
     -- attackInfo forwarded to SwordBeamAttack.CalcDamage (must equal SwordBeamAttack.SkillTag).
     property string AttackInfo = "PowerStrike"
 
+    -- Sound played when the beam connects with a monster/boss (HitBox). _SoundService:PlaySound is client-space,
+    -- and ShowHitEffect (ExecSpace Client) already fires on hit, so the sound plays with the impact spark.
+    @DisplayName("몬스터 타격음")
+    property string HitSoundRUID = "f14776527d64446e86b1fcb78651e11c"
+
     -- The player who fired this beam. Set by PowerStrike at launch so kill rewards (meso) can be
     -- credited to the right player. Server-side only; not synced.
     @HideFromInspector property Entity OwnerEntity = nil
 
-    -- Map rectangle: the beam recycles the instant it leaves this area ("맵을 벗어나면 사라진다").
-    -- Defaults cover map01's tile extent (X[-9,89]) plus vertical margin. Tune per map if needed.
-    property number BoundMinX = -10
-    property number BoundMaxX = 90
-    property number BoundMinY = -12
-    property number BoundMaxY = 16
+    -- Max travel distance (world units) from the LAUNCH POINT before the beam recycles. This is RELATIVE to
+    -- where it was fired — not a fixed world rectangle. The runner scrolls the player rightward with no bound,
+    -- so the old fixed BoundMaxX (=90, map01's tile edge) made every beam spawn already out-of-bounds and
+    -- recycle instantly once the player passed X≈90 (≈ score 900) → the player "stopped firing". 20u clears
+    -- the screen comfortably while still reaching any on-screen enemy (e.g. the boss at NormalOffsetX≈8).
+    property number MaxRange = 20
 
     -- Parking spot for an idle (pooled) beam: far off any camera so it is invisible while waiting to be reused.
     property Vector3 ParkPosition = Vector3(0, 99999, 999)
@@ -58,6 +63,9 @@ script SwordBeam extends Component
         self._T.dirX = (dir >= 0) and 1 or -1
 
         self.Entity.TransformComponent.Position = startPos
+        -- Remember where the beam was fired so recycling can be measured as distance traveled (map-independent).
+        self._T.startX = startPos.x
+        self._T.startY = startPos.y
 
         local renderer = self.Entity.SpriteRendererComponent
         if renderer ~= nil then
@@ -91,10 +99,11 @@ script SwordBeam extends Component
 
         local pos = self.Entity.TransformComponent.Position
 
-        -- Recycle when the beam leaves the map rectangle.
-        if pos.x < self.BoundMinX or pos.x > self.BoundMaxX
-            or pos.y < self.BoundMinY or pos.y > self.BoundMaxY then
-            log("[SwordBeam] left map bounds -> recycle")
+        -- Recycle once the beam has traveled MaxRange from its launch point (relative distance, not a fixed
+        -- world rect — works anywhere the endless runner scrolls to).
+        local dsx = pos.x - (self._T.startX or pos.x)
+        local dsy = pos.y - (self._T.startY or pos.y)
+        if (dsx * dsx + dsy * dsy) >= self.MaxRange * self.MaxRange then
             self:Deactivate()
             return
         end
@@ -143,6 +152,10 @@ script SwordBeam extends Component
         local mapEntity = self.Entity.CurrentMap
         if mapEntity == nil then return end
         _ParticleService:PlayBasicParticle(BasicParticleType.SparkExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(1, 1, 1), false, {})
+        -- Monster hit sound (client-space).
+        if self.HitSoundRUID ~= "" then
+            _SoundService:PlaySound(self.HitSoundRUID, 1.0)
+        end
     end
 
 end

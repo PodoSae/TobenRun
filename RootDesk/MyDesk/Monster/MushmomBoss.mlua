@@ -78,15 +78,61 @@ script MushmomBoss extends Component
     @MinValue(1)
     @MaxValue(100)
     @Delta(1)
-    property number SporeDamage = 15
-    @DisplayName("포자 상하 퍼짐")
-    @Description("부채꼴 상단/하단 수직 속도 폭. 클수록 위아래로 넓게 퍼진다")
+    property number SporeDamage = 20
+    -- Two-volley attack: the spray fires TWICE. Volley 1 is LOW (dodge by JUMPING over it); after a short gap
+    -- volley 2 is HIGH at standing head height (dodge by SLIDING under it). Heights are world-units above the
+    -- floor; a sliding player's body top is MushmomSpore.SlideHeight, so a HIGH spore passes over it while a
+    -- LOW one still hits the crouch. Each volley fires SporeCount spores as a horizontal train (fixed height,
+    -- vy = 0) so the trajectory — and thus which dodge works — is reliable (spores have no gravity).
+    @DisplayName("1차 포자 높이(점프 회피)")
+    @Description("낮게 날아와 점프로 넘겨야 하는 1차 볼리 높이(바닥 기준)")
     @MinValue(0)
-    @MaxValue(15)
-    @Delta(0.5)
-    property number SporeVerticalSpread = 5.0
-    -- Spawn offset in front of / above the boss where spores are born.
+    @MaxValue(3)
+    @Delta(0.1)
+    property number SporeLowHeight = 0.4
+    @DisplayName("2차 포자 높이(슬라이드 회피)")
+    @Description("서 있으면 맞고 슬라이드로 낮아져야 피하는 2차 볼리 높이(바닥 기준)")
+    @MinValue(0.5)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number SporeHighHeight = 1.5
+    @DisplayName("1·2차 볼리 간격(초)")
+    @Description("1차 발사 후 2차 발사까지의 텀")
+    @MinValue(0.1)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number SporeVolleyGap = 0.7
+    @DisplayName("포자 열 간격")
+    @Description("한 볼리 안에서 포자들이 뒤로 이만큼 간격을 두고 줄지어 날아온다(연속 위협)")
+    @MinValue(0)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number SporeTrainGap = 0.7
+    -- Spawn offset in front of the boss where spores are born.
     property number SporeForwardOffset = 1.0
+
+    -- === Skill 1 pattern selection ===
+    -- When the spore skill fires it picks a PATTERN: the DOUBLE volley (low→jump then high→slide) with this
+    -- probability, otherwise the FAN (a single upper-quadrant angular spread).
+    @DisplayName("2중발사 선택 확률")
+    @Description("포자 스킬 발동 시 2중발사(점프→슬라이드)를 고를 확률. 나머지는 부채꼴")
+    @MinValue(0)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number SporeDoubleChance = 0.5
+    -- FAN pattern angle range in DEGREES from the player-facing horizontal (0° = toward the player, 90° = up).
+    -- Spreads MinAngle→MaxAngle across SporeCount spores, upper quadrant only (never downward).
+    @DisplayName("부채꼴 최소 각도(0=수평)")
+    @MinValue(0)
+    @MaxValue(90)
+    @Delta(5)
+    property number SporeMinAngle = 0
+    @DisplayName("부채꼴 최대 각도(90=수직 위)")
+    @MinValue(0)
+    @MaxValue(90)
+    @Delta(5)
+    property number SporeMaxAngle = 90
+    -- Spawn origin height above the boss feet for FAN spores (raised so the upward part of the fan reads).
     property number SporeVerticalOffset = 1.0
 
     -- === Skill 2: body slam (몸통박치기) ===
@@ -107,19 +153,25 @@ script MushmomBoss extends Component
     @MinValue(1)
     @MaxValue(200)
     @Delta(1)
-    property number BodySlamDamage = 35
+    property number BodySlamDamage = 30
     @DisplayName("돌진 최대 시간(초)")
     @Description("이 시간 안에 충돌/벽 도달이 없으면 회피로 간주하고 그로기에 들어간다(안전장치)")
     @MinValue(0.5)
     @MaxValue(10)
     @Delta(0.5)
     property number ChargeMaxTime = 3.0
+    @DisplayName("돌진 최대 이동 거리")
+    @Description("돌진 시작점에서 이만큼 이동하면 회피로 간주하고 그로기(안전장치). 화면 밖으로 질주하는 것을 방지")
+    @MinValue(2)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number MaxChargeDistance = 9.0
     @DisplayName("몸통박치기 발동 확률")
-    @Description("스킬 발동 시 몸통박치기를 고를 확률(나머지는 포자 분사)")
+    @Description("스킬 발동 시 몸통박치기를 고를 확률. (충격파 확률) 다음 순위로 배분되며 나머지는 포자 분사")
     @MinValue(0)
     @MaxValue(1)
     @Delta(0.05)
-    property number BodySlamChance = 0.5
+    property number BodySlamChance = 0.33
 
     @DisplayName("돌진 통과 판정 여유(회피)")
     @Description("돌진이 플레이어 X를 이만큼 지나치면 '회피 성공'으로 보고 그로기에 들어간다")
@@ -127,6 +179,82 @@ script MushmomBoss extends Component
     @MaxValue(5)
     @Delta(0.1)
     property number PassMargin = 0.6
+
+    -- === Skill 3: shockwave jump (충격파 점프) — telegraph → hop → ground-wide shockwave ===
+    @DisplayName("충격파 발동 확률")
+    @Description("스킬 발동 시 충격파 점프를 고를 확률. 나머지는 (몸통박치기 확률) → 포자 순으로 배분된다")
+    @MinValue(0)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number ShockwaveChance = 0.34
+    @DisplayName("충격파 시전 시간(초)")
+    @Description("눈이 빛나는 사전 예고 시간. 이 시간 뒤 도약한다")
+    @MinValue(0)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number ShockwaveTelegraphDuration = 1.0
+    @DisplayName("충격파 도약 높이")
+    @Description("공중으로 뛰어오르는 높이(월드 유닛)")
+    @MinValue(1)
+    @MaxValue(12)
+    @Delta(0.5)
+    property number ShockwaveJumpHeight = 4.0
+    @DisplayName("충격파 상승 시간(초)")
+    @MinValue(0.1)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number ShockwaveRiseTime = 0.45
+    @DisplayName("충격파 낙하 시간(초)")
+    @MinValue(0.1)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number ShockwaveFallTime = 0.35
+    @DisplayName("착지 후 발사 딜레이(초)")
+    @Description("바닥에 닿은 뒤 이 시간만큼 기다렸다가 지면 파동을 발사한다")
+    @MinValue(0)
+    @MaxValue(2)
+    @Delta(0.05)
+    property number ShockwaveLandDelay = 0.3
+    @DisplayName("충격파 데미지")
+    @MinValue(1)
+    @MaxValue(100)
+    @Delta(1)
+    property number ShockwaveDamage = 25
+    @DisplayName("충격파 회피 높이")
+    @Description("착지 후 바닥을 타고 날아오는 충격파가 지나갈 때 플레이어 발이 (바닥+이 값) 보다 높으면(=점프로 뛰어넘으면) 회피 성공. 낮으면 피격")
+    @MinValue(0.3)
+    @MaxValue(4)
+    @Delta(0.1)
+    property number ShockwaveSafeHeight = 0.9
+    -- Ground shockwave projectile: on landing the boss emits a low wave that skims the floor toward the
+    -- player instead of an instant map-wide hit. The player jumps over it to dodge.
+    property string ShockWaveModelId = "MushmomShockWave"
+    @DisplayName("충격파 이동 속도")
+    @Description("바닥을 타고 플레이어 쪽으로 날아오는 충격파의 수평 속도")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number ShockwaveSpeed = 9.0
+    @DisplayName("충격파 생성 앞거리")
+    @Description("보스 발 앞 이만큼 떨어진 지점에서 충격파가 생성된다(보스 몸에서 곧바로 겹치지 않게)")
+    @MinValue(0)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number ShockwaveSpawnForward = 0.6
+    @DisplayName("충격파 지면 높이 보정")
+    @Description("충격파 스프라이트가 바닥에 걸쳐 보이도록 바닥에서 살짝 띄우는 값")
+    @MinValue(0)
+    @MaxValue(2)
+    @Delta(0.1)
+    property number ShockwaveGroundOffset = 0.3
+
+    -- === Boss-fight ultimate gauge (궁극기 게이지 규칙 전환) ===
+    @DisplayName("피격 시 궁극기 게이지 획득(%)")
+    @Description("플레이어가 보스에게 피해를 적중시킬 때마다 공격자 궁극기 게이지를 이만큼 충전(문서: 3%)")
+    @MinValue(0)
+    @MaxValue(100)
+    @Delta(1)
+    property number BossHitGaugeGain = 3
 
     -- Map-edge safety bounds (map01 foothold spans ~-4.4 .. 40.4). Follow/charge never push the boss past
     -- these, so it can't run off the foothold into the void. A charge that reaches an edge also -> groggy.
@@ -139,34 +267,47 @@ script MushmomBoss extends Component
     -- === Running-game positioning (player-relative follow) ===
     -- The player auto-runs right and the camera follows, so the boss tracks the player horizontally.
     @DisplayName("평상시 추적 오프셋 X(화면 오른쪽)")
-    @Description("평상시 보스가 머무는 위치 = 플레이어 X + 이 값. 양수=플레이어 오른쪽(화면 오른쪽). PC 화면 폭은 약 12.8유닛")
+    @Description("평상시 보스가 머무는 위치 = 플레이어 X + 이 값. 플레이어는 화면 정중앙이므로 화면상 위치≈0.5+값/화면폭. PC(폭≈12.8)에서 5≈오른쪽 9/10. 모바일(폭≈9.6)은 좁으니 잘리면 4 안팎으로 낮출 것")
     @MinValue(0)
     @MaxValue(12)
     @Delta(0.5)
-    property number NormalOffsetX = 5.0
-    @DisplayName("돌진/그로기 추적 오프셋 X(바로 앞)")
-    @Description("돌진 시작/그로기 중 보스 위치 = 플레이어 X + 이 값. 플레이어 바로 오른쪽 앞")
+    property number NormalOffsetX = 8.0
+    @DisplayName("그로기 추적 오프셋 X(앞)")
+    @Description("그로기 중 보스 위치 = 플레이어 X + 이 값. 작으면 플레이어와 겹치고, 크면 멀어져 때리기 어려움")
     @MinValue(0)
     @MaxValue(8)
     @Delta(0.5)
-    property number FrontOffsetX = 2.0
+    property number FrontOffsetX = 4.0
     @DisplayName("추적 가속 계수")
     @Description("목표까지 거리에 비례한 추적 속도(클수록 빨리 따라붙음). 플레이어 달리기 속도보다 빨라야 뒤처지지 않음")
     @MinValue(0.5)
     @MaxValue(10)
     @Delta(0.5)
-    property number FollowGain = 2.5
+    property number FollowGain = 2.0
+    @DisplayName("돌진 예고 추적 계수")
+    @Description("돌진 예고(웅크리기) 중 플레이어를 따라붙는 세기. 평상시(추적 가속 계수)보다 크게 잡아 예고 동안 지연 없이 상대 위치를 유지(플레이어가 파고들지 않게)")
+    @MinValue(1)
+    @MaxValue(20)
+    @Delta(0.5)
+    property number WindupHoldGain = 8.0
     @DisplayName("추적 최대 속도")
+    @Description("평상시 추적 속도 상한. 너무 크면 목표를 지나쳐 좌우로 크게 흔들린다(플레이어 속도의 2배 남짓 권장)")
     @MinValue(1)
     @MaxValue(30)
     @Delta(0.5)
-    property number FollowMaxSpeed = 14.0
+    property number FollowMaxSpeed = 6.0
     @DisplayName("추적 정지 여유")
     @Description("목표 X와 이 거리 이내면 멈춤(미세 떨림 방지)")
     @MinValue(0.05)
     @MaxValue(2)
     @Delta(0.05)
     property number FollowDeadzone = 0.3
+    @DisplayName("교전 시작 거리")
+    @Description("스폰 후에는 제자리에서 플레이어를 바라보며 대기하다가, 플레이어와의 X 거리가 이 값 이내가 되면 추적/공격을 시작한다. 스폰 지점이 추적 목표에서 멀어도 보스가 즉시 달려가지 않게 함")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number EngageDistance = 6.0
 
     -- === Groggy (그로기) — reward for dodging the charge ===
     @DisplayName("그로기 지속 시간(초)")
@@ -174,13 +315,16 @@ script MushmomBoss extends Component
     @MinValue(0.5)
     @MaxValue(15)
     @Delta(0.5)
-    property number GroggyDuration = 3.0
+    property number GroggyDuration = 5.0
     @DisplayName("그로기 피해 배율")
     @Description("그로기 상태에서 받는 데미지에 곱하는 값(클수록 약점 크게 노출)")
     @MinValue(1)
     @MaxValue(5)
     @Delta(0.1)
     property number GroggyDamageMultiplier = 2.0
+    -- Damage-number skin for the groggy BONUS popup (same proven skin PlayerHealth uses). The boss's auto
+    -- DamageSkin shows only the base hit, so the groggy 2x is otherwise invisible (no HP bar).
+    property string HitSkinRUID = "6ba67548f43f48f29eb23dafd0766383"
 
     -- Body-slam animation RUIDs (Mushmom pack mob/6130101.img). No literal crouch clip exists, so the
     -- 'jump' clip (a crouch-and-spring compress) is used as the wind-up, attack1 as the lunge, hit1 as the daze.
@@ -205,6 +349,8 @@ script MushmomBoss extends Component
     @HideFromInspector property boolean slamWindup = false
     @HideFromInspector property boolean charging = false
     @HideFromInspector property boolean groggy = false
+    @HideFromInspector property boolean shockwave = false
+    @HideFromInspector property boolean engaged = false
     @HideFromInspector property number chargeDir = -1
 
     @ExecSpace("ServerOnly")
@@ -215,15 +361,33 @@ script MushmomBoss extends Component
         self.slamWindup = false
         self.charging = false
         self.groggy = false
+        self.shockwave = false
+        self.engaged = false
         self.phase = 1
         self:LoadFromTable()
         self.Hp = self.MaxHp
 
+        -- MapleTile: RigidbodyComponent.WalkSpeed is the MAX ground speed and silently clamps MoveVelocity,
+        -- so the follow / charge InputSpeed is capped to the Rigidbody default (1.4) — far below the player's
+        -- run speed. That left the boss unable to keep pace. Raise the cap to cover the FASTEST intended move
+        -- (the charge). The normal follow stays gentle because FollowAnchor caps its own request at
+        -- FollowMaxSpeed (well under this ceiling), so the boss doesn't zoom past the anchor and swing off-screen.
+        local body = self.Entity.RigidbodyComponent
+        if isvalid(body) then
+            body.WalkSpeed = math.max(self.FollowMaxSpeed, self.ChargeSpeed)
+        end
+
         self._T.spores = {}
         self._T.sporeCount = 0
+        self._T.shockwaves = {}
+        self._T.shockwaveCount = 0
 
         -- First cast happens after one full interval (gives the map time to load + the player time to approach).
         self.skillTimer = self.SkillInterval
+
+        -- Boss-fight ultimate rule: distance/time gauge fill is disabled during the fight; the gauge only
+        -- charges when the player lands a hit on the boss (see HandleHitEvent → BossHitGaugeGain).
+        self:SetPlayersGaugeAutoFill(false)
 
         self:SetSprite(self.StandRUID)
         log("[MushmomBoss] OnBeginPlay hp=" .. tostring(self.MaxHp) .. " phase=1")
@@ -272,9 +436,35 @@ script MushmomBoss extends Component
             return
         end
 
+        -- Shockwave jump: telegraph → hop → ground-wide shock. Handled entirely in UpdateShockwave.
+        if self.shockwave then
+            self:UpdateShockwave(delta)
+            return
+        end
+
         -- Charging: committed body-slam dash. Movement + slam hit are handled here; normal logic is suspended.
         if self.charging then
             self:UpdateCharge(delta)
+            return
+        end
+
+        -- Engagement gate: after spawning, stand in place facing the player until the auto-running player
+        -- gets within EngageDistance. Without this, a boss spawned far from its follow anchor (playerX +
+        -- NormalOffsetX) would immediately sprint toward the anchor the moment it appears.
+        if not self.engaged then
+            self:FacePlayer()
+            local mv = self.Entity.MovementComponent
+            if isvalid(mv) then mv:Stop() end
+            self:SetSprite(self.StandRUID)
+            local p = self:FindNearestPlayer()
+            if isvalid(p) then
+                local dx = math.abs(p.TransformComponent.WorldPosition.x - self.Entity.TransformComponent.WorldPosition.x)
+                if dx <= self.EngageDistance then
+                    self.engaged = true
+                    self.skillTimer = self.SkillInterval
+                    log("[MushmomBoss] engaged (player within " .. tostring(self.EngageDistance) .. ")")
+                end
+            end
             return
         end
 
@@ -283,20 +473,20 @@ script MushmomBoss extends Component
         -- Mid-cast (telegraph wind-up).
         if self.casting then
             if self.slamWindup then
-                -- Body-slam wind-up: walk to the player's right-front, then crouch in place (see UpdateSlamWindup).
+                -- Body-slam wind-up: crouch in place until the telegraph timer fires the charge (see UpdateSlamWindup).
                 self:UpdateSlamWindup(delta)
             else
-                -- Ranged cast (spore spray): hold position and let the cast pose read clearly.
-                self:FacePlayer()
-                local m = self.Entity.MovementComponent
-                if isvalid(m) then m:Stop() end
+                -- Ranged cast (spore spray): HOLD the screen-relative spot so the boss keeps its position
+                -- relative to the running player during the cast (the telegraph pose from SkillSporeSpray stays;
+                -- we ignore FollowAnchor's return so it isn't swapped to the walk clip).
+                self:FollowAnchor(self.NormalOffsetX, delta)
             end
             return
         end
 
         -- Runner positioning: between attacks the boss returns to / keeps pace at the right of the screen
         -- (player X + NormalOffsetX), since the player auto-runs right and the camera follows.
-        local moving = self:FollowAnchor(self.NormalOffsetX)
+        local moving = self:FollowAnchor(self.NormalOffsetX, delta)
         self:SetSprite(moving and self.MoveRUID or self.StandRUID)
 
         -- Skill scheduler: fire when the timer elapses, then reset to the phase-scaled interval.
@@ -308,13 +498,25 @@ script MushmomBoss extends Component
     end
 
     @ExecSpace("ServerOnly")
-    method boolean FollowAnchor(number offsetX)
-        -- Player-relative horizontal follow for a Rigidbody entity: drive the boss toward (playerX + offsetX)
-        -- via MovementComponent (never a direct Position write). Proportional speed so it catches up when far
-        -- and settles smoothly when near. Clamped to the map-edge bounds so it can't run off the foothold.
-        -- Returns true while actively moving (caller can pick the move vs idle clip).
+    method boolean FollowAnchor(number offsetX, number delta)
+        -- Horizontal HOLD at (playerX + offsetX): the boss's 원래 자리 = screen-right resting spot. The player
+        -- auto-runs right EVERY frame (PlayerController writes MoveVelocity) and the camera follows it, so to
+        -- look parked on screen the boss has to track that moving point.
+        --
+        -- Why not a force/InputSpeed controller: it oscillated left-right (the 화면 좌우 왔다갔다). Two reasons —
+        -- (1) MoveToDirection is force-based, so the boss overshoots the setpoint and springs back (physics
+        -- inertia); (2) this runs ServerOnly and the player's X here is the network-synced value, which arrives
+        -- in steppy bursts, not smoothly — differentiating it for a velocity feed-forward amplified that noise
+        -- and flipped the travel direction frame to frame.
+        --
+        -- Fix: LERP the boss's X straight toward the anchor (the same proven approach ShockAnchorX uses during
+        -- the hop). No force, no velocity term, no direction sign -> smooth, monotonic convergence with zero
+        -- overshoot, and the lerp itself low-pass-filters the steppy server-side player X. Y is read fresh each
+        -- frame so gravity/foothold keep the boss grounded. Returns true only while the gap is still visible.
         local movement = self.Entity.MovementComponent
         if not isvalid(movement) then return false end
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return false end
 
         local player = self:FindNearestPlayer()
         if not isvalid(player) then
@@ -327,21 +529,21 @@ script MushmomBoss extends Component
         if desiredX < self.StageMinX then desiredX = self.StageMinX end
         if desiredX > self.StageMaxX then desiredX = self.StageMaxX end
 
-        local bossX = self.Entity.TransformComponent.WorldPosition.x
-        local err = desiredX - bossX
-        if math.abs(err) <= self.FollowDeadzone then
-            movement:Stop()
-            self:ApplyFacing(self:DirectionToPlayer())   -- settled: keep watching the player
-            return false
-        end
+        local wp = t.WorldPosition
+        local err = desiredX - wp.x
 
-        local dir = (err > 0) and 1 or -1
-        local speed = math.abs(err) * self.FollowGain
-        if speed > self.FollowMaxSpeed then speed = self.FollowMaxSpeed end
-        movement.InputSpeed = speed
-        self:ApplyFacing(dir)
-        movement:MoveToDirection(Vector2(dir, 0), 0)
-        return true
+        -- Always look AT the player (it holds a gap and slides to keep it, so facing travel dir turns its back).
+        self:ApplyFacing(self:DirectionToPlayer())
+
+        -- Smoothing factor per frame; FollowGain is the stiffness knob. Clamp to <=1 so it never overshoots.
+        local k = delta * self.FollowGain
+        if k > 1 then k = 1 end
+        local newX = wp.x + err * k
+        movement:SetWorldPosition(Vector2(newX, wp.y))
+
+        -- Report "moving" (walk clip) only while the gap is still noticeable; a tight hold reads as idle so the
+        -- boss looks like it's standing at its spot rather than moon-walking in place.
+        return math.abs(err) > self.FollowDeadzone
     end
 
     method number EffectiveInterval()
@@ -362,8 +564,14 @@ script MushmomBoss extends Component
 
     @ExecSpace("ServerOnly")
     method void FireNextSkill()
-        -- Randomly picks the next boss skill: body slam (몸통박치기 charge) vs spore spray (ranged fan).
-        if _UtilLogic:RandomDouble() < self.BodySlamChance then
+        -- Randomly picks the next boss skill among the three patterns (weighted):
+        --   [0, ShockwaveChance)                      → 충격파 점프 (shockwave jump)
+        --   [ShockwaveChance, +BodySlamChance)        → 몸통박치기 (body slam charge)
+        --   [.. , 1]                                  → 버섯 포자 발사 (spore fan)
+        local r = _UtilLogic:RandomDouble()
+        if r < self.ShockwaveChance then
+            self:SkillShockwave()
+        elseif r < self.ShockwaveChance + self.BodySlamChance then
             self:SkillBodySlam()
         else
             self:SkillSporeSpray()
@@ -373,46 +581,86 @@ script MushmomBoss extends Component
     -- === Skill 1: spore spray (상/중/하단 부채꼴 5발) ===
     @ExecSpace("ServerOnly")
     method void SkillSporeSpray()
-        -- Telegraph first (play the cast animation + sound) so the player can react, then after
-        -- TelegraphDuration spawn the spore fan and return to the idle pose.
+        -- Telegraph, then fire the randomly-chosen PATTERN — DOUBLE (low→jump then high→slide, two volleys)
+        -- with probability SporeDoubleChance, otherwise FAN (a single upper-quadrant angular spread). The boss
+        -- holds the cast pose across the whole thing (casting=true also holds its screen position).
         self.casting = true
         self:SetSprite(self.TelegraphRUID)
         self:PlayCastSound()
-        log("[MushmomBoss] telegraph (skill1) - spores in " .. tostring(self.TelegraphDuration) .. "s")
 
-        _TimerService:SetTimerOnce(function()
-            if not isvalid(self.Entity) or self.dead then return end
-            self:SpawnSporeFan()
-            self:SetSprite(self.StandRUID)
-            self.casting = false
-        end, self.TelegraphDuration)
+        if _UtilLogic:RandomDouble() < self.SporeDoubleChance then
+            log("[MushmomBoss] telegraph (skill1) - DOUBLE (low->jump, high->slide)")
+            _TimerService:SetTimerOnce(function()
+                if not isvalid(self.Entity) or self.dead then return end
+                self:SpawnSporeVolley(self.SporeLowHeight)      -- 1차: 낮게 → 점프로 회피
+            end, self.TelegraphDuration)
+            _TimerService:SetTimerOnce(function()
+                if not isvalid(self.Entity) or self.dead then return end
+                self:SpawnSporeVolley(self.SporeHighHeight)     -- 2차: 높게 → 슬라이드로 회피
+                self:SetSprite(self.StandRUID)
+                self.casting = false
+            end, self.TelegraphDuration + self.SporeVolleyGap)
+        else
+            log("[MushmomBoss] telegraph (skill1) - FAN")
+            _TimerService:SetTimerOnce(function()
+                if not isvalid(self.Entity) or self.dead then return end
+                self:SpawnSporeFan()
+                self:SetSprite(self.StandRUID)
+                self.casting = false
+            end, self.TelegraphDuration)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SpawnSporeVolley(number height)
+        -- Fires SporeCount HORIZONTAL spores (vy = 0) toward the player at a FIXED height above the floor,
+        -- staggered back along X into a short train so it's a sustained threat the player holds a dodge through.
+        -- LOW height -> the player jumps over it; HIGH height -> the player slides under it (MushmomSpore drops
+        -- its hit top to SlideHeight while sliding). Horizontal + fixed height keeps the required dodge reliable
+        -- (spores have no gravity, so an angled shot's height at the player would drift with distance).
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return end
+        local wp = t.WorldPosition
+
+        local dir = self:DirectionToPlayer()
+        local vx = dir * self.SporeSpeed
+        local y = wp.y + height
+        for i = 0, self.SporeCount - 1 do
+            local sx = wp.x + dir * (self.SporeForwardOffset + i * self.SporeTrainGap)
+            local spore = self:AcquireSpore()
+            if spore ~= nil then
+                spore:Launch(Vector3(sx, y, wp.z), vx, 0, self.SporeDamage)
+            end
+        end
+        log("[MushmomBoss] spore volley height=" .. string.format("%.2f", height)
+            .. " count=" .. tostring(self.SporeCount) .. " dir=" .. tostring(dir))
     end
 
     @ExecSpace("ServerOnly")
     method void SpawnSporeFan()
-        -- Fires SporeCount spores toward the player, fanned vertically from top to bottom so they cover
-        -- the upper / middle / lower lanes in one spray.
+        -- FAN pattern: SporeCount spores toward the player in an angular fan across the UPPER quadrant only
+        -- (SporeMinAngle 0° = horizontal toward the player → SporeMaxAngle 90° = straight up). Never downward.
         local t = self.Entity.TransformComponent
         if not isvalid(t) then return end
         local wp = t.WorldPosition
 
         local dir = self:DirectionToPlayer()
         local startPos = Vector3(wp.x + dir * self.SporeForwardOffset, wp.y + self.SporeVerticalOffset, wp.z)
-        local vx = dir * self.SporeSpeed
-
         for i = 0, self.SporeCount - 1 do
-            -- frac goes +1 (top) .. -1 (bottom); a single spore fires straight ahead.
             local frac = 0
             if self.SporeCount > 1 then
-                frac = 1 - 2 * (i / (self.SporeCount - 1))
+                frac = i / (self.SporeCount - 1)
             end
-            local vy = frac * self.SporeVerticalSpread
+            local angDeg = self.SporeMinAngle + frac * (self.SporeMaxAngle - self.SporeMinAngle)
+            local ang = angDeg * math.pi / 180
+            local vx = dir * self.SporeSpeed * math.cos(ang)
+            local vy = self.SporeSpeed * math.sin(ang)
             local spore = self:AcquireSpore()
             if spore ~= nil then
                 spore:Launch(startPos, vx, vy, self.SporeDamage)
             end
         end
-        log("[MushmomBoss] sprayed " .. tostring(self.SporeCount) .. " spores dir=" .. tostring(dir))
+        log("[MushmomBoss] spore FAN " .. tostring(self.SporeCount) .. " dir=" .. tostring(dir))
     end
 
     @ExecSpace("ServerOnly")
@@ -449,43 +697,256 @@ script MushmomBoss extends Component
         return spore
     end
 
+    -- === Skill 3: shockwave jump (충격파 점프) — telegraph(눈빛) → 도약 → 착지 시 지면 전체 충격파 ===
+    @ExecSpace("ServerOnly")
+    method void SkillShockwave()
+        -- Telegraph: glowing-eye warning + crouch-ready pose held for ShockwaveTelegraphDuration, then hop.
+        self.casting = true
+        self.shockwave = true
+        self._T.shockPhase = "telegraph"
+        self._T.shockTime = 0
+        self._T.groundY = self.Entity.TransformComponent.WorldPosition.y
+        local m = self.Entity.MovementComponent
+        if isvalid(m) then m:Stop() end
+        self:FacePlayer()
+        self:SetSprite(self.CrouchRUID)
+        self:PlayCastSound()
+        self:StartShockTelegraphVfx()
+        log("[MushmomBoss] shockwave telegraph - jump in " .. tostring(self.ShockwaveTelegraphDuration) .. "s")
+        _TimerService:SetTimerOnce(function()
+            if not isvalid(self.Entity) or self.dead then return end
+            self:StopShockTelegraphVfx()
+            self._T.shockPhase = "rise"
+            self._T.shockTime = 0
+            -- Zero gravity so the scripted hop holds its arc instead of being fought by physics.
+            local body = self.Entity.RigidbodyComponent
+            if isvalid(body) then
+                self._T.shockGravity = body.Gravity
+                body.Gravity = 0
+            end
+        end, self.ShockwaveTelegraphDuration)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateShockwave(number delta)
+        -- Drives the hop arc: rise → fall → land(+shock). "telegraph" phase is idle (timer-driven).
+        local phase = self._T.shockPhase
+        if phase == "landed" then
+            -- Post-landing wind-up: hold still on the floor until the delay timer erupts the wave.
+            return
+        end
+        if phase == nil or phase == "telegraph" then
+            -- Telegraph (crouch + glowing eyes): HOLD the screen-relative spot so the boss keeps its position
+            -- relative to the running player until the hop fires. Keeps groundY valid (Y unchanged) and the
+            -- crouch pose set in SkillShockwave (we ignore FollowAnchor's return, so no walk clip).
+            self:FollowAnchor(self.NormalOffsetX, delta)
+            return
+        end
+        self._T.shockTime = (self._T.shockTime or 0) + delta
+        local m = self.Entity.MovementComponent
+        local groundY = self._T.groundY or 0
+        -- Keep facing the player and keep tracking its X while airborne, so the hop stays over the normal
+        -- follow gap instead of drifting away as the player keeps auto-running.
+        self:FacePlayer()
+        local newX = self:ShockAnchorX(delta)
+        if phase == "rise" then
+            local t = self._T.shockTime / self.ShockwaveRiseTime
+            if t >= 1 then t = 1 end
+            local y = groundY + self.ShockwaveJumpHeight * t
+            if isvalid(m) then m:SetWorldPosition(Vector2(newX, y)) end
+            if t >= 1 then
+                self._T.shockPhase = "fall"
+                self._T.shockTime = 0
+            end
+        elseif phase == "fall" then
+            local t = self._T.shockTime / self.ShockwaveFallTime
+            if t >= 1 then t = 1 end
+            local y = groundY + self.ShockwaveJumpHeight * (1 - t)
+            if isvalid(m) then m:SetWorldPosition(Vector2(newX, y)) end
+            if t >= 1 then
+                self:LandShockwave()
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method number ShockAnchorX(number delta)
+        -- The X the boss should ease toward while hopping = the normal follow anchor (playerX + NormalOffsetX),
+        -- clamped to the arena. Proportional easing so the horizontal tracking is smooth, not a snap.
+        local curX = self.Entity.TransformComponent.WorldPosition.x
+        local player = self:FindNearestPlayer()
+        if not isvalid(player) then return curX end
+        local desiredX = player.TransformComponent.WorldPosition.x + self.NormalOffsetX
+        if desiredX < self.StageMinX then desiredX = self.StageMinX end
+        if desiredX > self.StageMaxX then desiredX = self.StageMaxX end
+        local k = delta * self.FollowGain
+        if k > 1 then k = 1 end
+        return curX + (desiredX - curX) * k
+    end
+
+    @ExecSpace("ServerOnly")
+    method void LandShockwave()
+        -- Boss lands: snap to the floor, restore gravity, idle pose. Then WAIT ShockwaveLandDelay before the
+        -- ground wave erupts — a short wind-up so it doesn't fire the instant the feet touch down. The boss
+        -- holds still during the wait (UpdateShockwave "landed" phase); the timer erupts the wave + burst.
+        local groundY = self._T.groundY or 0
+        local curX = self.Entity.TransformComponent.WorldPosition.x
+        local m = self.Entity.MovementComponent
+        if isvalid(m) then m:SetWorldPosition(Vector2(curX, groundY)) end
+        local body = self.Entity.RigidbodyComponent
+        if isvalid(body) and self._T.shockGravity ~= nil then
+            body.Gravity = self._T.shockGravity
+        end
+        self:SetSprite(self.StandRUID)
+        self._T.shockPhase = "landed"
+        _TimerService:SetTimerOnce(function()
+            if not isvalid(self.Entity) or self.dead then return end
+            self:SpawnShockWave(self._T.groundY or 0)
+            -- Server-authoritative boss position → burst spawns at the true (predicted) spot, not the lagged
+            -- client transform (which read behind the boss).
+            local bwp = self.Entity.TransformComponent.WorldPosition
+            self:PlayShockwaveVfx(bwp.x, bwp.y, bwp.z)
+            self.shockwave = false
+            self.casting = false
+            self._T.shockPhase = nil
+            self.skillTimer = self:EffectiveInterval()
+            log("[MushmomBoss] shockwave erupted (after " .. tostring(self.ShockwaveLandDelay) .. "s land delay)")
+        end, self.ShockwaveLandDelay)
+        log("[MushmomBoss] shockwave LANDED - wave in " .. tostring(self.ShockwaveLandDelay) .. "s")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SpawnShockWave(number groundY)
+        -- Emit ONE ground shockwave at the boss's feet (just in front, toward the player) that then TRAVELS
+        -- toward the player along the floor. It only damages players whose feet are on/near the ground
+        -- (up.y <= groundY + ShockwaveSafeHeight) as it passes, so jumping over it is the dodge — a
+        -- running-game "jump the wave". A single pooled object.
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return end
+        local wp = t.WorldPosition
+
+        -- Spawn just in FRONT of the boss (toward the player) and send it traveling that way.
+        -- dir = which way the player is; ShockwaveSpawnForward = how far ahead it is born.
+        local dir = self:DirectionToPlayer()
+        local startX = wp.x + dir * self.ShockwaveSpawnForward
+        local startPos = Vector3(startX, groundY + self.ShockwaveGroundOffset, wp.z)
+        local hitTopY = groundY + self.ShockwaveSafeHeight
+
+        local wave = self:AcquireShockWave()
+        if wave ~= nil then
+            wave.Speed = self.ShockwaveSpeed
+            wave:Launch(startPos, dir, self.ShockwaveDamage, hitTopY)
+            log("[MushmomBoss] shockwave TRAVEL launched x=" .. string.format("%.2f", startX)
+                .. " dir=" .. tostring(dir) .. " speed=" .. tostring(self.ShockwaveSpeed) .. " hitTopY=" .. tostring(hitTopY))
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method any AcquireShockWave()
+        -- Returns an idle ground wave from the pool, or spawns a new one (parented to the current map) and
+        -- registers it. Waves are reused, never destroyed mid-game (mirrors AcquireSpore).
+        for i, wave in ipairs(self._T.shockwaves) do
+            if wave ~= nil and isvalid(wave) and wave:IsIdle() then
+                return wave
+            end
+        end
+
+        local map = self.Entity.CurrentMap
+        if map == nil then
+            log("[MushmomBoss] CurrentMap is nil; cannot spawn shockwave")
+            return nil
+        end
+
+        self._T.shockwaveCount = self._T.shockwaveCount + 1
+        local name = "MushmomShockWave_" .. tostring(self._T.shockwaveCount)
+        local proj = _SpawnService:SpawnByModelId(self.ShockWaveModelId, name, Vector3(0, 99999, 999), map)
+        if proj == nil then
+            log("[MushmomBoss] SpawnByModelId returned nil for '" .. tostring(self.ShockWaveModelId) .. "'")
+            return nil
+        end
+
+        ---@type MushmomShockWave
+        local wave = proj:GetComponent("script.MushmomShockWave")
+        if wave == nil then
+            log("[MushmomBoss] Spawned shockwave is missing script.MushmomShockWave")
+            return nil
+        end
+        table.insert(self._T.shockwaves, wave)
+        return wave
+    end
+
+    @ExecSpace("Multicast")
+    method void StartShockTelegraphVfx()
+        -- Glowing warning above the boss head during the shockwave telegraph (눈이 빛나는 예고).
+        if not isvalid(self.Entity) then return end
+        self._T.shockGlowSerial = _ParticleService:PlayBasicParticleAttached(
+            BasicParticleType.SpinField, self.Entity, Vector3(0, 1.2, 0), 0, Vector3(0.3, 0.3, 0.3), true, {})
+    end
+
+    @ExecSpace("Multicast")
+    method void StopShockTelegraphVfx()
+        -- Removes the telegraph glow started in StartShockTelegraphVfx.
+        if self._T.shockGlowSerial ~= nil then
+            _ParticleService:RemoveParticle(self._T.shockGlowSerial)
+            self._T.shockGlowSerial = nil
+        end
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayShockwaveVfx(number px, number py, number pz)
+        -- One-shot ground shock burst on every client. The position is computed on the SERVER and passed in
+        -- explicitly — NOT read from the client-side transform, which lags behind the boss's true position and
+        -- made the burst spawn behind the boss. CurrentMap is the context entity so the coords are world-absolute
+        -- (same proven pattern as MushmomShockWave.ShowHitEffect).
+        local mapEntity = self.Entity.CurrentMap
+        if mapEntity == nil then return end
+        _ParticleService:PlayBasicParticle(
+            BasicParticleType.SmallExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(1.2, 1.2, 1.2), false, {})
+    end
+
     -- === Skill 2: body slam (몸통박치기) — telegraph → charge → hit / dodge → groggy ===
     @ExecSpace("ServerOnly")
     method void SkillBodySlam()
-        -- Begin the body-slam: first WALK to the player's right-front (so the slam happens up close), then
-        -- crouch there as a readable wind-up, then charge. Driven per-frame by UpdateSlamWindup.
+        -- Begin the body-slam: crouch in place as a readable wind-up (no approach walk), then charge from
+        -- wherever the boss currently stands. BeginCharge locks the dash direction toward the player.
         self.casting = true
         self.slamWindup = true
-        self._T.slamPhase = "approach"
+        self._T.slamPhase = "crouch"
         self._T.windupTime = 0
-        log("[MushmomBoss] body-slam: approaching player's front")
+        local m = self.Entity.MovementComponent
+        if isvalid(m) then m:Stop() end
+        self:FacePlayer()
+        self:SetSprite(self.CrouchRUID)
+        self:PlayCastSound()
+        log("[MushmomBoss] body-slam telegraph (crouch) - charge in " .. tostring(self.SlamTelegraphDuration) .. "s")
+        _TimerService:SetTimerOnce(function()
+            if not isvalid(self.Entity) or self.dead then return end
+            self.slamWindup = false
+            self:BeginCharge()
+        end, self.SlamTelegraphDuration)
     end
 
     @ExecSpace("ServerOnly")
     method void UpdateSlamWindup(number delta)
-        -- Phase 1 "approach": follow to the player's right-front (FrontOffsetX). On arrival (or a safety
-        -- timeout) → phase 2 "crouch": hold the crouch pose for SlamTelegraphDuration, then BeginCharge.
-        self._T.windupTime = (self._T.windupTime or 0) + delta
+        -- Body-slam wind-up (crouch): HOLD the screen-relative spot (playerX + NormalOffsetX) so the running
+        -- player can't close the gap during the telegraph. Uses a TIGHTER lerp than the normal follow
+        -- (WindupHoldGain > FollowGain) so there's almost no follow-lag drift over the short crouch — the normal
+        -- follow's gentle gain leaves a lag of ~playerSpeed/FollowGain, which reads as the boss "sitting still"
+        -- while the player catches up. Keeps the crouch pose (no sprite change), just moves + faces.
+        local movement = self.Entity.MovementComponent
+        local t = self.Entity.TransformComponent
+        if not isvalid(movement) or not isvalid(t) then return end
+        local player = self:FindNearestPlayer()
+        if not isvalid(player) then return end
 
-        if self._T.slamPhase == "approach" then
-            local moving = self:FollowAnchor(self.FrontOffsetX)
-            self:SetSprite(moving and self.MoveRUID or self.StandRUID)
-            -- Arrived at the front, or the player out-ran the follow for too long → crouch anyway.
-            if (not moving) or self._T.windupTime >= 2.0 then
-                self._T.slamPhase = "crouch"
-                local m = self.Entity.MovementComponent
-                if isvalid(m) then m:Stop() end
-                self:SetSprite(self.CrouchRUID)
-                self:PlayCastSound()
-                log("[MushmomBoss] body-slam telegraph (crouch) - charge in " .. tostring(self.SlamTelegraphDuration) .. "s")
-                _TimerService:SetTimerOnce(function()
-                    if not isvalid(self.Entity) or self.dead then return end
-                    self.slamWindup = false
-                    self:BeginCharge()
-                end, self.SlamTelegraphDuration)
-            end
-        end
-        -- Phase 2 "crouch": the boss holds still until the scheduled timer fires BeginCharge. Nothing per-frame.
+        self:ApplyFacing(self:DirectionToPlayer())
+        local desiredX = player.TransformComponent.WorldPosition.x + self.NormalOffsetX
+        if desiredX < self.StageMinX then desiredX = self.StageMinX end
+        if desiredX > self.StageMaxX then desiredX = self.StageMaxX end
+        local wp = t.WorldPosition
+        local k = delta * self.WindupHoldGain
+        if k > 1 then k = 1 end
+        movement:SetWorldPosition(Vector2(wp.x + (desiredX - wp.x) * k, wp.y))
     end
 
     @ExecSpace("ServerOnly")
@@ -495,6 +956,7 @@ script MushmomBoss extends Component
         self.slamWindup = false
         self.charging = true
         self._T.chargeTime = 0
+        self._T.chargeStartX = self.Entity.TransformComponent.WorldPosition.x
         self.chargeDir = self:DirectionToPlayer()
         self:ApplyFacing(self.chargeDir)
         self:SetSprite(self.ChargeRUID)
@@ -524,6 +986,14 @@ script MushmomBoss extends Component
         end
 
         local bossX = self.Entity.TransformComponent.WorldPosition.x
+
+        -- Safety: bound the dash length so the now-fast charge can't sprint off-screen. Traveling
+        -- MaxChargeDistance from the start point counts as a whiff → groggy.
+        if math.abs(bossX - (self._T.chargeStartX or bossX)) >= self.MaxChargeDistance then
+            log("[MushmomBoss] charge reached max distance -> GROGGY")
+            self:EnterGroggy()
+            return
+        end
 
         -- Player-relative dodge: the charge swept past the player's X (player jumped / slipped by) -> dodged.
         local player = self:FindNearestPlayer()
@@ -607,6 +1077,7 @@ script MushmomBoss extends Component
         self:StopCharge()
         self.groggy = true
         self._T.groggyTimer = self.GroggyDuration
+        self:SetAutoDamageSkin(false)   -- suppress the base auto number; groggy hits show one crit total instead
         self:SetSprite(self.GroggyRUID)
         self:StartGroggyVfx()
         log("[MushmomBoss] >>> GROGGY <<< for " .. tostring(self.GroggyDuration) .. "s (takes x"
@@ -617,7 +1088,7 @@ script MushmomBoss extends Component
     method void UpdateGroggy(number delta)
         -- Stays at the player's right-front (FrontOffsetX) so the auto-running player keeps it in reach and
         -- can punish it, then counts down the groggy window. (Sprite stays the dizzy hit1 set in EnterGroggy.)
-        self:FollowAnchor(self.FrontOffsetX)
+        self:FollowAnchor(self.FrontOffsetX, delta)
         self._T.groggyTimer = (self._T.groggyTimer or 0) - delta
         if self._T.groggyTimer <= 0 then
             self:ExitGroggy()
@@ -628,6 +1099,7 @@ script MushmomBoss extends Component
     method void ExitGroggy()
         -- Leaves groggy: clear the flag, stop the dizzy VFX, restore the idle pose, and resume the scheduler.
         self.groggy = false
+        self:SetAutoDamageSkin(true)    -- restore the normal auto damage number after groggy
         self:StopGroggyVfx()
         self:SetSprite(self.StandRUID)
         self.skillTimer = self:EffectiveInterval()
@@ -751,14 +1223,55 @@ script MushmomBoss extends Component
         local dmg = event.TotalDamage
         if self.groggy then
             dmg = dmg * self.GroggyDamageMultiplier
+            -- Auto DamageSkin is off during groggy, so show ONE total number in crit style.
+            self:PlayGroggyCritSkin(math.floor(dmg))
             log("[MushmomBoss] GROGGY hit x" .. tostring(self.GroggyDamageMultiplier)
                 .. " (" .. tostring(event.TotalDamage) .. " -> " .. tostring(dmg) .. ")")
         end
         self.Hp = self.Hp - dmg
         log("[MushmomBoss] hit -" .. tostring(dmg) .. " -> hp=" .. tostring(self.Hp))
+        -- Boss-fight ultimate rule: every landed hit charges the attacker's gauge (문서: 3%).
+        self:GrantUltGauge(event.AttackerEntity)
         if self.Hp <= 0 then
             self.Hp = 0
             self:Die(event.AttackerEntity)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void GrantUltGauge(Entity attacker)
+        -- The attacker entity is the player's SwordBeam projectile; resolve its owner and charge the
+        -- owner's ultimate gauge by BossHitGaugeGain. Mirrors GrantMeso's owner resolution.
+        if self.BossHitGaugeGain <= 0 then return end
+        if not isvalid(attacker) then return end
+        ---@type SwordBeam
+        local beam = attacker:GetComponent("script.SwordBeam")
+        if not isvalid(beam) or not isvalid(beam.OwnerEntity) then return end
+        ---@type UltimateSkill
+        local ult = beam.OwnerEntity:GetComponent("script.UltimateSkill")
+        if isvalid(ult) then
+            ult:AddGauge(self.BossHitGaugeGain)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetPlayersGaugeAutoFill(boolean paused)
+        -- Pause/resume the time-based ultimate gauge fill for every player on this map. During the boss
+        -- fight the gauge must NOT fill by distance/time — only landed hits charge it (문서 규칙).
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                ---@type UltimateSkill
+                local ult = user:GetComponent("script.UltimateSkill")
+                if isvalid(ult) then
+                    ult:SetAutoFillPaused(paused)
+                end
+            end
         end
     end
 
@@ -770,7 +1283,15 @@ script MushmomBoss extends Component
         self.slamWindup = false
         self.charging = false
         self.groggy = false
+        self.shockwave = false
+        self._T.shockPhase = nil
+        -- Restore gravity if the boss died mid-hop, and clear both looping telegraph VFX.
+        local body = self.Entity.RigidbodyComponent
+        if isvalid(body) and self._T.shockGravity ~= nil then body.Gravity = self._T.shockGravity end
+        self:StopShockTelegraphVfx()
         self:StopGroggyVfx()
+        -- Boss fight over: let the players' ultimate gauge fill normally again.
+        self:SetPlayersGaugeAutoFill(true)
         self:GrantMeso(attacker)
         self:SetSprite(self.DieRUID)
         log("[MushmomBoss] died")
@@ -799,8 +1320,32 @@ script MushmomBoss extends Component
         _SoundService:PlaySound(self.CastSoundRUID, 1.0)
     end
 
+    @ExecSpace("Multicast")
+    method void PlayGroggyCritSkin(integer amount)
+        -- ONE total-damage number over the boss in CRITICAL style (bCritical=true) for a groggy hit. The auto
+        -- DamageSkin is suppressed during groggy (SetAutoDamageSkin) so this crit number is the only one shown.
+        -- _DamageSkinService:Play is client-space (per the DamageSkinService.Play execspace rule), so Multicast.
+        if not isvalid(self.Entity) then return end
+        if amount <= 0 then return end
+        _DamageSkinService:Play(
+            self.Entity, self.HitSkinRUID, 0, { amount },
+            DamageSkinTweenType.Default, true,          -- bCritical = true → 치명타 스타일
+            Vector2(0, 1.8),                            -- above the boss head
+            Vector2(1.4, 1.4), 1.0, 1.0, LitMode.Default)
+    end
+
+    @ExecSpace("Multicast")
+    method void SetAutoDamageSkin(boolean on)
+        -- Toggle the boss's auto DamageSkin (the base hit number from DamageSkinSpawnerComponent) so the groggy
+        -- CRIT shows a single total number instead of base + crit. Client-side (the numbers render on clients).
+        local c = self.Entity.DamageSkinSpawnerComponent
+        if isvalid(c) then c.Enable = on end
+    end
+
     @ExecSpace("ServerOnly")
     method void OnEndPlay()
+        -- Boss removed from the map: resume the players' ultimate gauge auto-fill so it isn't left paused.
+        self:SetPlayersGaugeAutoFill(true)
         -- Destroys every pooled spore so they do not leak when the boss is removed.
         if self._T.spores ~= nil then
             for i, spore in ipairs(self._T.spores) do
@@ -809,6 +1354,15 @@ script MushmomBoss extends Component
                 end
             end
             self._T.spores = {}
+        end
+        -- Destroys every pooled ground shockwave the same way.
+        if self._T.shockwaves ~= nil then
+            for i, wave in ipairs(self._T.shockwaves) do
+                if wave ~= nil and isvalid(wave) and isvalid(wave.Entity) then
+                    wave.Entity:Destroy()
+                end
+            end
+            self._T.shockwaves = {}
         end
     end
 

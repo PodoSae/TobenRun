@@ -1,0 +1,201 @@
+@Component
+script MudObstacle extends Component
+
+    -- Mud / swamp terrain gimmick: a non-lethal ground patch that SLOWS the player's run speed while they
+    -- are walking through it. Server-authoritative proximity scan (same box pattern as Obstacle); on a
+    -- player entering / leaving the patch it sends that player's client a PlayerController:AddTerrainSlow /
+    -- RemoveTerrainSlow RPC. Because runner movement is client-authoritative (Rigidbody LocalPlayer), the
+    -- slow MUST be applied on the client — see PlayerController.terrainMultiplier (a channel separate from
+    -- the Slide/Ultimate speedMultiplier, so a slide ending mid-mud does not clear the mud slow).
+
+    -- Speed factor applied while inside (0..1, lower = slower). 0.5 = half run speed.
+    @DisplayName("감속 배율")
+    @Description("진흙 위에 있는 동안 이동속도에 곱하는 값(작을수록 느림). 0.5 = 절반 속도")
+    @MinValue(0.1)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number SlowMultiplier = 0.5
+
+    -- Contact box half-width (world units). Auto-sized from the sprite footprint * Transform.Scale in
+    -- OnBeginPlay so it matches the visible puddle. @Sync propagates the server value to any client overlay.
+    @Sync property number HalfWidth = 1.0
+    -- Contact box = sprite footprint * this fraction. <1 trims it inside the sprite so a near-miss past the
+    -- visible edge does not slow.
+    property number HitFairness = 0.9
+    -- Vertical clearance: a player is only slowed while its feet are within (mud center Y + this). Jumping
+    -- above it clears the mud, so hopping over the patch avoids the slow (mirrors the shockwave dodge).
+    @DisplayName("진흙 회피 높이")
+    @Description("발이 (진흙 중심 + 이 값) 보다 높으면(=점프로 넘으면) 감속되지 않는다")
+    @MinValue(0.3)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number SlowTopHeight = 0.9
+
+    -- Safety auto-despawn after this many seconds. 0 = permanent (course placement sets a large value so the
+    -- patch waits for the runner to arrive).
+    property number Lifetime = 0
+
+    property number aliveTime = 0
+    property boolean removed = false
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Self-size the contact box to the sprite, prime the per-player "inside" set, log spawn.
+        self.aliveTime = 0
+        self.removed = false
+        self._T.inside = {}        -- userId -> player Entity currently standing in the mud
+        self:AutoSizeWidth()
+        local p = self.Entity.TransformComponent.Position
+        log("[MudObstacle] spawned at x=" .. string.format("%.2f", p.x)
+            .. " y=" .. string.format("%.2f", p.y) .. " halfW=" .. string.format("%.2f", self.HalfWidth)
+            .. " slow=" .. tostring(self.SlowMultiplier))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AutoSizeWidth()
+        -- Sizes the slow box width to this entity's rendered sprite: (px / PixelPerUnit) * Transform.Scale,
+        -- trimmed by HitFairness. LoadSpriteAndWait blocks until the sprite is ready, so this is safe here.
+        local spr = self.Entity.SpriteRendererComponent
+        if spr == nil then return end
+        local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
+        if sp == nil or sp.PixelPerUnit <= 0 then return end
+        local sc = self.Entity.TransformComponent.Scale
+        self.HalfWidth = (sp.Width / sp.PixelPerUnit) * math.abs(sc.x) * 0.5 * self.HitFairness
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Each frame: diff which players are standing in the patch vs last frame, and send enter/leave slow
+        -- RPCs on the transitions only (not every frame). Lifetime cleanup releases any lingering slow.
+        if self.removed then return end
+
+        if self.Lifetime > 0 then
+            self.aliveTime = self.aliveTime + delta
+            if self.aliveTime >= self.Lifetime then
+                self:Despawn()
+                return
+            end
+        end
+
+        local map = self.Entity.CurrentMap
+        if map == nil then return end
+        local mapComp = map.MapComponent
+        if mapComp == nil then return end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        local sourceId = self.Entity.Name
+
+        -- Build this frame's inside set (and track the nearest player for diagnostics).
+        local current = {}
+        local nearDx = 9999
+        local nearDy = 0
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local dx = up.x - myPos.x
+                local dy = up.y - myPos.y
+                if math.abs(dx) < math.abs(nearDx) then nearDx = dx nearDy = dy end
+                -- Horizontal overlap with the puddle, and feet near the ground (not jumped over it).
+                if math.abs(dx) <= self.HalfWidth and dy <= self.SlowTopHeight then
+                    local uid = self:UserIdOf(user)
+                    if uid ~= nil then
+                        current[uid] = user
+                        if self._T.inside[uid] == nil then
+                            -- Entered the mud this frame → slow this player's client.
+                            self:SlowPlayer(user, sourceId, self.SlowMultiplier)
+                            log("[MudObstacle] player entered mud '" .. sourceId .. "' -> slow " .. tostring(self.SlowMultiplier))
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Throttled proximity diagnostic (every ~0.5s): shows the nearest player's offset vs the box so a
+        -- "no slow" report can be pinned to detection geometry (dx/dy) vs the slow-apply path.
+        self._T.dbg = (self._T.dbg or 0) + delta
+        if self._T.dbg >= 0.5 and math.abs(nearDx) < 4 then
+            self._T.dbg = 0
+            log("[MudObstacle] '" .. sourceId .. "' nearest player dx=" .. string.format("%.2f", nearDx)
+                .. " dy=" .. string.format("%.2f", nearDy) .. " (halfW=" .. string.format("%.2f", self.HalfWidth)
+                .. " topH=" .. string.format("%.2f", self.SlowTopHeight) .. " mudY=" .. string.format("%.2f", myPos.y) .. ")")
+        end
+
+        -- Anyone in last frame's set but not this frame's → left the mud → clear their slow.
+        for uid, user in pairs(self._T.inside) do
+            if current[uid] == nil then
+                self:UnslowPlayer(user, sourceId)
+                log("[MudObstacle] player left mud '" .. sourceId .. "' -> unslow")
+            end
+        end
+
+        self._T.inside = current
+    end
+
+    @ExecSpace("ServerOnly")
+    method string UserIdOf(Entity user)
+        -- The player's engine UserId (used both as the inside-set key and the Client RPC target). nil-safe.
+        local pc = user.PlayerComponent
+        if pc == nil then return nil end
+        return pc.UserId
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SlowPlayer(Entity user, string sourceId, number mult)
+        -- Apply the slow on BOTH sides: directly on the server-side controller AND via a Client RPC to the
+        -- owning client, so the run is slowed regardless of which side's MoveVelocity write is authoritative.
+        ---@type PlayerController
+        local ctrl = user:GetComponent("script.PlayerController")
+        if ctrl == nil then
+            log("[MudObstacle] SlowPlayer: no PlayerController on user")
+            return
+        end
+        local uid = self:UserIdOf(user)
+        ctrl:SetTerrainSlow(sourceId, mult)              -- server-side
+        if uid ~= nil then
+            ctrl:AddTerrainSlow(sourceId, mult, uid)     -- owning client (Client RPC, targetUserId appended)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UnslowPlayer(Entity user, string sourceId)
+        -- Clear the slow on both sides.
+        if not isvalid(user) then return end
+        ---@type PlayerController
+        local ctrl = user:GetComponent("script.PlayerController")
+        if ctrl == nil then return end
+        local uid = self:UserIdOf(user)
+        ctrl:ClearTerrainSlow(sourceId)                  -- server-side
+        if uid ~= nil then
+            ctrl:RemoveTerrainSlow(sourceId, uid)        -- owning client
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Despawn()
+        -- Clears the slow on every player still inside (so it isn't left stuck), then removes the patch.
+        if self.removed then return end
+        self.removed = true
+        local sourceId = self.Entity.Name
+        for uid, user in pairs(self._T.inside) do
+            self:UnslowPlayer(user, sourceId)
+        end
+        self._T.inside = {}
+        self.Entity:Destroy()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Safety: if the patch is torn down (map unload / boss cleanup) release any slow it applied.
+        if self.removed then return end
+        local sourceId = self.Entity.Name
+        if self._T.inside ~= nil then
+            for uid, user in pairs(self._T.inside) do
+                self:UnslowPlayer(user, sourceId)
+            end
+            self._T.inside = {}
+        end
+    end
+
+end

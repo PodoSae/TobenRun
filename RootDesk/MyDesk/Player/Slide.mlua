@@ -41,6 +41,10 @@ script Slide extends Component
     property AvatarStateAnimationComponent asac = nil
     property boolean isLocal = false
     property boolean active = false
+    -- Server-readable mirror of "is this player sliding". The movement FSM is client-only, so server systems
+    -- (e.g. MushmomSpore's hit test treating a sliding player as a LOW target) can't read it — this flag is
+    -- pushed to the server on slide start/end so they can.
+    @HideFromInspector property boolean serverSliding = false
     property Vector3 origScale = Vector3(1, 1, 1)
     -- Original PlayRate of the MOVE (walk) body action, captured server-side so the remap can be
     -- restored without resetting the run-animation speed (SetActionSheet would reset it to 1).
@@ -90,6 +94,7 @@ script Slide extends Component
         end
 
         self.active = true
+        self:SetServerSliding(true)   -- tell the server so server-side hit tests treat this player as low
 
         -- Forward-speed change for the slide (PlayerController reads speedMultiplier each frame).
         if self.controller ~= nil then
@@ -124,6 +129,7 @@ script Slide extends Component
         -- Restores run speed and avatar scale. Does NOT force an FSM state — the caller decides
         -- (key released -> RUN, interrupted by a jump -> the FSM already moved to JUMP).
         self.active = false
+        self:SetServerSliding(false)
         if self.controller ~= nil then
             self.controller.speedMultiplier = 1
         end
@@ -169,6 +175,13 @@ script Slide extends Component
                 end
             end
         end
+    end
+
+    @ExecSpace("Server")
+    method void SetServerSliding(boolean on)
+        -- Mirror the client-only slide state onto the server so server-side systems can read it. Called from
+        -- the client on slide start/end.
+        self.serverSliding = on
     end
 
     @ExecSpace("ClientOnly")

@@ -1,0 +1,283 @@
+@Component
+script ScreenSporeBarrage extends Component
+
+    -- Screen-relative spore barrage (course hazard). An INVISIBLE trigger placed at a course X. While the runner
+    -- is within ActivateRange of it, it fires spores from the FRONT of the screen (playerX + SpawnAhead) that fly
+    -- LEFT toward the player, cycling three fixed screen-height lanes: 상(top) → 중(mid) → 하(bottom).
+    --
+    -- Each shot is TELEGRAPHED: a screen-space warning (SporeWarnHud UI at the right edge) flashes the matching
+    -- lane for TelegraphDuration, then the spore fires. The warning is UI, not a world entity, so it does NOT
+    -- jitter (an earlier world-space marker tracked the network-steppy player X and shook left/right). Reuses the
+    -- boss's pooled MushmomSpore projectile. Server-authoritative; spawned by CourseGen. The emitter deals no
+    -- contact damage — the spores do.
+
+    property string SporeModelId = "MushmomSpore"
+
+    @DisplayName("발동 범위")
+    @Description("플레이어와 이 트리거의 X 거리가 이 값(월드 유닛) 이내이면 포자를 발사")
+    @MinValue(1)
+    @MaxValue(40)
+    @Delta(0.5)
+    property number ActivateRange = 8.0
+
+    @DisplayName("발사 간격(초)")
+    @Description("한 발의 예고가 끝난 뒤 다음 예고까지의 대기 시간")
+    @MinValue(0.1)
+    @MaxValue(5)
+    @Delta(0.05)
+    property number FireInterval = 0.6
+
+    @DisplayName("발사 예고 시간(초)")
+    @Description("화면 우측에 해당 레인 경고가 떠 있다가 이 시간 뒤 실제 포자가 발사된다")
+    @MinValue(0.1)
+    @MaxValue(3)
+    @Delta(0.05)
+    property number TelegraphDuration = 0.45
+
+    @DisplayName("포자 생성 앞거리(화면 앞끝)")
+    @Description("포자가 '플레이어 X + 이 값' 위치(화면 오른쪽 앞끝)에서 생성돼 왼쪽으로 날아온다")
+    @MinValue(2)
+    @MaxValue(15)
+    @Delta(0.5)
+    property number SpawnAhead = 7.0
+
+    @DisplayName("포자 속도")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number SporeSpeed = 8.0
+
+    @DisplayName("포자 데미지")
+    @MinValue(1)
+    @MaxValue(100)
+    @Delta(1)
+    property number SporeDamage = 15
+
+    -- The three screen-height lanes, as world-Y OFFSETS from this emitter's Y (placed on the floor). Since the
+    -- side-runner camera keeps Y fixed, a fixed world-Y reads as a fixed SCREEN height (상/중/하).
+    @DisplayName("하단 레인 높이")
+    @MinValue(0)
+    @MaxValue(6)
+    @Delta(0.1)
+    property number LaneLowOffset = 0.7
+    @DisplayName("중단 레인 높이")
+    @MinValue(0)
+    @MaxValue(8)
+    @Delta(0.1)
+    property number LaneMidOffset = 2.2
+    @DisplayName("상단 레인 높이")
+    @MinValue(0)
+    @MaxValue(10)
+    @Delta(0.1)
+    property number LaneHighOffset = 3.7
+
+    -- Safety auto-despawn (0 = permanent; course placement sets a large value so it waits for the runner).
+    property number Lifetime = 0
+
+    property number aliveTime = 0
+    property boolean removed = false
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Prime pool, timers, lane cursor, and the idle/telegraph state. Server only.
+        self.aliveTime = 0
+        self.removed = false
+        self._T.spores = {}
+        self._T.sporeCount = 0
+        self._T.state = "idle"          -- "idle" (waiting) or "telegraph" (warning shown, about to fire)
+        self._T.fireTimer = self.FireInterval
+        self._T.telegraphTimer = 0
+        self._T.lane = 0                -- 0 = 상(top/high), 1 = 중(mid), 2 = 하(bottom/low); cycles each shot
+        self._T.pendingLaneOff = 0
+        self._T.shownLane = -1          -- which HUD lane is currently flashing (-1 = none)
+        local p = self.Entity.TransformComponent.Position
+        log("[ScreenSporeBarrage] spawned at x=" .. string.format("%.2f", p.x))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Idle → wait FireInterval → telegraph (flash lane warning) → wait TelegraphDuration → fire → idle.
+        if self.removed then return end
+
+        if self.Lifetime > 0 then
+            self.aliveTime = self.aliveTime + delta
+            if self.aliveTime >= self.Lifetime then
+                self:Despawn()
+                return
+            end
+        end
+
+        local player = self:FindNearestPlayer()
+        if not isvalid(player) then
+            self:EndTelegraph()
+            self._T.state = "idle"
+            return
+        end
+        local myX = self.Entity.TransformComponent.WorldPosition.x
+        local px = player.TransformComponent.WorldPosition.x
+        if math.abs(px - myX) > self.ActivateRange then
+            -- Runner not in range: cancel any warning, reset to idle, keep the timer primed.
+            self:EndTelegraph()
+            self._T.state = "idle"
+            self._T.fireTimer = self.FireInterval
+            return
+        end
+
+        if self._T.state == "telegraph" then
+            self._T.telegraphTimer = self._T.telegraphTimer - delta
+            if self._T.telegraphTimer <= 0 then
+                self:FireSpore(px)
+                self:EndTelegraph()
+                self._T.state = "idle"
+                self._T.fireTimer = self.FireInterval
+            end
+            return
+        end
+
+        -- idle: count down to the next shot, then start its telegraph.
+        self._T.fireTimer = self._T.fireTimer - delta
+        if self._T.fireTimer <= 0 then
+            self:BeginTelegraph()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void BeginTelegraph()
+        -- Pick the current lane, advance the cycle, and flash that lane's screen warning.
+        local laneIdx = self._T.lane
+        local laneOff = self.LaneHighOffset
+        if laneIdx == 1 then
+            laneOff = self.LaneMidOffset
+        elseif laneIdx == 2 then
+            laneOff = self.LaneLowOffset
+        end
+        self._T.lane = (laneIdx + 1) % 3
+        self._T.pendingLaneOff = laneOff
+        self._T.shownLane = laneIdx
+        self._T.state = "telegraph"
+        self._T.telegraphTimer = self.TelegraphDuration
+        self:WarnSet(laneIdx, true)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void EndTelegraph()
+        -- Turn off whichever lane warning this emitter currently has up (safe to call any time).
+        if self._T.shownLane ~= nil and self._T.shownLane >= 0 then
+            self:WarnSet(self._T.shownLane, false)
+            self._T.shownLane = -1
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void WarnSet(integer lane, boolean on)
+        -- Drive the screen-space warning HUD (Multicast → all clients). Guarded in case the Logic isn't ready.
+        if _SporeWarnHud ~= nil then
+            _SporeWarnHud:SetLane(lane, on)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FireSpore(number px)
+        -- Fire ONE spore at the telegraphed lane Y from the screen front edge, flying LEFT toward the player.
+        local baseY = self.Entity.TransformComponent.WorldPosition.y
+        local startPos = Vector3(px + self.SpawnAhead, baseY + self._T.pendingLaneOff, 0)
+        local spore = self:AcquireSpore()
+        if spore ~= nil then
+            spore:Launch(startPos, -self.SporeSpeed, 0, self.SporeDamage)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method any AcquireSpore()
+        -- Returns an idle spore from the pool, or spawns a new one (parented to the current map) and registers
+        -- it. Spores are reused, never destroyed mid-game (mirrors MushmomBoss.AcquireSpore).
+        for i, spore in ipairs(self._T.spores) do
+            if spore ~= nil and isvalid(spore) and spore:IsIdle() then
+                return spore
+            end
+        end
+
+        local map = self.Entity.CurrentMap
+        if map == nil then
+            log("[ScreenSporeBarrage] CurrentMap is nil; cannot spawn spore")
+            return nil
+        end
+
+        self._T.sporeCount = self._T.sporeCount + 1
+        -- "SporeP_" (not a course prefix) so ClearCourse doesn't sweep live projectiles; OnEndPlay cleans the pool.
+        local name = "SporeP_" .. tostring(self.Entity.Name) .. "_" .. tostring(self._T.sporeCount)
+        local proj = _SpawnService:SpawnByModelId(self.SporeModelId, name, Vector3(0, 99999, 999), map)
+        if proj == nil then
+            log("[ScreenSporeBarrage] SpawnByModelId returned nil for '" .. tostring(self.SporeModelId) .. "'")
+            return nil
+        end
+
+        ---@type MushmomSpore
+        local spore = proj:GetComponent("script.MushmomSpore")
+        if spore == nil then
+            log("[ScreenSporeBarrage] spawned spore missing script.MushmomSpore")
+            return nil
+        end
+        table.insert(self._T.spores, spore)
+        return spore
+    end
+
+    @ExecSpace("ServerOnly")
+    method Entity FindNearestPlayer()
+        -- Nearest player on this map by squared distance (mirrors MushmomBoss.FindNearestPlayer).
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return nil end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return nil end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return nil end
+
+        local mp = self.Entity.TransformComponent.WorldPosition
+        local best = nil
+        local bestD = 999999
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local ddx = up.x - mp.x
+                local ddy = up.y - mp.y
+                local d = ddx * ddx + ddy * ddy
+                if d < bestD then
+                    bestD = d
+                    best = user
+                end
+            end
+        end
+        return best
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Despawn()
+        -- Turn off any warning, destroy the pooled spores, and remove the emitter itself.
+        if self.removed then return end
+        self.removed = true
+        self:EndTelegraph()
+        self:DestroySpores()
+        self.Entity:Destroy()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Clean up on teardown (map unload / course rebuild): clear the warning + destroy pooled spores.
+        self:EndTelegraph()
+        self:DestroySpores()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DestroySpores()
+        -- Destroy every pooled spore so they don't leak when the emitter is removed.
+        if self._T.spores ~= nil then
+            for i, spore in ipairs(self._T.spores) do
+                if spore ~= nil and isvalid(spore) and isvalid(spore.Entity) then
+                    spore.Entity:Destroy()
+                end
+            end
+            self._T.spores = {}
+        end
+    end
+
+end
