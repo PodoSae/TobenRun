@@ -38,6 +38,8 @@ script Slide extends Component
     property any fsm = nil
     property any controller = nil
     property any fastfall = nil
+    -- Ultimate dash ref: 궁극기(돌진) 중에는 슬라이드 불가 (기획 §3.3). Active is @Sync so the client reads it.
+    property any ult = nil
     property AvatarStateAnimationComponent asac = nil
     property boolean isLocal = false
     property boolean active = false
@@ -56,6 +58,7 @@ script Slide extends Component
         self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
         self.controller = self.Entity:GetComponent("script.PlayerController")
         self.fastfall = self.Entity:GetComponent("script.FastFall")
+        self.ult = self.Entity:GetComponent("script.UltimateSkill")
         self.asac = self.Entity.AvatarStateAnimationComponent
         self.origScale = self.Entity.TransformComponent.Scale
         self.isLocal = self:IsClient() and _UserService.LocalPlayer == self.Entity
@@ -88,6 +91,8 @@ script Slide extends Component
         if self.active then return end
         if self.body == nil then return end
         if not self.body:IsOnGround() then return end
+        -- 궁극기(돌진) 중에는 슬라이드 시작 불가 (기획 §3.3).
+        if self.ult ~= nil and self.ult.Active then return end
 
         if self.fsm ~= nil then
             if not self.fsm:TryChange("SLIDE") then return end
@@ -149,6 +154,12 @@ script Slide extends Component
         local holding = self:IsSlideKeyHeld()
 
         if self.active then
+            -- Ultimate started mid-slide: force the slide to end (슬라이드 X during 궁극기, 기획 §3.3).
+            if self.ult ~= nil and self.ult.Active then
+                if self.fsm ~= nil then self.fsm:TryChange("RUN") end
+                self:EndSlide()
+                return
+            end
             -- Something else moved us out of SLIDE (jump cancel / land logic) -> clean up.
             if self.fsm ~= nil and not self.fsm:Is("SLIDE") then
                 self:EndSlide()

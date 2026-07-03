@@ -1,12 +1,16 @@
 @Component
 script UltimateSkill extends Component
 
-    -- Ultimate (궁극기): a gauge fills over time; at 100% the local player presses R to DASH forward
-    -- (돌진), ploughing through and DESTROYING any monster (a HitComponent entity) or obstacle
-    -- (script.Obstacle) in its path. The gauge + activation gate + destruction are server-authoritative;
-    -- the dash speed/visual is client-side (movement authority for a Rigidbody LocalPlayer is the owning
-    -- client) and gated through PlayerStateMachine's ULTIMATE state so it coordinates with the other
-    -- movement skills. The synced Gauge drives the HUD gauge bar (see PlayerHudUI).
+    -- Ultimate (궁극기): a gauge fills over time; at 100% the local player presses R to open a short
+    -- ATTACK WINDOW (DashDuration) that DESTROYS any monster (a HitComponent entity) or obstacle
+    -- (script.Obstacle) in the path ahead. It does NOT change movement — the player keeps the normal
+    -- running speed and physics the whole time (no speed boost, no gravity/WalkSpeed tampering); the
+    -- ultimate only gates + destroys + plays effects. The gauge + activation gate + destruction are
+    -- server-authoritative. The window is a MODE that layers ON TOP of the movement FSM (not a
+    -- mutually-exclusive FSM state): 점프·2단점프·급강하 keep working normally while it's active.
+    -- The synced Active flag is the single source of truth for "is active" — Slide and the auto-attack
+    -- (SkillManager) read it to suppress themselves (슬라이드 X, 자동공격 X during 궁극기, 기획 §3.3).
+    -- The synced Gauge drives the HUD gauge bar (see PlayerHudUI).
     --
     -- Gauge fill is time-based by default (GaugeFillPerSec). Call AddGauge() from elsewhere (e.g. on a
     -- kill) to also charge it from gameplay events.
@@ -19,12 +23,35 @@ script UltimateSkill extends Component
     -- (AddGauge). Toggled by MushmomBoss on begin/death. AddGauge still works while paused.
     @Sync property boolean AutoFillPaused = false
 
-    -- ── Dash tuning ──
-    property number DashDuration = 1.2         -- seconds the dash lasts
-    property number DashSpeedMul = 3.0         -- forward-speed multiplier during the dash
-    property number DashHitWidth = 2.4         -- forward reach of the destroy box (world units)
+    -- ── Attack-window tuning ──
+    property number DashDuration = 10.0        -- seconds the destroy window stays open (기획 §3.3: 10초)
+    property number DashHitWidth = 4.0         -- forward reach of the destroy box (world units); wide enough
+                                               -- that the box front (DashHitOffset + DashHitWidth/2 = 3.5)
+                                               -- covers the boss parked at UltimateContactOffset (~2.5)
     property number DashHitHeight = 1.8        -- vertical reach of the destroy box
-    property number DashHitOffset = 1.0        -- destroy-box center ahead of the player
+    property number DashHitOffset = 1.5        -- destroy-box center ahead of the player
+
+    -- ── Speed multiplier (궁극기 중 이동속도 배율) ──
+    @DisplayName("궁극기 이동속도 배율")
+    @Description("궁극기 발동 동안 달리기 속도에 곱하는 값. 1=변화 없음, 1.4=40% 빠름. speedMultiplier와 WalkSpeed/FallSpeedMaxX 상한을 함께 스케일해 clamp 없이 그대로 적용된다. 기준값은 발동 순간(코스 속도)에 스냅샷 후 종료 시 정확히 복원")
+    @MinValue(1)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number DashSpeedMul = 1.4
+
+    -- ── Boss damage (궁극기가 보스에게 주는 틱 데미지) ──
+    @DisplayName("보스 틱 데미지 배율")
+    @Description("궁극기 경로에 보스가 있으면 한 틱마다 (플레이어 공격력 × 이 값) 만큼 보스 HP를 깎는다. 일반 몬스터/장애물처럼 삭제하지 않고 정상 데미지→사망 연출 경로를 탄다")
+    @MinValue(0)
+    @MaxValue(10)
+    @Delta(0.5)
+    property number BossDamageMul = 2.0
+    @DisplayName("보스 데미지 틱 간격(초)")
+    @Description("보스에게 데미지를 넣는 간격. 0이면 매 프레임. 예: 0.3 = 0.3초마다 1틱")
+    @MinValue(0)
+    @MaxValue(2)
+    @Delta(0.05)
+    property number BossDamageTickInterval = 1.0
 
     -- Active dash state (server-authoritative, @Sync so every client can react to the visual).
     @Sync property boolean Active = false
@@ -34,41 +61,48 @@ script UltimateSkill extends Component
     property string dashEffectRUID = ""        -- looped aura attached to the player while dashing
     property string destroyEffectRUID = ""     -- one-shot burst at each destroyed target
 
+    -- Front "wind slash" effect: a looped slash-arc attached just AHEAD of the player for the whole
+    -- ultimate window (바람을 가르는 연출). Empty disables it.
+    @DisplayName("궁극기 전방 바람베기 이펙트 RUID")
+    @Description("궁극기(돌진) 지속 동안 플레이어 바로 앞에 붙어 루프 재생되는 베기 궤적 이펙트(animationclip). 비우면 없음")
+    property string frontEffectRUID = "67ed893057c94815b7d042db18b084c0"
+    @DisplayName("전방 이펙트 앞 오프셋(월드유닛)")
+    @Description("플레이어 중심에서 이펙트를 얼마나 앞(+X)에 둘지")
+    @MinValue(0)
+    @MaxValue(4)
+    @Delta(0.1)
+    property number frontEffectOffsetX = 0.4
+    @DisplayName("전방 이펙트 크기 배율")
+    @MinValue(0.2)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number frontEffectScale = 1.2
+    @DisplayName("전방 이펙트 좌우반전(FlipX)")
+    @Description("이펙트가 반대 방향(뒤)을 향하면 켜서 앞(+X)으로 뒤집는다")
+    property boolean frontEffectFlipX = true
+
     -- Cached refs / runtime state.
-    property RigidbodyComponent body = nil
-    -- The rigidbody's WalkSpeed is the MAX ground speed: it clamps MoveVelocity, so the dash speed
-    -- boost is silently capped unless we also raise this limit for the dash. Captured on begin play.
-    property number origWalkSpeed = 0
-    -- The player's NORMAL gravity, captured on begin play. During the dash we set Gravity = 0 so the
-    -- player receives no downward force and simply holds altitude (no falling, no position snapping —
-    -- snapping fought tile collision and pushed the player down). Restored exactly when the dash ends.
-    property number origGravity = 0
-    -- The rigidbody's normal IsolatedMove flag. During the dash we force it TRUE so the player does not
-    -- fall off the end of a foothold — the charge crosses pits at foothold height. Restored on dash end.
-    property boolean origIsolatedMove = false
-    property any fsm = nil
-    property any controller = nil
     property boolean isLocal = false
     property any keyHandler = nil
     property integer effectSerial = 0
+    property integer frontEffectSerial = 0
+    -- Speed-boost state. controller/body are looked up on the FIRST boost frame; baseWalkSpeed /
+    -- baseFallSpeedMaxX snapshot the per-course run caps at THAT moment (never OnBeginPlay — RunGameHud
+    -- sets the real per-course WalkSpeed after begin play, so an OnBeginPlay capture grabs the model
+    -- default and makes the restore wrong, the same pitfall MudObstacle's slowBaseWalkSpeed avoids). The
+    -- boosting flag guards the snapshot so it happens exactly once per activation.
+    property any controller = nil
+    property RigidbodyComponent body = nil
+    property number baseWalkSpeed = 0
+    property number baseFallSpeedMaxX = 0
+    property boolean boosting = false
+    -- Boss-damage throttle: counts down while active; a boss tick lands when it reaches 0, then it resets to
+    -- BossDamageTickInterval. Reset to 0 on activation so the first frame the boss is in range ticks at once.
+    property number bossDmgTimer = 0
 
     method void OnBeginPlay()
-        -- Server owns the gauge/dash/destruction; the client also binds input + FSM.
-        -- The PlayerController ref is cached on BOTH sides: the dash speed boost must be applied
-        -- wherever the Rigidbody movement authority lives. PlayerController.OnUpdate runs on the
-        -- server too and keeps writing the normal run speed (speed * speedMultiplier), so if only
-        -- the client raised speedMultiplier the server would cancel the boost out — hence we also
-        -- raise it on the server while dashing.
-        self.controller = self.Entity:GetComponent("script.PlayerController")
-        self.body = self.Entity.RigidbodyComponent
-        -- Remember the normal max ground speed + gravity so the dash can raise the WalkSpeed cap for its
-        -- boosted velocity, toggle gravity to hold the floor, and restore both exactly.
-        if self.body ~= nil then
-            self.origWalkSpeed = self.body.WalkSpeed
-            self.origGravity = self.body.Gravity
-            self.origIsolatedMove = self.body.IsolatedMove
-        end
-
+        -- Server owns the gauge/activation/destruction; the client binds the R input. The ultimate no
+        -- longer touches movement or physics, so there are no rigidbody/controller refs to cache.
         if self:IsServer() then
             self.Gauge = 0
             self.Active = false
@@ -76,7 +110,6 @@ script UltimateSkill extends Component
         end
 
         if self:IsClient() then
-            self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
             self.isLocal = (_UserService.LocalPlayer == self.Entity)
             if self.isLocal then
                 self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
@@ -97,62 +130,59 @@ script UltimateSkill extends Component
             _EffectService:RemoveEffect(self.effectSerial)
             self.effectSerial = 0
         end
+        if self.frontEffectSerial ~= 0 then
+            _EffectService:RemoveEffect(self.frontEffectSerial)
+            self.frontEffectSerial = 0
+        end
     end
 
-    method void ApplyDashSpeed()
-        -- Raises the run-speed multiplier AND the rigidbody's max ground speed (WalkSpeed), and ZEROES
-        -- gravity so the dash holds its altitude. The multiplier alone is not enough: MoveVelocity is
-        -- clamped by WalkSpeed, so without lifting the cap the dash velocity is silently limited to the
-        -- normal run speed. No @ExecSpace → runs on the caller's side (server dash loop or owning
-        -- client), which is where movement is applied.
+    method void ApplyBoost()
+        -- Scales the run speed by DashSpeedMul. Two things must move together: speedMultiplier (drives the
+        -- MoveVelocity PlayerController writes each frame) AND the rigidbody caps WalkSpeed / FallSpeedMaxX
+        -- (ground / air horizontal clamps) — raising the multiplier alone is silently clipped back to the
+        -- normal run speed by WalkSpeed. No @ExecSpace: runs on the caller's side (server loop or owning
+        -- client), wherever movement is applied. Base caps are snapshotted once per activation (guarded by
+        -- self.boosting) on the FIRST call so the restore returns to the true per-course value.
+        if not self.boosting then
+            self.controller = self.Entity:GetComponent("script.PlayerController")
+            self.body = self.Entity.RigidbodyComponent
+            if self.body ~= nil then
+                self.baseWalkSpeed = self.body.WalkSpeed
+                self.baseFallSpeedMaxX = self.body.FallSpeedMaxX
+            end
+            self.boosting = true
+        end
         if self.controller ~= nil then self.controller.speedMultiplier = self.DashSpeedMul end
         if self.body ~= nil then
-            self.body.WalkSpeed = self.origWalkSpeed * self.DashSpeedMul
-            -- Native anti-fall: keep the player from dropping off foothold ends so the charge crosses
-            -- pits at foothold height instead of falling in.
-            self.body.IsolatedMove = true
-            -- No gravity during the dash: the player receives NO downward force. We do NOT snap the Y
-            -- position anymore — SetWorldPosition fought the tile collision and pushed the player DOWN.
-            self.body.Gravity = 0
-            -- Gravity=0 only stops NEW downward acceleration; any velocity already accumulated keeps
-            -- dragging the player down. Kill the downward component of the move input every frame too so
-            -- the altitude actually holds.
-            local v = self.body.MoveVelocity
-            if v.y < 0 then self.body.MoveVelocity = Vector2(v.x, 0) end
-            -- DEBUG: one line with everything needed to find WHY the player still descends.
-            -- gravity=0 is proven; if realVelY≈0 while y drops → following the ground (terrain), if
-            -- realVelY<0 → some force. onGround distinguishes grounded terrain-follow vs airborne.
-            log("[UltimateSkill] g=" .. tostring(self.body.Gravity)
-                .. " isolated=" .. tostring(self.body.IsolatedMove)
-                .. " onGround=" .. tostring(self.body:IsOnGround())
-                .. " realVelY=" .. tostring(self.body.RealMoveVelocity.y)
-                .. " y=" .. tostring(self.Entity.TransformComponent.WorldPosition.y)
-                .. " server=" .. tostring(self:IsServer()))
+            self.body.WalkSpeed = self.baseWalkSpeed * self.DashSpeedMul
+            self.body.FallSpeedMaxX = self.baseFallSpeedMaxX * self.DashSpeedMul
         end
     end
 
-    method void RestoreDashSpeed()
-        -- Restores the normal run-speed multiplier, the original max ground speed cap, and gravity
-        -- (the dash zeroed it to hold altitude) so the player falls normally again after.
+    method void EndBoost()
+        -- Restores the normal run-speed multiplier and the snapshotted per-course caps. Idempotent.
+        if not self.boosting then return end
         if self.controller ~= nil then self.controller.speedMultiplier = 1 end
         if self.body ~= nil then
-            self.body.WalkSpeed = self.origWalkSpeed
-            self.body.Gravity = self.origGravity
-            self.body.IsolatedMove = self.origIsolatedMove
+            self.body.WalkSpeed = self.baseWalkSpeed
+            self.body.FallSpeedMaxX = self.baseFallSpeedMaxX
         end
+        self.boosting = false
     end
 
     method void OnUpdate(number delta)
-        -- Server: fill the gauge, tick the dash timer, destroy targets in the path.
+        -- Server: fill the gauge, tick the active-window timer, apply the speed boost, destroy targets.
         if self:IsServer() then
             if not self.Active and not self.AutoFillPaused and self.Gauge < self.MaxGauge then
                 self.Gauge = math.min(self.MaxGauge, self.Gauge + self.GaugeFillPerSec * delta)
             end
             if self.Active then
-                -- Server-side speed boost (the server may own Rigidbody movement; without this it
-                -- overwrites the client's boost with the normal run speed every frame). Also raises
-                -- the WalkSpeed cap so the boosted velocity is not clamped.
-                self:ApplyDashSpeed()
+                -- Server also drives the boost: PlayerController.OnUpdate runs server-side too and rewrites
+                -- MoveVelocity from (speed * speedMultiplier) every frame, so the boost must be re-asserted
+                -- here or the server would cancel it out.
+                self:ApplyBoost()
+                -- Advance the boss-damage throttle before the sweep so DestroyTarget can tick the boss.
+                self.bossDmgTimer = self.bossDmgTimer - delta
                 self:DestroyTargetsInPath()
                 self.remaining = self.remaining - delta
                 if self.remaining <= 0 then
@@ -161,10 +191,10 @@ script UltimateSkill extends Component
             end
         end
 
-        -- Client (local player): re-assert the dash speed + WalkSpeed cap every frame so another skill
-        -- (e.g. Slide restoring speedMultiplier to 1 as it ends) can't cancel the dash mid-flight.
+        -- Client (owning player): re-assert every frame so another skill ending (e.g. Slide resetting
+        -- speedMultiplier to 1 as it finishes) can't cancel the boost mid-window.
         if self:IsClient() and self.Active and self.isLocal then
-            self:ApplyDashSpeed()
+            self:ApplyBoost()
         end
     end
 
@@ -185,6 +215,7 @@ script UltimateSkill extends Component
         self.Gauge = 0
         self.Active = true
         self.remaining = self.DashDuration
+        self.bossDmgTimer = 0
         log("[UltimateSkill] ULTIMATE activated (server)")
     end
 
@@ -220,12 +251,12 @@ script UltimateSkill extends Component
 
     @ExecSpace("ServerOnly")
     method void EndDashServer()
-        -- Ends the dash; the @Sync flip drives EndDashClient on every client.
+        -- Ends the active window; the @Sync flip drives EndDashClient on every client.
         self.Active = false
         self.remaining = 0
-        -- Restore the normal run speed + WalkSpeed cap on the server side (mirrors EndDashClient).
-        self:RestoreDashSpeed()
-        log("[UltimateSkill] dash end (server)")
+        -- Restore the run speed on the server side (mirrors EndDashClient on the owning client).
+        self:EndBoost()
+        log("[UltimateSkill] ultimate end (server)")
     end
 
     @ExecSpace("ClientOnly")
@@ -242,30 +273,41 @@ script UltimateSkill extends Component
 
     @ExecSpace("ClientOnly")
     method void StartDashClient()
-        -- Visual on every client; speed + FSM state only on the owning client.
+        -- Attach the looped aura effect on every client (if configured); apply the speed boost only on the
+        -- owning client (movement authority for a Rigidbody LocalPlayer lives there).
         if self.dashEffectRUID ~= "" then
             self.effectSerial = _EffectService:PlayEffectAttached(
                 self.dashEffectRUID, self.Entity, Vector3(0, 0, 0), 0, Vector3(1, 1, 1), true)
         end
-        if _UserService.LocalPlayer == self.Entity then
-            self:ApplyDashSpeed()
-            if self.fsm ~= nil then self.fsm:TryChange("ULTIMATE") end
+        -- Wind-slash arc looped just ahead of the player for the ultimate's duration. FlipX orients it
+        -- forward (+X) since the clip is authored facing the other way.
+        if self.frontEffectRUID ~= "" then
+            self.frontEffectSerial = _EffectService:PlayEffectAttached(
+                self.frontEffectRUID, self.Entity, Vector3(self.frontEffectOffsetX, 0, 0), 0,
+                Vector3(self.frontEffectScale, self.frontEffectScale, 1), true,
+                { ["FlipX"] = self.frontEffectFlipX })
         end
-        log("[UltimateSkill] dash start (client) local=" .. tostring(_UserService.LocalPlayer == self.Entity))
+        if _UserService.LocalPlayer == self.Entity then
+            self:ApplyBoost()
+        end
+        log("[UltimateSkill] ultimate start (client) local=" .. tostring(_UserService.LocalPlayer == self.Entity))
     end
 
     @ExecSpace("ClientOnly")
     method void EndDashClient()
-        -- Stops the visual and restores normal run speed / RUN state on the owning client.
+        -- Stops the looped aura effect and restores the normal run speed on the owning client.
         if self.effectSerial ~= 0 then
             _EffectService:RemoveEffect(self.effectSerial)
             self.effectSerial = 0
         end
-        if _UserService.LocalPlayer == self.Entity then
-            self:RestoreDashSpeed()
-            if self.fsm ~= nil then self.fsm:TryChange("RUN") end
+        if self.frontEffectSerial ~= 0 then
+            _EffectService:RemoveEffect(self.frontEffectSerial)
+            self.frontEffectSerial = 0
         end
-        log("[UltimateSkill] dash end (client)")
+        if _UserService.LocalPlayer == self.Entity then
+            self:EndBoost()
+        end
+        log("[UltimateSkill] ultimate end (client)")
     end
 
     @ExecSpace("ServerOnly")
@@ -323,6 +365,37 @@ script UltimateSkill extends Component
                 end
             end
         end
+
+        -- Pass 3 — BOSS by POSITION (robust). The boss's hit collider may not sit in the queried HitBox group
+        -- (known project mismatch), so pass 1's overlap query can miss it entirely and no damage lands. Detect
+        -- the boss by type + position and apply throttled tick damage (never destroy). Y tolerance is generous
+        -- because the boss is a large entity whose transform origin can sit above the player's feet origin.
+        if isvalid(map) then
+            local bosses = map:GetChildComponentsByTypeName("script.MushmomBoss", true)
+            if bosses ~= nil then
+                local halfW = self.DashHitWidth * 0.5
+                for i, bc in ipairs(bosses) do
+                    if bc ~= nil and isvalid(bc) then
+                        local be = bc.Entity
+                        if isvalid(be) then
+                            local bp = be.TransformComponent.WorldPosition
+                            local inX = math.abs(bp.x - cx) <= halfW
+                            local inY = math.abs(bp.y - cy) <= 2.5
+                            if inX and inY and self.bossDmgTimer <= 0 then
+                                ---@type MushmomBoss
+                                local boss = bc
+                                local dmg = self:GetPlayerAttackPower() * self.BossDamageMul
+                                boss:ApplyExternalDamage(dmg, self.Entity)
+                                self.bossDmgTimer = self.BossDamageTickInterval
+                                log("[UltimateSkill] boss tick dmg=" .. tostring(dmg)
+                                    .. " bossX=" .. tostring(bp.x) .. " cx=" .. tostring(cx)
+                                    .. " gapFromPlayer=" .. tostring(bp.x - wp.x))
+                            end
+                        end
+                    end
+                end
+            end
+        end
     end
 
     @ExecSpace("ServerOnly")
@@ -335,11 +408,35 @@ script UltimateSkill extends Component
             obs:LaunchKnockback(dir)
             return
         end
+        -- Boss (Mushmom): NEVER delete it. Deal throttled tick damage (player attack power * BossDamageMul)
+        -- through its HP so it dies via the proper flow (death anim + meso), not by vanishing. The timer
+        -- (advanced in OnUpdate) gates one tick per BossDamageTickInterval; between ticks the boss is simply
+        -- passed over.
+        ---@type MushmomBoss
+        local boss = e:GetComponent("script.MushmomBoss")
+        if boss ~= nil then
+            if self.bossDmgTimer <= 0 then
+                local dmg = self:GetPlayerAttackPower() * self.BossDamageMul
+                boss:ApplyExternalDamage(dmg, self.Entity)
+                self.bossDmgTimer = self.BossDamageTickInterval
+            end
+            return
+        end
         -- Removes one target, with an optional burst effect at its position.
         if self.destroyEffectRUID ~= "" then
             self:PlayDestroyEffect(e.TransformComponent.WorldPosition)
         end
         e:Destroy()
+    end
+
+    method number GetPlayerAttackPower()
+        -- The player's effective per-hit attack power (= PowerStrike.Damage * AttackPower stat), the same
+        -- value each sword beam carries. 0 if the skill is missing so the ultimate deals nothing rather than
+        -- erroring. Server-side (called from the ServerOnly destroy sweep; the stat lookup is server-only).
+        ---@type PowerStrike
+        local ps = self.Entity:GetComponent("script.PowerStrike")
+        if ps == nil then return 0 end
+        return ps:GetEffectiveDamage()
     end
 
     @ExecSpace("Multicast")

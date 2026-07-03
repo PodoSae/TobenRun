@@ -40,6 +40,8 @@ script PowerStrike extends SkillComponent
     property string EffectResourceId = "88a17d40d6e34abd948cac09724b22fa"
 
     property PlayerControllerComponent controller = nil
+    -- Ultimate ref for the auto-fire suppression (궁극기 중 일반공격 미발동, 기획 §3.3). Lazily resolved.
+    property any ult = nil
 
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
@@ -80,6 +82,18 @@ script PowerStrike extends SkillComponent
             return self.controller.LookDirectionX >= 0 and 1 or -1
         end
         return 1
+    end
+
+    method number GetEffectiveDamage()
+        -- Per-beam attack power = base Damage scaled by the AttackPower stat — the SAME value fed into each
+        -- sword beam (see OnActivate). Public so other skills (e.g. the ultimate) can size their damage off
+        -- the player's attack power without duplicating the stat lookup. Server-side (stat defs are
+        -- server-only); returns base Damage unscaled if the stat manager is unavailable.
+        local power = 1.0
+        if self.statManager ~= nil then
+            power = self.statManager:GetStatValue(self.PowerStatKey)
+        end
+        return self.Damage * power
     end
 
     method void OnActivate()
@@ -180,6 +194,10 @@ script PowerStrike extends SkillComponent
         -- Server-side auto-fire gate (SkillManager calls only when off cooldown). Hold fire until the
         -- startup grace has elapsed (map fully loaded), then fire only when a monster is within range.
         if self._T.ready ~= true then return false end
+        -- 궁극기(돌진) 중에는 일반공격(검기) 미발동. Independent guard at the fire gate so the beam is blocked even
+        -- if SkillManager's own ult ref ever fails; lazily resolved so a one-shot lookup miss can't disable it.
+        if self.ult == nil then self.ult = self.Entity:GetComponent("script.UltimateSkill") end
+        if self.ult ~= nil and self.ult.Active then return false end
         return self:HasMonsterInRange()
     end
 

@@ -284,6 +284,18 @@ script MushmomBoss extends Component
     @MaxValue(10)
     @Delta(0.5)
     property number FollowGain = 2.0
+    @DisplayName("궁극기 중 접근 잠금 계수")
+    @Description("플레이어 궁극기 발동 중, 보스가 평상시의 화면오른쪽 정지자리(추적 오프셋)를 버리고 플레이어 '바로앞(궁극기 접촉 오프셋)'으로 미끄러져 붙는 속도. 클수록 빨리 코앞에 달라붙는다. 이렇게 해야 대시로 다가온 플레이어와 코앞에서 맞물려 궁극기 공격이 들어간다")
+    @MinValue(1)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number UltimateCloseGain = 6.0
+    @DisplayName("궁극기 접촉 오프셋(앞)")
+    @Description("궁극기 중 보스가 플레이어 앞에 붙는 거리(월드유닛). 작을수록 코앞. 0에 가까우면 겹친다")
+    @MinValue(0)
+    @MaxValue(4)
+    @Delta(0.1)
+    property number UltimateContactOffset = 2.5
     @DisplayName("돌진 예고 추적 계수")
     @Description("돌진 예고(웅크리기) 중 플레이어를 따라붙는 세기. 평상시(추적 가속 계수)보다 크게 잡아 예고 동안 지연 없이 상대 위치를 유지(플레이어가 파고들지 않게)")
     @MinValue(1)
@@ -490,11 +502,27 @@ script MushmomBoss extends Component
         self:SetSprite(moving and self.MoveRUID or self.StandRUID)
 
         -- Skill scheduler: fire when the timer elapses, then reset to the phase-scaled interval.
-        self.skillTimer = self.skillTimer - delta
-        if self.skillTimer <= 0 then
-            self:FireNextSkill()
-            self.skillTimer = self:EffectiveInterval()
+        -- FROZEN while the player's ultimate is active — the boss starts no new patterns during the 궁극기.
+        -- The timer is paused (not decremented), so the schedule resumes where it left off once the dash ends.
+        if not self:IsPlayerUltimateActive() then
+            self.skillTimer = self.skillTimer - delta
+            if self.skillTimer <= 0 then
+                self:FireNextSkill()
+                self.skillTimer = self:EffectiveInterval()
+            end
         end
+    end
+
+    @ExecSpace("ServerOnly")
+    method boolean IsPlayerUltimateActive()
+        -- True while the (nearest) player's ultimate dash is active. Used to freeze the boss's pattern
+        -- scheduler so no new pattern starts during the 궁극기 (bounces off the same server-authoritative
+        -- Active flag FollowAnchor already reads for the point-blank lock).
+        local player = self:FindNearestPlayer()
+        if not isvalid(player) then return false end
+        ---@type UltimateSkill
+        local ult = player:GetComponent("script.UltimateSkill")
+        return isvalid(ult) and ult.Active
     end
 
     @ExecSpace("ServerOnly")
@@ -525,7 +553,23 @@ script MushmomBoss extends Component
         end
 
         local px = player.TransformComponent.WorldPosition.x
-        local desiredX = px + offsetX
+
+        -- Ultimate interaction: while the player is dashing, the boss ABANDONS its screen-right hold (offsetX)
+        -- and locks to POINT-BLANK in front of the player (UltimateContactOffset), sliding in at
+        -- UltimateCloseGain. The player's 1.4x dash closes the distance; the boss meets it up close and the
+        -- ultimate's per-tick damage lands right in front, then normal follow resumes once the dash ends.
+        -- (Pure speed difference can't close the full NormalOffsetX within one 1.2s dash, so the boss slides
+        -- its anchor in to GUARANTEE the meet — matching the player's speed once locked.)
+        local effOffset = offsetX
+        local gain = self.FollowGain
+        ---@type UltimateSkill
+        local ult = player:GetComponent("script.UltimateSkill")
+        if isvalid(ult) and ult.Active then
+            effOffset = self.UltimateContactOffset
+            gain = self.UltimateCloseGain
+        end
+
+        local desiredX = px + effOffset
         if desiredX < self.StageMinX then desiredX = self.StageMinX end
         if desiredX > self.StageMaxX then desiredX = self.StageMaxX end
 
@@ -535,8 +579,8 @@ script MushmomBoss extends Component
         -- Always look AT the player (it holds a gap and slides to keep it, so facing travel dir turns its back).
         self:ApplyFacing(self:DirectionToPlayer())
 
-        -- Smoothing factor per frame; FollowGain is the stiffness knob. Clamp to <=1 so it never overshoots.
-        local k = delta * self.FollowGain
+        -- Smoothing factor per frame; gain is the stiffness knob. Clamp to <=1 so it never overshoots.
+        local k = delta * gain
         if k > 1 then k = 1 end
         local newX = wp.x + err * k
         movement:SetWorldPosition(Vector2(newX, wp.y))
@@ -1239,6 +1283,25 @@ script MushmomBoss extends Component
     end
 
     @ExecSpace("ServerOnly")
+    method void ApplyExternalDamage(number amount, Entity attacker)
+        -- Damage from a source that bypasses the HitEvent pipeline — the player's ultimate, which sweeps the
+        -- boss with an overlap query instead of a HitBox attack. Decrements HP and triggers Die on lethal,
+        -- mirroring HandleHitEvent (minus the gauge grant) so the boss dies through the proper death flow
+        -- (연출 + 메소) instead of being deleted outright.
+        if self.dead then return end
+        if amount <= 0 then return end
+        self.Hp = self.Hp - amount
+        log("[MushmomBoss] ultimate dmg -" .. tostring(amount) .. " -> hp=" .. tostring(self.Hp))
+        -- Show a floating damage number: the ultimate bypasses the HitEvent pipeline, so the auto DamageSkin
+        -- never fires for it — display one manually (client-space Play, same as the groggy crit number).
+        self:PlayUltimateSkin(math.floor(amount))
+        if self.Hp <= 0 then
+            self.Hp = 0
+            self:Die(attacker)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
     method void GrantUltGauge(Entity attacker)
         -- The attacker entity is the player's SwordBeam projectile; resolve its owner and charge the
         -- owner's ultimate gauge by BossHitGaugeGain. Mirrors GrantMeso's owner resolution.
@@ -1330,6 +1393,20 @@ script MushmomBoss extends Component
         _DamageSkinService:Play(
             self.Entity, self.HitSkinRUID, 0, { amount },
             DamageSkinTweenType.Default, true,          -- bCritical = true → 치명타 스타일
+            Vector2(0, 1.8),                            -- above the boss head
+            Vector2(1.4, 1.4), 1.0, 1.0, LitMode.Default)
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayUltimateSkin(integer amount)
+        -- Floating damage number for an ultimate tick. The ultimate deals damage through ApplyExternalDamage,
+        -- which bypasses the HitEvent pipeline, so the auto DamageSkin never fires — this manual number is the
+        -- only one shown for it. Client-space Play (per the DamageSkinService.Play execspace rule), so Multicast.
+        if not isvalid(self.Entity) then return end
+        if amount <= 0 then return end
+        _DamageSkinService:Play(
+            self.Entity, self.HitSkinRUID, 0, { amount },
+            DamageSkinTweenType.Default, true,          -- crit style for the ultimate's impact
             Vector2(0, 1.8),                            -- above the boss head
             Vector2(1.4, 1.4), 1.0, 1.0, LitMode.Default)
     end

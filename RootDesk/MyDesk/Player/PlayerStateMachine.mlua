@@ -28,15 +28,15 @@ script PlayerStateMachine extends Component
         self.body = self.Entity.RigidbodyComponent
         self.CurrentState = "RUN"
 
+        -- Pure MOVEMENT states only. The ultimate dash (궁극기/돌진) is intentionally NOT a state here:
+        -- per design (§1.3 상태표) 궁극기 is an ACTION usable from every movement state, i.e. a MODE that
+        -- layers on top of movement — 점프·2단점프·급강하 stay usable during it. So it is tracked by
+        -- UltimateSkill.Active, and slide/auto-attack suppression reads that flag rather than this table.
         self.transitions = {
-            RUN         = { JUMP = true, SLIDE = true, ULTIMATE = true },
-            JUMP        = { DOUBLE_JUMP = true, RUN = true, ULTIMATE = true },
-            DOUBLE_JUMP = { RUN = true, ULTIMATE = true },
-            SLIDE       = { RUN = true, JUMP = true, ULTIMATE = true },
-            -- Ultimate dash: entered from any movement state, only exits back to RUN (when the dash
-            -- timer ends). The grounded<->air auto-transitions below intentionally never touch it, so
-            -- the dash holds for its full duration regardless of ground contact.
-            ULTIMATE    = { RUN = true },
+            RUN         = { JUMP = true, SLIDE = true },
+            JUMP        = { DOUBLE_JUMP = true, RUN = true },
+            DOUBLE_JUMP = { RUN = true },
+            SLIDE       = { RUN = true, JUMP = true },
         }
 
         self.isLocal = self:IsClient() and _UserService.LocalPlayer == self.Entity
