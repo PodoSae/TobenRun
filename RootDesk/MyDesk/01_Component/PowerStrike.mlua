@@ -43,6 +43,21 @@ script PowerStrike extends SkillComponent
     -- Ultimate ref for the auto-fire suppression (궁극기 중 일반공격 미발동, 기획 §3.3). Lazily resolved.
     property any ult = nil
 
+    -- ── 로그라이트 스테이지 버프(모두 transient, RunGameHud가 스테이지마다 ResetStageBuff로 초기화) ──
+    -- 스테이지를 벗어나면 효과 소멸. 서버 권위(서버에서만 읽고 쓴다).
+    -- 공격력 배율(가산 누적) — GetEffectiveDamage에 곱해져 검기+궁극기 모두 반영.
+    @HideFromInspector property number stageAttackMult = 1
+    -- 공격속도 배율(가산 누적) — GetEffectiveCooldown에서 나눠 쿨다운을 줄인다(값↑ = 더 빠름).
+    @HideFromInspector property number stageAttackSpeedMult = 1
+    -- 검기 관통 수 가산(정수) — FireBeam이 BasePierce + 이 값을 검기에 실어 그만큼 적을 관통.
+    @HideFromInspector property number stagePierceBonus = 0
+
+    @DisplayName("기본 관통 수")
+    @Description("버프 없이 검기가 관통하는 적 수(1 = 첫 적에 소멸). 여기에 관통 버프가 가산된다")
+    @MinValue(1)
+    @MaxValue(10)
+    property integer BasePierce = 1
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
         -- Initializes cooldown (base), caches the controller, and prepares the beam object pool. Server only.
@@ -93,19 +108,63 @@ script PowerStrike extends SkillComponent
         if self.statManager ~= nil then
             power = self.statManager:GetStatValue(self.PowerStatKey)
         end
-        return self.Damage * power
+        return self.Damage * power * self.stageAttackMult
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStageAttackMult(number amount)
+        -- 로그라이트 아이템: 이번 스테이지 공격력 배율을 가산(중첩). StageBuffItem이 호출(서버).
+        if amount <= 0 then return end
+        self.stageAttackMult = self.stageAttackMult + amount
+        log("[PowerStrike] stage attack mult -> " .. tostring(self.stageAttackMult))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStageAttackSpeedMult(number amount)
+        -- 로그라이트 아이템: 이번 스테이지 공격속도 배율을 가산(중첩). 쿨다운이 줄어 더 자주 발사한다.
+        if amount <= 0 then return end
+        self.stageAttackSpeedMult = self.stageAttackSpeedMult + amount
+        log("[PowerStrike] stage attack-speed mult -> " .. tostring(self.stageAttackSpeedMult))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStagePierce(number amount)
+        -- 로그라이트 아이템: 이번 스테이지 검기 관통 수를 가산(정수로 반영, 중첩).
+        if amount <= 0 then return end
+        self.stagePierceBonus = self.stagePierceBonus + amount
+        log("[PowerStrike] stage pierce bonus -> " .. tostring(self.stagePierceBonus))
+    end
+
+    method number GetEffectiveCooldown()
+        -- 부모(스탯 기반 쿨다운)에 스테이지 공격속도 버프를 얹는다: 배율이 클수록 쿨다운이 짧아진다.
+        -- 부모 SkillComponent.GetEffectiveCooldown은 @ExecSpace 없음 → 오버라이드도 없이 시그니처 일치(LEA-3014 방지).
+        local base = __base:GetEffectiveCooldown()
+        local mult = self.stageAttackSpeedMult
+        if mult < 0.1 then mult = 0.1 end
+        return base / mult
+    end
+
+    @ExecSpace("Server")
+    method void ResetStageBuff()
+        -- 스테이지 시작/이탈 시 로그라이트 버프 전부 초기화(효과는 스테이지 내에서만 유지). RunGameHud(클라)에서
+        -- 호출 → @Server로 서버에 반영. 서버에서만 읽는 값들이라 서버 리셋이면 충분하다.
+        self.stageAttackMult = 1
+        self.stageAttackSpeedMult = 1
+        self.stagePierceBonus = 0
+        log("[PowerStrike] stage buffs reset")
     end
 
     method void OnActivate()
         -- Server-side (called from base Activate inside the Server RPC). Fires one sword beam.
         log("[PowerStrike] OnActivate (server) by " .. tostring(self.Entity and self.Entity.Name or "unknown"))
 
-        -- Scale base damage by the attack-power stat from PlayerStatManager (data-table driven).
+        -- Scale base damage by the attack-power stat + the roguelite stage buff (GetEffectiveDamage folds in
+        -- both PowerStatKey and stageAttackMult), so picked-up buffs actually raise the fired beam's damage.
         local power = 1.0
         if self.statManager ~= nil then
             power = self.statManager:GetStatValue(self.PowerStatKey)
         end
-        local effectiveDamage = self.Damage * power
+        local effectiveDamage = self:GetEffectiveDamage()
 
         -- Fire toward the nearest detected monster (set by HasMonsterInRange), NOT the engine LookDirectionX
         -- (which the runner never resets and a hit corrupts). Fallback +1 = run direction.
@@ -135,9 +194,13 @@ script PowerStrike extends SkillComponent
         -- Tag the firing player so monster kills credit meso to the right wallet.
         beam.OwnerEntity = self.Entity
 
+        -- 관통 수 = 기본 + 스테이지 관통 버프(정수). 검기가 이 수만큼 서로 다른 적을 통과한 뒤 소멸한다.
+        local pierce = self.BasePierce + math.floor(self.stagePierceBonus)
+        if pierce < 1 then pierce = 1 end
+
         local wp = self.Entity.TransformComponent.WorldPosition
         local startPos = Vector3(wp.x + direction * self.BeamForwardOffset, wp.y + self.BeamVerticalOffset, wp.z)
-        beam:Launch(startPos, direction, damage)
+        beam:Launch(startPos, direction, damage, pierce)
     end
 
     @ExecSpace("ServerOnly")

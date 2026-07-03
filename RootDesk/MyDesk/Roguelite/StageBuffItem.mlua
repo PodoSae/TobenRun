@@ -1,0 +1,129 @@
+@Component
+script StageBuffItem extends Component
+
+    -- Roguelite STAGE buff pickup (generic). On player contact it applies a stage-scoped buff (chosen by
+    -- BuffKind) to the player's PowerStrike, then removes itself. All stage buffs are transient — RunGameHud
+    -- resets them every stage — so leaving the stage clears the effect. Server-authoritative, body-less,
+    -- detected by distance (mirrors Obstacle/MonsterUnit contact checks).
+    --
+    -- BuffKind:
+    --   "attack"      → 공격력 배율 +Amount   (PowerStrike.stageAttackMult)
+    --   "attackspeed" → 공격속도 배율 +Amount (PowerStrike.stageAttackSpeedMult, 쿨다운 감소)
+    --   "pierce"      → 검기 관통 수 +Amount   (PowerStrike.stagePierceBonus, 정수로 처리)
+    --   "regen"       → 초당 HP 재생 +Amount   (PlayerHealth.stageRegenPerSec)
+    --   "maxhp"       → 최대체력 +Amount        (PlayerHealth.stageMaxHpBonus, 늘어난 만큼 즉시 회복)
+    --   "shield"      → 보호막 충전 +Amount     (PlayerHealth.stageShieldCharges, 정수, 피격 1회 완전 무효화)
+    --   "heal"        → 즉시 HP 회복 +Amount    (PlayerHealth.HealInstant, 1회성 — 리셋 대상 아님)
+
+    @DisplayName("버프 종류")
+    @Description("attack=공격력, attackspeed=공격속도, pierce=관통 수")
+    property string BuffKind = "attack"
+
+    @DisplayName("증가량")
+    @Description("attack/attackspeed = 배율 가산(0.3 = +30%), pierce = 관통 수 가산(정수)")
+    @MinValue(0)
+    @MaxValue(10)
+    @Delta(0.1)
+    property number Amount = 0.3
+
+    @DisplayName("획득 판정 반경(월드유닛)")
+    @MinValue(0.1)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number PickupRadius = 0.9
+
+    @DisplayName("획득 이펙트 RUID")
+    @Description("먹었을 때 재생할 이펙트. 비우면 없음")
+    property string PickupEffectRUID = ""
+
+    -- Guard so a single item grants exactly once even if two frames overlap before it is destroyed.
+    @HideFromInspector property boolean taken = false
+
+    @ExecSpace("ServerOnly")
+    method void OnUpdate(number delta)
+        -- Server proximity check each frame until picked up.
+        if self.taken then return end
+        self:CheckPickup()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void CheckPickup()
+        -- Grants the buff to the first player within PickupRadius, then consumes the item.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return end
+
+        local myPos = self.Entity.TransformComponent.WorldPosition
+        local r2 = self.PickupRadius * self.PickupRadius
+        for i, user in ipairs(users) do
+            if isvalid(user) then
+                local up = user.TransformComponent.WorldPosition
+                local dx = up.x - myPos.x
+                local dy = up.y - myPos.y
+                if (dx * dx + dy * dy) <= r2 then
+                    self:Grant(user)
+                    return
+                end
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Grant(Entity player)
+        -- Applies the chosen stage buff to the player's PowerStrike and removes the item.
+        if self.taken then return end
+        self.taken = true
+
+        local kind = self.BuffKind
+        if kind == "regen" or kind == "maxhp" or kind == "shield" or kind == "heal" then
+            -- 체력 계열 → PlayerHealth
+            ---@type PlayerHealth
+            local hp = player:GetComponent("script.PlayerHealth")
+            if hp ~= nil then
+                if kind == "regen" then
+                    hp:AddStageRegen(self.Amount)
+                elseif kind == "maxhp" then
+                    hp:AddStageMaxHp(self.Amount)
+                elseif kind == "heal" then
+                    hp:HealInstant(self.Amount)
+                else
+                    hp:AddStageShield(self.Amount)
+                end
+            else
+                log_warning("[StageBuffItem] player has no script.PlayerHealth — buff not applied")
+            end
+        else
+            -- 공격 계열 버프(attack/attackspeed/pierce) → PowerStrike
+            ---@type PowerStrike
+            local ps = player:GetComponent("script.PowerStrike")
+            if ps ~= nil then
+                if kind == "attackspeed" then
+                    ps:AddStageAttackSpeedMult(self.Amount)
+                elseif kind == "pierce" then
+                    ps:AddStagePierce(self.Amount)
+                else
+                    ps:AddStageAttackMult(self.Amount)
+                end
+            else
+                log_warning("[StageBuffItem] player has no script.PowerStrike — buff not applied")
+            end
+        end
+
+        self:PlayPickupEffect(self.Entity.TransformComponent.WorldPosition)
+        log("[StageBuffItem] '" .. tostring(self.BuffKind) .. "' +" .. tostring(self.Amount)
+            .. " to " .. tostring(player.Name))
+        -- Tiny delay so the effect can fire before the entity is gone.
+        self.Entity:Destroy(0.1)
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayPickupEffect(Vector3 pos)
+        -- One-shot pickup burst on every client (optional; empty RUID = no effect).
+        if self.PickupEffectRUID == "" then return end
+        _EffectService:PlayEffect(self.PickupEffectRUID, self.Entity, pos, 0, Vector3(1, 1, 1), false)
+    end
+
+end

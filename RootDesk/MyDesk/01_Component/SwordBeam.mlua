@@ -55,12 +55,21 @@ script SwordBeam extends Component
     end
 
     @ExecSpace("ServerOnly")
-    method void Launch(Vector3 startPos, number dir, number damage)
+    method void Launch(Vector3 startPos, number dir, number damage, integer pierce)
         -- Activates a pooled (or fresh) beam: position it, aim it along dir (+1 right / -1 left),
         -- set its damage, and make it visible. Movement and hit detection are server-authoritative.
+        -- `pierce` = how many DISTINCT enemies it may pass through before recycling (1 = die on first hit).
         self._T.fired = true
         self._T.lifetime = 0
         self._T.dirX = (dir >= 0) and 1 or -1
+        -- Pierce state: remaining distinct hits + the set of entity ids already counted (so the same enemy
+        -- lingering in the hit box across frames is counted once).
+        self._T.pierceLeft = (pierce ~= nil and pierce >= 1) and pierce or 1
+        -- Reset the attack component's per-launch hit set so a pooled beam re-fires cleanly. Enemy-dedupe lives
+        -- there (IsAttackTarget) so AttackFrom damages each enemy ONCE and the beam passes THROUGH.
+        ---@type SwordBeamAttack
+        local sba = self.Entity:GetComponent("script.SwordBeamAttack")
+        if sba ~= nil then sba:BeginLaunch() end
 
         self.Entity.TransformComponent.Position = startPos
         -- Remember where the beam was fired so recycling can be measured as distance traveled (map-independent).
@@ -80,6 +89,7 @@ script SwordBeam extends Component
         end
 
         log("[SwordBeam] Launch dir=" .. tostring(self._T.dirX) .. " dmg=" .. tostring(damage)
+            .. " pierce=" .. tostring(self._T.pierceLeft)
             .. " at x=" .. string.format("%.2f", startPos.x) .. " y=" .. string.format("%.2f", startPos.y))
     end
 
@@ -117,11 +127,16 @@ script SwordBeam extends Component
             local hitCenter = Vector2(pos.x, pos.y + self.HitVerticalOffset)
             local hits = ac:AttackFrom(Vector2(self.HitWidth, self.HitHeight), hitCenter, self.AttackInfo, CollisionGroups.HitBox)
             if hits ~= nil and #hits > 0 then
-                log("[SwordBeam] hit " .. tostring(#hits) .. " target(s) at x=" .. string.format("%.2f", pos.x)
-                    .. " hitY=" .. string.format("%.2f", pos.y + self.HitVerticalOffset))
+                -- Each returned target is a NEW enemy — SwordBeamAttack.IsAttackTarget excludes ones already hit
+                -- this launch, so AttackFrom neither re-damages nor re-returns them (no more multi-hit / 타수 증가).
+                -- Spend one pierce per new enemy; the beam keeps flying (passes THROUGH) until the budget runs out.
+                self._T.pierceLeft = self._T.pierceLeft - #hits
                 self:ShowHitEffect(pos.x, pos.y + self.HitVerticalOffset, pos.z)
-                self:Deactivate()
-                return
+                if self._T.pierceLeft <= 0 then
+                    log("[SwordBeam] pierced out at x=" .. string.format("%.2f", pos.x))
+                    self:Deactivate()
+                    return
+                end
             end
         else
             log_warning("[SwordBeam] AttackComponent missing on beam entity")

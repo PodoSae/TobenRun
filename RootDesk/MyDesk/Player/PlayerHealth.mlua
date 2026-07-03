@@ -17,6 +17,13 @@ script PlayerHealth extends Component
     property number invulnTime = 0.7
     property number invulnRemain = 0
 
+    -- ── 로그라이트 스테이지 체력 버프(모두 transient, RunGameHud가 스테이지마다 ResetStageHealthBuffs로 초기화) ──
+    -- 스테이지를 벗어나면 효과 소멸. 서버 권위.
+    @HideFromInspector property number baseMaxHp = 0            -- 최초 MaxHp 스냅샷(최대체력 버프 복원 기준)
+    @HideFromInspector property number stageMaxHpBonus = 0      -- 스테이지 최대체력 가산
+    @HideFromInspector property number stageRegenPerSec = 0     -- 초당 HP 재생량(가산 누적)
+    @HideFromInspector property integer stageShieldCharges = 0  -- 남은 보호막 충전(피격 1회 완전 무효화)
+
     -- Hit feedback (effects played when the player takes damage). Inspector-tunable.
     @DisplayName("카메라 흔들림 강도")
     property number ShakeIntensity = 0.3
@@ -28,9 +35,28 @@ script PlayerHealth extends Component
     -- guaranteed a real, proven resource to render.
     property string HitSkinRUID = "6ba67548f43f48f29eb23dafd0766383"
 
+    -- 보호막 오라: stageShieldCharges > 0인 동안 플레이어를 감싸 루프 재생되는 이펙트(animationclip). 보호막이
+    -- 생기면(0→>0) 붙이고, 마지막 충전이 소진되거나 스테이지 리셋 시 제거한다.
+    @DisplayName("보호막 오라 이펙트 RUID")
+    property string ShieldAuraRUID = "a98a866ed6544c7c898a6a0ff2708ac2"
+    @DisplayName("보호막 오라 오프셋")
+    property Vector3 ShieldAuraOffset = Vector3(0, 0.1, 0)
+    @DisplayName("보호막 오라 크기 배율")
+    @MinValue(0.2)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number ShieldAuraScale = 1.5
+    -- 재생 중인 오라의 핸들(클라 로컬). 0 = 없음.
+    @HideFromInspector property integer shieldAuraSerial = 0
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
         -- Initializes HP to full and records the spawn point used for respawn-on-death.
+        -- Snapshot the clean MaxHp so the roguelite 최대체력 buff can be restored on stage reset.
+        self.baseMaxHp = self.MaxHp
+        self.stageMaxHpBonus = 0
+        self.stageRegenPerSec = 0
+        self.stageShieldCharges = 0
         self.CurrentHp = self.MaxHp
         self.dead = false
         self.invulnRemain = 0
@@ -47,6 +73,10 @@ script PlayerHealth extends Component
         if self.invulnRemain > 0 then
             self.invulnRemain = self.invulnRemain - delta
         end
+        -- 로그라이트 체력 재생: 스테이지 재생 버프가 있으면 매 프레임 회복(사망 아닐 때, MaxHp까지).
+        if self.stageRegenPerSec > 0 and not self.dead and self.CurrentHp < self.MaxHp then
+            self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + self.stageRegenPerSec * delta)
+        end
     end
 
     @ExecSpace("ServerOnly")
@@ -55,6 +85,20 @@ script PlayerHealth extends Component
         if self.dead then return end
         if amount <= 0 then return end
         if self.invulnRemain > 0 then return end
+
+        -- 로그라이트 보호막: 충전이 있으면 이 피격을 완전 무효화하고 충전 1 소모(피해/경직 없음). invuln을 걸어 한 번의
+        -- 피격이 충전 1개만 소모하도록 한다(다프레임 접촉 방지).
+        if self.stageShieldCharges > 0 then
+            self.stageShieldCharges = self.stageShieldCharges - 1
+            self.invulnRemain = self.invulnTime
+            self:PlayShieldBlock()
+            -- 마지막 충전이 소진되면 오라 제거.
+            if self.stageShieldCharges <= 0 then
+                self:HideShieldAura()
+            end
+            log("[PlayerHealth] shield absorbed hit, charges left=" .. tostring(self.stageShieldCharges))
+            return
+        end
 
         self.invulnRemain = self.invulnTime
         -- A2 방어력: 최종 피해 = 받은 피해 − 방어력(최소 1). 모든 피해 경로가 여기로 모이므로 균일 적용 (기획 §4.2).
@@ -121,11 +165,108 @@ script PlayerHealth extends Component
     end
 
     @ExecSpace("ServerOnly")
+    method void HealInstant(number amount)
+        -- 즉시 회복 아이템(먹으면 피가 바로 참): 현재 HP를 amount만큼 즉시 회복(MaxHp 상한). 사망 시 무시.
+        -- 1회성 효과라 스테이지 버프처럼 리셋되지 않는다(이미 채워진 HP는 유지).
+        if self.dead then return end
+        if amount <= 0 then return end
+        self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + amount)
+        log("[PlayerHealth] instant heal +" .. tostring(amount) .. " -> HP=" .. tostring(self.CurrentHp))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStageRegen(number amount)
+        -- 로그라이트 아이템: 이번 스테이지 초당 HP 재생량을 가산(중첩).
+        if amount <= 0 then return end
+        self.stageRegenPerSec = self.stageRegenPerSec + amount
+        log("[PlayerHealth] stage regen -> " .. tostring(self.stageRegenPerSec) .. "/s")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStageMaxHp(number amount)
+        -- 로그라이트 아이템: 이번 스테이지 최대체력을 가산하고, 늘어난 만큼 즉시 회복해 바로 쓸 수 있게 한다.
+        if amount <= 0 then return end
+        self.stageMaxHpBonus = self.stageMaxHpBonus + amount
+        self.MaxHp = self.baseMaxHp + self.stageMaxHpBonus
+        self.CurrentHp = self.CurrentHp + amount
+        log("[PlayerHealth] stage maxHP +" .. tostring(amount) .. " -> " .. tostring(self.MaxHp))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStageShield(number amount)
+        -- 로그라이트 아이템: 이번 스테이지 보호막 충전을 가산(정수). 충전 1개당 피격 1회를 완전 무효화.
+        -- 보호막이 처음 생기면(0→>0) 플레이어를 감싸는 오라를 켠다(이미 있으면 유지).
+        if amount <= 0 then return end
+        local had = self.stageShieldCharges > 0
+        self.stageShieldCharges = self.stageShieldCharges + math.floor(amount)
+        if not had and self.stageShieldCharges > 0 then
+            self:ShowShieldAura()
+        end
+        log("[PlayerHealth] stage shield charges -> " .. tostring(self.stageShieldCharges))
+    end
+
+    @ExecSpace("Server")
+    method void ResetStageHealthBuffs()
+        -- 스테이지 시작/이탈 시 체력 버프 전부 초기화. 최대체력은 기본으로 되돌리고 현재 HP를 상한으로 clamp.
+        -- RunGameHud(클라)에서 호출 → @Server로 서버에 반영. @Sync MaxHp/CurrentHp가 HUD로 전파된다.
+        self.stageRegenPerSec = 0
+        self.stageShieldCharges = 0
+        self.stageMaxHpBonus = 0
+        if self.baseMaxHp > 0 then
+            self.MaxHp = self.baseMaxHp
+            if self.CurrentHp > self.MaxHp then
+                self.CurrentHp = self.MaxHp
+            end
+        end
+        -- 스테이지 리셋 시 켜져 있던 보호막 오라도 제거.
+        self:HideShieldAura()
+        log("[PlayerHealth] stage health buffs reset")
+    end
+
+    @ExecSpace("Multicast")
+    method void ShowShieldAura()
+        -- 보호막이 생기면 전 클라에서 플레이어를 감싸는 오라(animationclip)를 루프 재생. 이미 재생 중이면 무시.
+        if self.ShieldAuraRUID == "" then return end
+        if self.shieldAuraSerial ~= 0 then return end
+        self.shieldAuraSerial = _EffectService:PlayEffectAttached(
+            self.ShieldAuraRUID, self.Entity, self.ShieldAuraOffset, 0,
+            Vector3(self.ShieldAuraScale, self.ShieldAuraScale, 1), true)
+    end
+
+    @ExecSpace("Multicast")
+    method void HideShieldAura()
+        -- 보호막이 사라지면(소진/리셋) 오라 제거.
+        if self.shieldAuraSerial ~= 0 then
+            _EffectService:RemoveEffect(self.shieldAuraSerial)
+            self.shieldAuraSerial = 0
+        end
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayShieldBlock()
+        -- 보호막이 피격을 막았을 때 전 클라에 표시(간단한 파티클).
+        local e = self.Entity
+        if not isvalid(e) then return end
+        local wp = e.TransformComponent.WorldPosition
+        _ParticleService:PlayBasicParticle(
+            BasicParticleType.SparkExplosion, e,
+            Vector3(wp.x, wp.y + 0.8, wp.z), 0, Vector3(1.3, 1.3, 1.3), false, {})
+    end
+
+    @ExecSpace("ServerOnly")
     method void Die()
         -- HP depleted: freeze the player and open the revive / give-up popup on the owning client.
         -- No more damage lands until the player chooses (dead gate in TakeDamage).
         if self.dead then return end
         self.dead = true
+        -- End an active ultimate on death: otherwise UltimateSkill.ApplyBoost keeps re-asserting the dash
+        -- speed every frame (overriding RunGameHud's death-halt) and the player would keep dashing/destroying
+        -- while the revive popup is open. EndDashServer restores physics + syncs the stop to the client.
+        ---@type UltimateSkill
+        local ult = self.Entity:GetComponent("script.UltimateSkill")
+        if ult ~= nil and ult.Active then
+            ult:EndDashServer()
+        end
         local movement = self.Entity.MovementComponent
         if movement ~= nil then
             movement:Stop()

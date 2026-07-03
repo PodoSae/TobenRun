@@ -397,9 +397,10 @@ script MushmomBoss extends Component
         -- First cast happens after one full interval (gives the map time to load + the player time to approach).
         self.skillTimer = self.SkillInterval
 
-        -- Boss-fight ultimate rule: distance/time gauge fill is disabled during the fight; the gauge only
-        -- charges when the player lands a hit on the boss (see HandleHitEvent → BossHitGaugeGain).
-        self:SetPlayersGaugeAutoFill(false)
+        -- NOTE: the gauge pause is NOT set here. The boss is SPAWNED at stage-build time (well before the
+        -- player reaches it), so pausing at spawn would block distance-gauge charging for the whole approach
+        -- (e.g. stage 1-2's entire run). The pause is applied when the fight actually STARTS — see the
+        -- engagement gate (self.engaged) in OnUpdate. Resume happens on Die / OnEndPlay.
 
         self:SetSprite(self.StandRUID)
         log("[MushmomBoss] OnBeginPlay hp=" .. tostring(self.MaxHp) .. " phase=1")
@@ -474,6 +475,10 @@ script MushmomBoss extends Component
                 if dx <= self.EngageDistance then
                     self.engaged = true
                     self.skillTimer = self.SkillInterval
+                    -- Boss fight actually starts NOW → pause distance/time gauge fill (기획 §3.2: 보스전엔
+                    -- 거리로 충전 불가, 보스 피격으로만). Doing it here (not at spawn) lets the approach through
+                    -- the stage still charge by distance.
+                    self:SetPlayersGaugeAutoFill(true)
                     log("[MushmomBoss] engaged (player within " .. tostring(self.EngageDistance) .. ")")
                 end
             end
@@ -1290,6 +1295,11 @@ script MushmomBoss extends Component
         -- (연출 + 메소) instead of being deleted outright.
         if self.dead then return end
         if amount <= 0 then return end
+        -- While groggy the boss is a wide-open weak point — the ultimate benefits from the same damage
+        -- multiplier as beam hits (HandleHitEvent), so 궁극기로 그로기를 노려도 손해가 아니다.
+        if self.groggy then
+            amount = amount * self.GroggyDamageMultiplier
+        end
         self.Hp = self.Hp - amount
         log("[MushmomBoss] ultimate dmg -" .. tostring(amount) .. " -> hp=" .. tostring(self.Hp))
         -- Show a floating damage number: the ultimate bypasses the HitEvent pipeline, so the auto DamageSkin
@@ -1353,8 +1363,8 @@ script MushmomBoss extends Component
         if isvalid(body) and self._T.shockGravity ~= nil then body.Gravity = self._T.shockGravity end
         self:StopShockTelegraphVfx()
         self:StopGroggyVfx()
-        -- Boss fight over: let the players' ultimate gauge fill normally again.
-        self:SetPlayersGaugeAutoFill(true)
+        -- Boss fight over: resume normal gauge fill (paused=false).
+        self:SetPlayersGaugeAutoFill(false)
         self:GrantMeso(attacker)
         self:SetSprite(self.DieRUID)
         log("[MushmomBoss] died")
@@ -1422,7 +1432,7 @@ script MushmomBoss extends Component
     @ExecSpace("ServerOnly")
     method void OnEndPlay()
         -- Boss removed from the map: resume the players' ultimate gauge auto-fill so it isn't left paused.
-        self:SetPlayersGaugeAutoFill(true)
+        self:SetPlayersGaugeAutoFill(false)
         -- Destroys every pooled spore so they do not leak when the boss is removed.
         if self._T.spores ~= nil then
             for i, spore in ipairs(self._T.spores) do

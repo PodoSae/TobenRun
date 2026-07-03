@@ -120,12 +120,22 @@ script UltimateSkill extends Component
     property number bossDmgTimer = 0
 
     method void OnBeginPlay()
-        -- Server owns the gauge/activation/destruction; the client binds the R input. The ultimate no
-        -- longer touches movement or physics, so there are no rigidbody/controller refs to cache.
+        -- Server owns the gauge/activation/destruction; the client binds the R input.
         if self:IsServer() then
             self.Gauge = 0
             self.Active = false
             self.remaining = 0
+        end
+
+        -- Capture the CLEAN Gravity / FallSpeedMaxY base ONCE here, at a moment no other system has modified
+        -- them (FastFall's dive ×4 / the ultimate's own 0 only happen later). Snapshotting these lazily in
+        -- ApplyBoost risked capturing a dive-boosted value → permanent 4× gravity after the ultimate ended.
+        -- WalkSpeed / FallSpeedMaxX are NOT captured here (RunGameHud sets the per-course WalkSpeed after
+        -- begin play), so those stay lazy in ApplyBoost.
+        self.body = self.Entity.RigidbodyComponent
+        if self.body ~= nil then
+            self.baseGravity = self.body.Gravity
+            self.baseFallSpeedMaxY = self.body.FallSpeedMaxY
         end
 
         if self:IsClient() then
@@ -166,10 +176,23 @@ script UltimateSkill extends Component
             self.controller = self.Entity:GetComponent("script.PlayerController")
             self.body = self.Entity.RigidbodyComponent
             if self.body ~= nil then
-                self.baseWalkSpeed = self.body.WalkSpeed
+                -- Reconstruct the CLEAN course WalkSpeed base by dividing out any active terrain slow (mud):
+                -- WalkSpeed while in mud is course×terrainMultiplier, so activating the ultimate there would
+                -- otherwise snapshot the slowed value and restore wrong (permanent slow). During the dash the
+                -- mud slow is still felt via terrainMultiplier on MoveVelocity (PlayerController), so nothing
+                -- is lost. FallSpeedMaxX has no other owner → snapshot as-is.
+                local terrainMult = 1
+                if self.controller ~= nil and self.controller.terrainMultiplier > 0 then
+                    terrainMult = self.controller.terrainMultiplier
+                end
+                self.baseWalkSpeed = self.body.WalkSpeed / terrainMult
                 self.baseFallSpeedMaxX = self.body.FallSpeedMaxX
-                self.baseGravity = self.body.Gravity
-                self.baseFallSpeedMaxY = self.body.FallSpeedMaxY
+                -- Gravity / FallSpeedMaxY base is captured at OnBeginPlay (clean). Fallback capture here only
+                -- if that missed (body was nil at begin play) — gravity default is positive, so 0 = uncaptured.
+                if self.baseGravity <= 0 then
+                    self.baseGravity = self.body.Gravity
+                    self.baseFallSpeedMaxY = self.body.FallSpeedMaxY
+                end
             end
             self.boosting = true
         end
@@ -316,6 +339,9 @@ script UltimateSkill extends Component
         end
         self.Gauge = 0
         self.remaining = 0
+        -- Resume normal (distance) gauge fill at each stage start so a lingering boss-fight pause can't leave
+        -- the gauge permanently un-fillable in later stages. The boss re-pauses it when it spawns.
+        self.AutoFillPaused = false
         log("[UltimateSkill] gauge reset (stage start)")
     end
 

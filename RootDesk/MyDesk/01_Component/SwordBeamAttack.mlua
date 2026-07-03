@@ -8,6 +8,17 @@ script SwordBeamAttack extends AttackComponent
     -- Must match the attackInfo the beam passes to AttackFrom (PowerStrike.AttackInfo / SwordBeam.AttackInfo).
     property string SkillTag = "PowerStrike"
 
+    -- Per-LAUNCH set of entity ids already damaged, so a piercing beam damages each enemy exactly ONCE and
+    -- passes THROUGH it — instead of re-hitting whichever enemy it lingers over each frame (that read as
+    -- "타수 증가" multi-hit). Reset on every Launch via BeginLaunch(); populated in OnAttack; read in
+    -- IsAttackTarget so AttackFrom itself skips already-hit enemies.
+    @HideFromInspector property any hitIds = nil
+
+    method void BeginLaunch()
+        -- Clears the per-launch hit set so a reused (pooled) beam starts fresh. Called from SwordBeam.Launch.
+        self.hitIds = {}
+    end
+
     method integer CalcDamage(Entity attacker, Entity defender, string attackInfo)
         -- Returns the configured beam damage for our skill tag; anything else is treated as a stray 1.
         -- ⚠ No @ExecSpace: parent AttackComponent.CalcDamage is ExecSpace=All; adding one => LEA-3014.
@@ -43,11 +54,19 @@ script SwordBeamAttack extends AttackComponent
         if defender.PlayerComponent ~= nil then
             return false
         end
+        -- Pierce: never re-damage an enemy already hit this launch → the beam passes THROUGH it (not multi-hit).
+        if self.hitIds ~= nil and self.hitIds[defender.Id] ~= nil then
+            return false
+        end
         return true
     end
 
     method void OnAttack(Entity defender)
-        -- Per-hit log for verification.
+        -- Mark this enemy as hit so IsAttackTarget excludes it on later frames (one damage per enemy per launch).
+        if defender ~= nil then
+            if self.hitIds == nil then self.hitIds = {} end
+            self.hitIds[defender.Id] = true
+        end
         log("[SwordBeamAttack] OnAttack -> " .. tostring(defender and defender.Name or "unknown"))
     end
 

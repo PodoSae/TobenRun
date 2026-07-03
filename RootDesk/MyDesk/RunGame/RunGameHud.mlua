@@ -274,6 +274,26 @@ method void ResetUltimate()
 end
 
 @ExecSpace("ClientOnly")
+method void ResetStageBuff()
+	-- 로그라이트 스테이지 버프(공격력 등) 초기화를 소유 플레이어의 PowerStrike에 요청(@Server). 스테이지 시작마다
+	-- 호출되어, 이전 스테이지에서 먹은 버프가 다음 스테이지로 넘어오지 않게 한다(효과는 스테이지 내에서만 유지).
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	---@type PowerStrike
+	local ps = player:GetComponent("script.PowerStrike")
+	if ps ~= nil then
+		ps:ResetStageBuff()
+	end
+	---@type PlayerHealth
+	local hp = player:GetComponent("script.PlayerHealth")
+	if hp ~= nil then
+		hp:ResetStageHealthBuffs()
+	end
+end
+
+@ExecSpace("ClientOnly")
 method void ChargeUltDistance()
 	-- 거리 진행 궁극기 게이지 충전을 소유 플레이어의 UltimateSkill에 요청(@Server RPC로 서버에서 실제 충전).
 	local player = _UserService.LocalPlayer
@@ -320,6 +340,8 @@ method void OnArriveMap(Entity player)
 	end
 	-- Reset the ultimate gauge so it starts empty each stage (no carry-over from the previous stage).
 	self:ResetUltimate()
+	-- Reset roguelite stage buffs (attack up, ...) so they don't carry into the next stage.
+	self:ResetStageBuff()
 	-- Rebuild coin / gap interactions for this stage.
 	self:BuildCourseInteractions(self.curStage)
 	self:SetScore(0)
@@ -399,6 +421,8 @@ method void StartGame()
 	self.coinScore = 0
 	-- Reset the ultimate gauge so each run begins with an empty charge.
 	self:ResetUltimate()
+	-- Reset roguelite stage buffs so a new run starts clean.
+	self:ResetStageBuff()
 	self:BuildCourseInteractions(self.curStage)
 	self.isAlive = true
 	self:SetRunnerActive(true)
