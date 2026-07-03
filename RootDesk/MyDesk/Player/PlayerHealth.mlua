@@ -57,6 +57,8 @@ script PlayerHealth extends Component
         if self.invulnRemain > 0 then return end
 
         self.invulnRemain = self.invulnTime
+        -- A2 방어력: 최종 피해 = 받은 피해 − 방어력(최소 1). 모든 피해 경로가 여기로 모이므로 균일 적용 (기획 §4.2).
+        amount = self:ApplyDefense(amount)
         self.CurrentHp = self.CurrentHp - amount
         log("[PlayerHealth] TakeDamage " .. tostring(amount) .. " -> HP=" .. tostring(self.CurrentHp))
 
@@ -70,6 +72,51 @@ script PlayerHealth extends Component
         if self.CurrentHp <= 0 then
             self.CurrentHp = 0
             self:Die()
+        else
+            -- A1 피격 경직: 이동정지 + 입력잠금 (기획 §5.1/§6.2). 사망 시엔 부활 팝업이 정지를 담당하므로 제외.
+            self:ApplyStunToPlayer()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method number ApplyDefense(number raw)
+        -- 방어력 경감: 최종 피해 = raw − Defense(최소 1 보장). Defense는 StatTable의 스탯(기획 §4.2 기본 10).
+        -- 밸런스: 현재는 flat 차감이라 소형 몬스터 피해가 크게 줄 수 있음 — StatTable의 base로 튜닝하거나
+        -- 필요 시 퍼센트 경감으로 교체 가능.
+        ---@type PlayerStatManager
+        local sm = self.Entity:GetComponent("script.PlayerStatManager")
+        if sm == nil then
+            log_warning("[PlayerHealth] Defense: PlayerStatManager 없음 → 경감 미적용 raw=" .. tostring(raw))
+            return raw
+        end
+        -- HasStat으로 "정의됨"을 명확히 구분: GetStatValue는 미정의 시 1.0을 반환하므로, 데이터셋에 Defense
+        -- 행이 아직 로드되지 않았으면(리프레시 필요) 여기서 원값을 그대로 반환해 잘못된 −1 경감을 막는다.
+        if not sm:HasStat("Defense") then
+            log_warning("[PlayerHealth] Defense: StatTable에 Defense 미로드(데이터셋 refresh 필요) → 경감 미적용 raw=" .. tostring(raw))
+            return raw
+        end
+        local def = sm:GetStatValue("Defense")
+        if def <= 0 then return raw end
+        local final = raw - def
+        if final < 1 then final = 1 end
+        log("[PlayerHealth] Defense 적용 raw=" .. tostring(raw) .. " def=" .. tostring(def)
+            .. " -> final=" .. tostring(final))
+        return final
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplyStunToPlayer()
+        -- 피격 경직을 소유 플레이어에 적용: 서버(서버측 이동) + 소유 클라(이동 권위). PlayerController가 경직 동안
+        -- 전진을 멈추고 점프/슬라이드/급강하 입력을 막는다.
+        ---@type PlayerController
+        local pc = self.Entity:GetComponent("script.PlayerController")
+        if pc == nil then return end
+        local dur = pc.StunDuration
+        if dur <= 0 then return end
+        pc:ApplyStun(dur)
+        local plc = self.Entity.PlayerComponent
+        if plc ~= nil then
+            pc:ApplyStunClient(dur, plc.UserId)
         end
     end
 

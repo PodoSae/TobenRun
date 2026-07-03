@@ -25,6 +25,8 @@ script DoubleJump extends Component
 	-- Movement-state arbiter. The air jump is only allowed when the FSM permits JUMP -> DOUBLE_JUMP,
 	-- so a slide (or an already-spent air jump) can never be cancelled into a double jump.
 	property any fsm = nil
+	-- PlayerController ref (for the hit-stun input block — A1).
+	property any controller = nil
 
 	-- NOTE: the double-jump *animation* is played on the avatar body itself via the editor — the
 	-- custom animationclip is mapped to the JUMP/FALL keys of AvatarStateAnimationComponent's
@@ -40,6 +42,7 @@ script DoubleJump extends Component
 		if controller ~= nil then
 			self.runSpeed = controller.speed
 		end
+		self.controller = controller
 
 		if self:IsClient() then
 			self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
@@ -97,6 +100,8 @@ script DoubleJump extends Component
 		if self.body == nil then return end
 		if self.body:IsOnGround() then return end   -- on ground → let the normal jump handle it
 		if self.airJumpUsed then return end
+		-- 경직 중에는 2단 점프 불가 (A1).
+		if self.controller ~= nil and self.controller:IsStunned() then return end
 
 		-- Ask the FSM: only JUMP -> DOUBLE_JUMP is allowed, so this no-ops out of any other state
 		-- (e.g. a slide that got jump-cancelled is in JUMP and is fine; an already-spent air jump is

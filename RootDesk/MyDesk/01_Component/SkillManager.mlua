@@ -5,12 +5,20 @@ script SkillManager extends Component
     -- Ultimate dash ref: 궁극기(돌진) 중에는 자동 공격 미발동 (기획 §3.3). Checked once in OnUpdate so it
     -- suppresses EVERY auto-fire skill regardless of each skill's own ShouldAutoActivate override.
     property any ult = nil
+    -- A6 자동공격 제한 (기획 §2.2): 슬라이드·사망은 서버가 직접 읽고(Slide.serverSliding / PlayerHealth.dead),
+    -- 2단점프·급강하·일시정지는 소유 클라가 미러한 PlayerController.serverAttackBlocked로 읽는다. 지연 재해결.
+    property any slide = nil
+    property any health = nil
+    property any controller = nil
 
     method void OnBeginPlay()
         -- Collects skill components. Auto-attack is driven server-side in OnUpdate.
         -- Stat values are owned by PlayerStatManager; skills read them directly.
         self.skills = {}
         self.ult = self.Entity:GetComponent("script.UltimateSkill")
+        self.slide = self.Entity:GetComponent("script.Slide")
+        self.health = self.Entity:GetComponent("script.PlayerHealth")
+        self.controller = self.Entity:GetComponent("script.PlayerController")
         if self.Entity ~= nil then
             -- User @Component lookup MUST go through GetComponent("script.X"); dot access
             -- (self.Entity.PowerStrike) returns nil for script components (LIA-1114), which
@@ -40,6 +48,8 @@ script SkillManager extends Component
         -- self.ult permanently nil and silently disable the suppression.
         if self.ult == nil then self.ult = self.Entity:GetComponent("script.UltimateSkill") end
         if self.ult ~= nil and self.ult.Active then return end
+        -- 상태 기반 자동공격 억제 (기획 §2.2): 2단점프·급강하·슬라이드·일시정지·사망.
+        if self:AttackSuppressed() then return end
 
         for i, skill in ipairs(self.skills) do
             -- IsReady gates on cooldown; ShouldAutoActivate is the per-skill fire condition
@@ -49,6 +59,22 @@ script SkillManager extends Component
                 skill:Activate()
             end
         end
+    end
+
+    @ExecSpace("ServerOnly")
+    method boolean AttackSuppressed()
+        -- 자동공격을 막아야 하는 상태인지 (기획 §2.2). 슬라이드/사망은 서버가 직접 읽고, 2단점프/급강하/일시정지는
+        -- 소유 클라가 미러한 PlayerController.serverAttackBlocked로 읽는다. 참조가 nil이면 지연 재해결.
+        if self.slide == nil then self.slide = self.Entity:GetComponent("script.Slide") end
+        if self.slide ~= nil and self.slide.serverSliding then return true end
+
+        if self.health == nil then self.health = self.Entity:GetComponent("script.PlayerHealth") end
+        if self.health ~= nil and self.health.dead then return true end
+
+        if self.controller == nil then self.controller = self.Entity:GetComponent("script.PlayerController") end
+        if self.controller ~= nil and self.controller.serverAttackBlocked then return true end
+
+        return false
     end
 
 end

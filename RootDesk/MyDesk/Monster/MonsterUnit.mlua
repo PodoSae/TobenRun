@@ -153,6 +153,7 @@ script MonsterUnit extends Component
         if self.dead then return end
         self.dead = true
         self:GrantMeso(attacker)
+        self:GrantUltGauge(attacker)
         log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' died")
         -- Small delay so the killing-blow damage number can render before the entity is removed.
         self.Entity:Destroy(0.4)
@@ -172,6 +173,23 @@ script MonsterUnit extends Component
         if isvalid(wallet) then
             wallet:AddMeso(self.MesoReward)
             log("[MonsterUnit] Granted " .. tostring(self.MesoReward) .. " meso to "
+                .. tostring(beam.OwnerEntity.Name))
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void GrantUltGauge(Entity attacker)
+        -- 몬스터 처치 시 처치자(검기 소유 플레이어)의 궁극기 게이지를 충전 (기획 §3.2: 처치 3%).
+        -- The attacker is the SwordBeam projectile; resolve its owner player and add to its ult gauge.
+        if not isvalid(attacker) then return end
+        ---@type SwordBeam
+        local beam = attacker:GetComponent("script.SwordBeam")
+        if not isvalid(beam) or not isvalid(beam.OwnerEntity) then return end
+        ---@type UltimateSkill
+        local ult = beam.OwnerEntity:GetComponent("script.UltimateSkill")
+        if ult ~= nil then
+            ult:AddGauge(ult.KillGaugeGain)
+            log("[MonsterUnit] +" .. tostring(ult.KillGaugeGain) .. " ult gauge to "
                 .. tostring(beam.OwnerEntity.Name))
         end
     end

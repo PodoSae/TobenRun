@@ -96,6 +96,13 @@ script PlayerStatManager extends Component
         return def.base + def.perLevel * self:GetLevel(statKey)
     end
 
+    method boolean HasStat(string statKey)
+        -- True only when the stat is actually defined in the loaded DataSet (server-side defs). Lets callers
+        -- distinguish "genuinely defined" from GetStatValue's 1.0 "unknown stat" sentinel — e.g. Defense must
+        -- NOT silently reduce damage by 1 when the StatTable row hasn't loaded (needs a dataset refresh).
+        return self.defs ~= nil and self.defs[statKey] ~= nil
+    end
+
     @ExecSpace("Server")
     method void RequestUpgrade(string statKey)
         -- Client (UI) -> server upgrade request. Validates owner + max level, bumps the level, marks dirty.

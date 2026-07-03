@@ -55,6 +55,12 @@ property integer coinScore = 0
 @DisplayName("코스 달리기 속도(Course의 Set,speed로 지정)")
 property number courseSpeed = 4
 
+-- 궁극기 게이지 거리 충전 (기획 §3.2: 100m당 10%). 코스 목표 ~110유닛 ≈ 1000m 이므로 100m ≈ 11유닛.
+-- ultGaugeLastX 이후 ultGaugeDistUnits 만큼 전진할 때마다 UltimateSkill.RequestDistanceGauge를 1회 호출.
+@DisplayName("궁극기 게이지 거리 간격(월드유닛≈100m)")
+property number ultGaugeDistUnits = 11
+property number ultGaugeLastX = 0
+
 @ExecSpace("ClientOnly")
 method void OnBeginPlay()
 	-- Hide the game-over panel and wire the result-panel restart button at world start.
@@ -102,6 +108,11 @@ method void OnUpdate(number delta)
 	local x = player.TransformComponent.WorldPosition.x
 	if x > self.bestX then
 		self.bestX = x
+	end
+	-- 궁극기 게이지: 거리 진행 충전 (기획 §3.2 100m당 10%). ultGaugeDistUnits(≈100m)마다 1회 요청.
+	while self.bestX - self.ultGaugeLastX >= self.ultGaugeDistUnits do
+		self.ultGaugeLastX = self.ultGaugeLastX + self.ultGaugeDistUnits
+		self:ChargeUltDistance()
 	end
 	-- Remember the last x where the runner was on solid ground (to know which gap it fell into).
 	if rb:IsOnGround() then
@@ -231,6 +242,20 @@ method void ResetUltimate()
 end
 
 @ExecSpace("ClientOnly")
+method void ChargeUltDistance()
+	-- 거리 진행 궁극기 게이지 충전을 소유 플레이어의 UltimateSkill에 요청(@Server RPC로 서버에서 실제 충전).
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	---@type UltimateSkill
+	local ult = player:GetComponent("script.UltimateSkill")
+	if ult ~= nil then
+		ult:RequestDistanceGauge()
+	end
+end
+
+@ExecSpace("ClientOnly")
 method void OnArriveMap(Entity player)
 	-- Re-initialize per-map run state whenever the player enters a (new) map.
 	-- The course start is the configured start X; the goal is this stage's goal X.
@@ -248,6 +273,7 @@ method void OnArriveMap(Entity player)
 	self.spawnX = sx
 	self.spawnY = sy
 	self.bestX = sx
+	self.ultGaugeLastX = sx
 	self.score = 0
 	self.coinScore = 0
 	self.goalX = cfg.goalX
@@ -327,6 +353,7 @@ method void StartGame()
 		end
 	end
 	self.bestX = self.spawnX
+	self.ultGaugeLastX = self.spawnX
 	self.score = 0
 	self.coinScore = 0
 	-- Reset the ultimate gauge so each run begins with an empty charge.

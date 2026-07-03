@@ -45,6 +45,32 @@ script PlayerController extends Component
 	property any jumpKeyHandler = nil
 	property boolean isLocal = false
 
+	-- ── A1 피격 경직(stun) ──
+	-- 피격 시 이동 감속 + 점프/슬라이드/급강하 입력잠금. 서버(서버측 이동)와 소유 클라(이동 권위) 양쪽에서
+	-- stunRemaining을 감소시키고, >0인 동안 달리기 속도에 StunSpeedFactor를 곱한다. PlayerHealth.TakeDamage가 트리거.
+	@DisplayName("피격 경직 시간(초)")
+	@Description("장애물/몬스터/포자 피격 시 감속+입력잠금 되는 경직 시간 (기획 §5.1/§6.2, 0.5초)")
+	@MinValue(0)
+	@MaxValue(3)
+	@Delta(0.1)
+	property number StunDuration = 0.5
+	@DisplayName("피격 경직 이동 배율")
+	@Description("경직 동안 달리기 속도에 곱하는 값. 1=정상, 0=완전정지, 0.5=절반 속도. 낮을수록 더 느려짐")
+	@MinValue(0)
+	@MaxValue(1)
+	@Delta(0.05)
+	property number StunSpeedFactor = 0.5
+	@HideFromInspector property number stunRemaining = 0
+
+	-- ── A6 자동공격 억제 서버 미러 ──
+	-- 이동 FSM(2단점프)/급강하는 클라 전용이라 서버 권위인 SkillManager가 직접 못 읽는다. 소유 클라가 매 프레임
+	-- "자동공격을 막아야 하는 이동상태(2단점프/급강하/일시정지)"를 계산해 이 서버 미러로 밀어준다(변화 시에만).
+	-- 슬라이드/사망은 서버가 직접 읽으므로(각각 Slide.serverSliding / PlayerHealth.dead) 여기서 제외.
+	@HideFromInspector property boolean serverAttackBlocked = false
+	@HideFromInspector property boolean lastAttackBlocked = false
+	property any fsm = nil
+	property any fastfall = nil
+
 	method void OnBeginPlay()
 		-- Caches the movement + rigidbody components used for constant forward auto-run.
 		self.terrainSlows = {}
@@ -71,6 +97,9 @@ script PlayerController extends Component
 			self.isLocal = true
 			self:LockRunnerInput()
 			self.jumpKeyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnGroundJumpKey)
+			-- A6: cache the client-only movement components read each frame to compute the attack-block mirror.
+			self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
+			self.fastfall = self.Entity:GetComponent("script.FastFall")
 		end
 	end
 
@@ -104,11 +133,21 @@ script PlayerController extends Component
 		-- MoveVelocity write is not suppressed by the state machine, so the runner keeps
 		-- its speed during attacks. Y input is preserved so gravity/jump are unaffected.
 		if self.body ~= nil then
+			-- A1: tick down hit-stun. While stunned the runner SLOWS (달리기 속도 × StunSpeedFactor) instead of
+			-- halting; vertical velocity/gravity kept. A factor <1 stays under the WalkSpeed cap (like terrain
+			-- slow), so no clamp issue.
+			if self.stunRemaining > 0 then
+				self.stunRemaining = self.stunRemaining - delta
+			end
 			local v = self.body.MoveVelocity
 			-- speedMultiplier = skill channel (slide/ultimate), terrainMultiplier = terrain channel (mud).
 			-- Multiplied so e.g. sliding through mud stacks (1.3 * 0.5). Terrain slow (<1) stays under the
 			-- Rigidbody WalkSpeed cap, so no WalkSpeed-clamp issue (that only bites speed BUFFS > WalkSpeed).
-			self.body.MoveVelocity = Vector2(self.speed * self.speedMultiplier * self.terrainMultiplier, v.y)
+			local fwd = self.speed * self.speedMultiplier * self.terrainMultiplier
+			if self.stunRemaining > 0 then
+				fwd = fwd * self.StunSpeedFactor
+			end
+			self.body.MoveVelocity = Vector2(fwd, v.y)
 		end
 
 		-- Drive the avatar animation state for the local player. The runner moves via MoveVelocity (no
@@ -129,7 +168,46 @@ script PlayerController extends Component
 					end
 				end
 			end
+			-- A6: mirror the movement-based auto-attack block to the server (edge-triggered).
+			self:UpdateAttackBlockMirror()
 		end
+	end
+
+	method void UpdateAttackBlockMirror()
+		-- 소유 클라에서 자동공격을 막아야 하는 이동상태를 계산해 서버 미러(serverAttackBlocked)를 변화 시에만 갱신.
+		-- 2단점프(DOUBLE_JUMP)·급강하(FastFall.diving)·일시정지(RunGameHud.isAlive=false)면 true.
+		-- (슬라이드/사망은 서버가 Slide.serverSliding / PlayerHealth.dead로 직접 읽으므로 제외.)
+		local blocked = false
+		if self.fsm ~= nil and self.fsm.CurrentState == "DOUBLE_JUMP" then blocked = true end
+		if not blocked and self.fastfall ~= nil and self.fastfall.diving then blocked = true end
+		if not blocked and _RunGameHud ~= nil and _RunGameHud.isAlive == false then blocked = true end
+		if blocked ~= self.lastAttackBlocked then
+			self.lastAttackBlocked = blocked
+			self:SetServerAttackBlocked(blocked)
+		end
+	end
+
+	@ExecSpace("Server")
+	method void SetServerAttackBlocked(boolean on)
+		-- 소유 클라 → 서버: 자동공격 억제 이동상태 미러. SkillManager가 서버측에서 이 값을 읽는다.
+		self.serverAttackBlocked = on
+	end
+
+	method boolean IsStunned()
+		-- 경직 중이면 true. 각 스킬 입력 핸들러(점프/슬라이드/급강하)가 읽어 행동을 막는다.
+		return self.stunRemaining > 0
+	end
+
+	method void ApplyStun(number duration)
+		-- 피격 경직 시작/연장(호출 측에서 실행). 서버(서버측 이동)와 소유 클라(ApplyStunClient) 양쪽에 적용된다.
+		if duration <= 0 then return end
+		if duration > self.stunRemaining then self.stunRemaining = duration end
+	end
+
+	@ExecSpace("Client")
+	method void ApplyStunClient(number duration)
+		-- 서버 → 소유 클라(이동 권위): 같은 경직을 적용(targetUserId는 호출부의 마지막 인자).
+		self:ApplyStun(duration)
 	end
 
 	@ExecSpace("ClientOnly")
@@ -139,6 +217,7 @@ script PlayerController extends Component
 		-- pure-vertical jump and the double jump's reach. Gated on IsOnGround() so a mid-air tap does
 		-- nothing here and falls through to DoubleJump's air jump. Local player only.
 		if _UserService.LocalPlayer ~= self.Entity then return end
+		if self.stunRemaining > 0 then return end   -- 경직 중 점프 불가 (A1)
 		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
 			if self.body ~= nil and self.body:IsOnGround() then
 				self.body:AddForce(Vector2(self.jumpFwdForce, self.jumpForce))

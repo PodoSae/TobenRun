@@ -93,6 +93,8 @@ script Slide extends Component
         if not self.body:IsOnGround() then return end
         -- 궁극기(돌진) 중에는 슬라이드 시작 불가 (기획 §3.3).
         if self.ult ~= nil and self.ult.Active then return end
+        -- 경직 중에는 슬라이드 불가 (A1).
+        if self.controller ~= nil and self.controller:IsStunned() then return end
 
         if self.fsm ~= nil then
             if not self.fsm:TryChange("SLIDE") then return end

@@ -24,6 +24,7 @@ script FastFall extends Component
     -- Cached refs + captured originals (client / local player only).
     property RigidbodyComponent body = nil
     property any fsm = nil
+    property any controller = nil
     property boolean isLocal = false
     property boolean diving = false
 
@@ -39,6 +40,7 @@ script FastFall extends Component
         -- Caches the rigidbody + FSM + normal gravity/fall-cap, and subscribes to keyboard input on the client.
         self.body = self.Entity.RigidbodyComponent
         self.fsm = self.Entity:GetComponent("script.PlayerStateMachine")
+        self.controller = self.Entity:GetComponent("script.PlayerController")
         self.isLocal = self:IsClient() and _UserService.LocalPlayer == self.Entity
 
         if self.body ~= nil then
@@ -89,6 +91,8 @@ script FastFall extends Component
         if self.body == nil then return end
         if self.diving then return end
         if self.body:IsOnGround() then return end
+        -- 경직 중에는 급강하 불가 (A1).
+        if self.controller ~= nil and self.controller:IsStunned() then return end
 
         self.diving = true
         -- Consume this key-hold so Slide won't fire on landing until the key is released.

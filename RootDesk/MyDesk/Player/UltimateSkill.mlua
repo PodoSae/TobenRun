@@ -3,11 +3,12 @@ script UltimateSkill extends Component
 
     -- Ultimate (궁극기): a gauge fills over time; at 100% the local player presses R to open a short
     -- ATTACK WINDOW (DashDuration) that DESTROYS any monster (a HitComponent entity) or obstacle
-    -- (script.Obstacle) in the path ahead. It does NOT change movement — the player keeps the normal
-    -- running speed and physics the whole time (no speed boost, no gravity/WalkSpeed tampering); the
-    -- ultimate only gates + destroys + plays effects. The gauge + activation gate + destruction are
+    -- (script.Obstacle) in the path ahead. While active it boosts the run speed (DashSpeedMul) and LOCKS
+    -- Y descent — Gravity + FallSpeedMaxY are forced to 0 so the player glides forward at a constant height
+    -- (궁극기 중 y축 하강 없음), then restored on end. Pressing a jump key during the ultimate RE-APPLIES gravity
+    -- for the rest of the window (점프하면 다시 중력 적용) so the jump arc + normal falling work. The gauge + activation gate + destruction are
     -- server-authoritative. The window is a MODE that layers ON TOP of the movement FSM (not a
-    -- mutually-exclusive FSM state): 점프·2단점프·급강하 keep working normally while it's active.
+    -- mutually-exclusive FSM state).
     -- The synced Active flag is the single source of truth for "is active" — Slide and the auto-attack
     -- (SkillManager) read it to suppress themselves (슬라이드 X, 자동공격 X during 궁극기, 기획 §3.3).
     -- The synced Gauge drives the HUD gauge bar (see PlayerHudUI).
@@ -18,7 +19,16 @@ script UltimateSkill extends Component
     -- ── Gauge (server-authoritative, @Sync for the HUD) ──
     @Sync property number Gauge = 0
     property number MaxGauge = 100
-    property number GaugeFillPerSec = 12.5     -- ~8s from empty to full
+    -- Gauge acquisition is EVENT-based per 기획 §3.2 — 몬스터 처치(KillGaugeGain) + 거리 진행(DistanceGaugeGain)
+    -- + 보스 피격(MushmomBoss). The old time-based autofill is disabled by default (0); leave it >0 only to
+    -- restore the legacy "fills on its own" behaviour.
+    property number GaugeFillPerSec = 0
+    @DisplayName("몬스터 처치 게이지 획득(%)")
+    @Description("일반 몬스터 처치 시 충전량 (기획 §3.2: 3%)")
+    property number KillGaugeGain = 3
+    @DisplayName("거리 진행 게이지 획득(%)")
+    @Description("일정 거리(≈100m) 진행마다 충전량 (기획 §3.2: 10%). RunGameHud가 거리 간격마다 요청")
+    property number DistanceGaugeGain = 10
     -- Boss fight: the time-based fill is paused so the gauge only charges from landed boss hits
     -- (AddGauge). Toggled by MushmomBoss on begin/death. AddGauge still works while paused.
     @Sync property boolean AutoFillPaused = false
@@ -95,7 +105,16 @@ script UltimateSkill extends Component
     property RigidbodyComponent body = nil
     property number baseWalkSpeed = 0
     property number baseFallSpeedMaxX = 0
+    -- Y-descent lock snapshot: while the ultimate is active, Gravity + FallSpeedMaxY (the air Y-speed cap)
+    -- are forced to 0 so the player glides forward at a constant height (궁극기 중 y축 하강 없음). Snapshotted
+    -- once per activation alongside the speed caps and restored on end.
+    property number baseGravity = 0
+    property number baseFallSpeedMaxY = 0
     property boolean boosting = false
+    -- Once the player JUMPS during the ultimate, gravity is re-applied for the rest of the window
+    -- (점프하면 다시 중력 적용). Set by a jump key press, reset at each activation. While true, ApplyBoost
+    -- stops re-zeroing Gravity/FallSpeedMaxY so the jump arc + normal falling work.
+    property boolean gravityReleased = false
     -- Boss-damage throttle: counts down while active; a boss tick lands when it reaches 0, then it resets to
     -- BossDamageTickInterval. Reset to 0 on activation so the first frame the boss is in range ticks at once.
     property number bossDmgTimer = 0
@@ -149,6 +168,8 @@ script UltimateSkill extends Component
             if self.body ~= nil then
                 self.baseWalkSpeed = self.body.WalkSpeed
                 self.baseFallSpeedMaxX = self.body.FallSpeedMaxX
+                self.baseGravity = self.body.Gravity
+                self.baseFallSpeedMaxY = self.body.FallSpeedMaxY
             end
             self.boosting = true
         end
@@ -156,6 +177,13 @@ script UltimateSkill extends Component
         if self.body ~= nil then
             self.body.WalkSpeed = self.baseWalkSpeed * self.DashSpeedMul
             self.body.FallSpeedMaxX = self.baseFallSpeedMaxX * self.DashSpeedMul
+            -- Kill Y descent for the ultimate's duration: no gravity pull + air Y-speed clamped to 0 so any
+            -- residual fall velocity (mid-air activation) is zeroed too. The player glides level while dashing.
+            -- Once the player jumps (gravityReleased), stop re-zeroing so gravity + the jump arc resume.
+            if not self.gravityReleased then
+                self.body.Gravity = 0
+                self.body.FallSpeedMaxY = 0
+            end
         end
     end
 
@@ -166,8 +194,31 @@ script UltimateSkill extends Component
         if self.body ~= nil then
             self.body.WalkSpeed = self.baseWalkSpeed
             self.body.FallSpeedMaxX = self.baseFallSpeedMaxX
+            -- Restore gravity + air Y-speed cap so normal falling resumes the instant the ultimate ends.
+            self.body.Gravity = self.baseGravity
+            self.body.FallSpeedMaxY = self.baseFallSpeedMaxY
         end
         self.boosting = false
+        self.gravityReleased = false
+    end
+
+    method void ReleaseGravityLock()
+        -- Called when the player jumps during the ultimate: re-applies gravity for the rest of the window.
+        -- Restores the body caps IMMEDIATELY (not next OnUpdate) so the jump impulse this frame isn't
+        -- clamped by FallSpeedMaxY=0, and sets the flag so ApplyBoost stops re-zeroing them. No @ExecSpace:
+        -- runs on the caller side (owning client locally + server via RequestReleaseGravity).
+        if self.gravityReleased then return end
+        self.gravityReleased = true
+        if self.body ~= nil and self.boosting then
+            self.body.Gravity = self.baseGravity
+            self.body.FallSpeedMaxY = self.baseFallSpeedMaxY
+        end
+    end
+
+    @ExecSpace("Server")
+    method void RequestReleaseGravity()
+        -- Mirror the jump-triggered gravity release onto the server so its ApplyBoost stops re-zeroing too.
+        self:ReleaseGravityLock()
     end
 
     method void OnUpdate(number delta)
@@ -204,6 +255,16 @@ script UltimateSkill extends Component
         if _UserService.LocalPlayer ~= self.Entity then return end
         if event.key == KeyboardKey.R then
             self:RequestActivate()
+            return
+        end
+        -- Jumping during the ultimate re-applies gravity (점프하면 다시 중력 적용). Jump keys across the runner:
+        -- Space / UpArrow (ground jump) and Space / LeftAlt (double jump). Release locally at once so the jump
+        -- impulse isn't clamped, and mirror to the server.
+        if self.Active and (event.key == KeyboardKey.Space
+                or event.key == KeyboardKey.UpArrow
+                or event.key == KeyboardKey.LeftAlt) then
+            self:ReleaseGravityLock()
+            self:RequestReleaseGravity()
         end
     end
 
@@ -216,6 +277,7 @@ script UltimateSkill extends Component
         self.Active = true
         self.remaining = self.DashDuration
         self.bossDmgTimer = 0
+        self.gravityReleased = false
         log("[UltimateSkill] ULTIMATE activated (server)")
     end
 
@@ -226,6 +288,14 @@ script UltimateSkill extends Component
         if self.Active then return end
         if amount <= 0 then return end
         self.Gauge = math.min(self.MaxGauge, self.Gauge + amount)
+    end
+
+    @ExecSpace("Server")
+    method void RequestDistanceGauge()
+        -- Client(RunGameHud) → server: 거리 진행 게이지 충전(기획 §3.2 100m당 10%). 보스전에서는 거리로 충전하지
+        -- 않으므로(AutoFillPaused=true) 무시 — 보스전은 보스 피격으로만 충전한다.
+        if self.AutoFillPaused then return end
+        self:AddGauge(self.DistanceGaugeGain)
     end
 
     @ExecSpace("ServerOnly")
@@ -288,6 +358,7 @@ script UltimateSkill extends Component
                 { ["FlipX"] = self.frontEffectFlipX })
         end
         if _UserService.LocalPlayer == self.Entity then
+            self.gravityReleased = false
             self:ApplyBoost()
         end
         log("[UltimateSkill] ultimate start (client) local=" .. tostring(_UserService.LocalPlayer == self.Entity))
