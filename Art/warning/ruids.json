@@ -1,0 +1,12 @@
+{
+  "_note": "Boss-intro warning graphics. GIFs decoded to PNG frames, uploaded via Maker (내 리소스) under the team account, and wired into RunGameHud.AnimateWarnStripe.",
+  "beacon": {
+    "beacon_00.png": "7a5bd88218b64ec09af116dfef435645",
+    "beacon_01.png": "3f258684bd89487ea9d2f8c1827ea5ca"
+  },
+  "banner": {
+    "banner_0.png": "f12974911b03429f9c9a60ce6099761a",
+    "banner_2.png": "7afbd37cdbb34759a76cd257c79a8f71",
+    "banner_4.png": "91f6208cbf874133995d9fbf5d39da34"
+  }
+}

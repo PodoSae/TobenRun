@@ -50,11 +50,16 @@ property boolean bossSeen = false
 @DisplayName("보스 등장 연출 시작 접근거리")
 property number bossIntroApproach = 8
 @DisplayName("보스 등장 연출 시간(초)")
-property number bossIntroDuration = 1.8
+property number bossIntroDuration = 3.0
 property integer bossIntroState = 0
 property number bossIntroCountdown = 0
 -- BossIntroGroup root (DefaultShow=false → Enable to show the banner). Injected by the UI builder.
 property Entity bossIntroGroup = "5f0e1d04-cf84-447a-8e4f-a0fd31ac5c58"
+-- Boss-intro warning graphics (from the user's GIFs): animated WARNING neon banner + two 경광등 beacons.
+-- Injected by the UI builder.
+property Entity warnBanner = "47df7781-b8e8-4e32-9752-aae753c2d1c4"
+property Entity beaconL = "2df040f4-e6d6-4c18-b074-1c883156919c"
+property Entity beaconR = "d5310c38-d34e-42aa-9717-f63457741a43"
 property integer score = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
@@ -144,6 +149,7 @@ method void OnUpdate(number delta)
 		-- Boss intro cutscene gate. While it plays (state 1) keep the runner frozen and skip normal
 		-- boss-clear / gap handling; the countdown ends it, which resumes the run and spawns the boss.
 		if self.bossIntroState == 1 then
+			self:AnimateWarnStripe(delta)
 			self.bossIntroCountdown = self.bossIntroCountdown - delta
 			if self.bossIntroCountdown <= 0 then
 				self:EndBossIntro()
@@ -568,7 +574,46 @@ method void BeginBossIntro()
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = true
 	end
+	-- Reset the warning-animation clock + frame trackers so each boss intro starts fresh.
+	self._T.warnT = 0
+	self._T.lastBi = -1
+	self._T.lastLit = nil
 	log("[RunGameHud] boss intro begin")
+end
+
+@ExecSpace("ClientOnly")
+method void AnimateWarnStripe(number delta)
+	-- Play the two GIF-derived animations by swapping sprite frames each tick (ImageRUID = frame RUID):
+	--   • WARNING neon banner — 3-frame bright→mid→dim ping-pong pulse.
+	--   • 경광등 beacons (L/R) — 2-frame lit/dim flash.
+	-- Driven from OnUpdate while the boss-intro banner is up (bossIntroState == 1). Frames are set only
+	-- on index change (not every frame) to avoid re-loading the same sprite.
+	self._T.warnT = (self._T.warnT or 0) + delta
+	local t = self._T.warnT
+
+	-- WARNING banner pulse: indices 1,2,3,2 (bright, mid, dim, mid) at ~8 steps/sec.
+	local bframes = { "f12974911b03429f9c9a60ce6099761a", "7afbd37cdbb34759a76cd257c79a8f71", "91f6208cbf874133995d9fbf5d39da34" }
+	local seq = { 1, 2, 3, 2 }
+	local bi = seq[(math.floor(t * 8.0) % 4) + 1]
+	if bi ~= self._T.lastBi then
+		self._T.lastBi = bi
+		if isvalid(self.warnBanner) and self.warnBanner.SpriteGUIRendererComponent ~= nil then
+			self.warnBanner.SpriteGUIRendererComponent.ImageRUID = DataRef(bframes[bi])
+		end
+	end
+
+	-- 경광등 flash: lit ↔ dim ~3 times/sec.
+	local lit = (math.floor(t * 6.0) % 2 == 0)
+	if lit ~= self._T.lastLit then
+		self._T.lastLit = lit
+		local bruid = lit and "7a5bd88218b64ec09af116dfef435645" or "3f258684bd89487ea9d2f8c1827ea5ca"
+		if isvalid(self.beaconL) and self.beaconL.SpriteGUIRendererComponent ~= nil then
+			self.beaconL.SpriteGUIRendererComponent.ImageRUID = DataRef(bruid)
+		end
+		if isvalid(self.beaconR) and self.beaconR.SpriteGUIRendererComponent ~= nil then
+			self.beaconR.SpriteGUIRendererComponent.ImageRUID = DataRef(bruid)
+		end
+	end
 end
 
 @ExecSpace("ClientOnly")
