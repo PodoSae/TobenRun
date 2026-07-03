@@ -79,8 +79,10 @@ script DoubleJump extends Component
 			return
 		end
 
-		-- Space / LeftAlt are the jump keys; a press while airborne is the double jump.
-		if pressed == KeyboardKey.Space or pressed == KeyboardKey.LeftAlt then
+		-- Space / Up / W are the jump keys; a press while airborne is the double jump. This set is kept
+		-- identical to PlayerController's ground-jump keys so every jump key also double-jumps
+		-- (previously Up jumped on the ground but did NOT double-jump — the inconsistency is fixed here).
+		if pressed == KeyboardKey.Space or pressed == KeyboardKey.UpArrow or pressed == KeyboardKey.W then
 			self:TryDoubleJump()
 		end
 	end

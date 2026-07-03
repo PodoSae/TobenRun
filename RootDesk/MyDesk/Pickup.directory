@@ -1,20 +1,20 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "directory://3fef69a21442406c93953c858afe784e",
+  "EntryKey": "directory://ef031b48a2fe4b6d9f1e7e9ee5769b06",
   "ContentType": "x-mod/directory",
   "Content": "",
   "Usage": 0,
   "UsePublish": 1,
   "UseService": 0,
   "CoreVersion": "26.5.0.0",
-  "StudioVersion": "",
+  "StudioVersion": "0.1.0.0",
   "DynamicLoading": 0,
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "entry_id": "directory://3fef69a21442406c93953c858afe784e",
-      "name": "Platforms",
+      "entry_id": "directory://ef031b48a2fe4b6d9f1e7e9ee5769b06",
+      "name": "Pickup",
       "lock": false,
       "folding": false,
       "nameEditable": true

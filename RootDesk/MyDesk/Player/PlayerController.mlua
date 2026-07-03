@@ -212,13 +212,14 @@ script PlayerController extends Component
 
 	@ExecSpace("ClientOnly")
 	method void OnGroundJumpKey(KeyDownEvent event)
-		-- Space / Up = ground jump: a vertical impulse (jumpForce) plus a forward kick (jumpFwdForce). The
-		-- forward component is tuned so the single jump reaches ~3.8u forward — the midpoint between a
+		-- Space / Up / W = ground jump: a vertical impulse (jumpForce) plus a forward kick (jumpFwdForce).
+		-- The forward component is tuned so the single jump reaches ~3.8u forward — the midpoint between a
 		-- pure-vertical jump and the double jump's reach. Gated on IsOnGround() so a mid-air tap does
-		-- nothing here and falls through to DoubleJump's air jump. Local player only.
+		-- nothing here and falls through to DoubleJump's air jump. The jump-key set (Space/Up/W) is kept
+		-- identical to DoubleJump's so every jump key also double-jumps. Local player only.
 		if _UserService.LocalPlayer ~= self.Entity then return end
 		if self.stunRemaining > 0 then return end   -- 경직 중 점프 불가 (A1)
-		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow then
+		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow or event.key == KeyboardKey.W then
 			if self.body ~= nil and self.body:IsOnGround() then
 				self.body:AddForce(Vector2(self.jumpFwdForce, self.jumpForce))
 			end

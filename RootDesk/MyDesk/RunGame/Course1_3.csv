@@ -1,9 +1,10 @@
 ﻿cmd,p1,p2,p3
 Set,floorY,0,
 Set,length,160,
-Set,goal,150,
+Set,goal,boss,
 Set,speed,3,
 Set,tile,2b73e2c6c05143a192ea6d1a08966349,
-Place,Set3,0,
+Place,Set2,0,
 Place,Set4,50,
 Place,Set5,100,
+Boss,mushmom,160,

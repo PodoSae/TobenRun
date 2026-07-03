@@ -24,10 +24,12 @@ property number floorFillDepth = 5.0
 property number floorRowOverlap = 0.4
 @DisplayName("스테이지 데이터셋 접두어")
 property string dataSetPrefix = "Course"
+@DisplayName("묶음(패턴) 데이터셋 접두어")
+property string patternPrefix = "Pattern"
 @DisplayName("장애물 RUID")
 property string obstacleRuid = "af921b2251574675834981e2394e05d1"
-@DisplayName("코인 RUID")
-property string coinRuid = "184093654538492ea60617c0e3dd5c51"
+@DisplayName("코인 기본 높이(바닥 위)")
+property number coinFloatY = 0.5
 @DisplayName("기본 바닥 타일 RUID")
 property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
 @DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
@@ -47,16 +49,202 @@ property number barrageYRest = 0.0
 
 -- Server registry: mapName -> stage currently generated on that map.
 property any mapStage = nil
+-- Server registry: mapName -> boss-arena state (for a course whose goal == "boss"): infinite floor
+-- generation + one-time boss spawn. { cfg, floorX, triggerX, bossSpawned }.
+property any bossState = nil
+@DisplayName("보스전 바닥 미리생성 여유거리")
+property number bossLookahead = 25.0
+@DisplayName("보스전 바닥 청크 길이")
+property number bossChunk = 20.0
+@DisplayName("보스 등장 접근 거리")
+property number bossApproach = 12.0
+@DisplayName("보스 등장 시 앞쪽 거리")
+property number bossAheadX = 15.0
 
 @ExecSpace("ServerOnly")
 method void OnBeginPlay()
-	-- Init the per-map "which stage is built" registry on the server.
+	-- Init the per-map registries on the server.
 	self.mapStage = {}
+	self.bossState = {}
 end
 
 @ExecSpace("ServerOnly")
+method void StartBossArena(Entity map, table cfg)
+	-- Register a boss arena for this map: the floor has been built up to startX+length+4; from here
+	-- OnUpdate keeps extending it (infinite) and spawns the boss once the runner reaches the end.
+	if self.bossState == nil then
+		self.bossState = {}
+	end
+	local bid = cfg.bossId
+	if bid == nil or bid == "" then
+		bid = "mushmom"   -- default boss when goal=boss but no explicit "Boss,<id>,x" row
+	end
+	self.bossState[map.Name] = {
+		cfg = cfg,
+		floorX = cfg.startX + cfg.length + 4,   -- furthest x that already has floor
+		triggerX = cfg.startX + cfg.length,     -- runner reaching here → boss appears
+		bossSpawned = false,
+		bossId = bid,
+	}
+	log("[CourseGen] boss arena armed on " .. tostring(map.Name) .. " triggerX=" .. tostring(cfg.startX + cfg.length) .. " boss=" .. tostring(bid))
+end
+
+@ExecSpace("ServerOnly")
+method Entity FindPlayerOnMap(Entity map)
+	-- First player currently on the given map (nil if none).
+	if isvalid(map) == false or map.MapComponent == nil then
+		return nil
+	end
+	local users = _UserService:GetUsersByMapComponent(map.MapComponent)
+	if users == nil then
+		return nil
+	end
+	for _, u in ipairs(users) do
+		if isvalid(u) then
+			return u
+		end
+	end
+	return nil
+end
+
+@ExecSpace("ServerOnly")
+method void OnUpdate(number delta)
+	-- Drives every armed boss arena: keep the floor generated ahead of the runner (infinite), and
+	-- spawn the boss once the runner reaches the authored end.
+	if self.bossState == nil then
+		return
+	end
+	for mapName, st in pairs(self.bossState) do
+		if st ~= nil then
+			local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
+			local player = self:FindPlayerOnMap(map)
+			if isvalid(player) then
+				local px = player.TransformComponent.WorldPosition.x
+				-- Extend the floor so it always reaches bossLookahead units ahead of the runner.
+				while px + self.bossLookahead > st.floorX do
+					self:SpawnFloorChunk(map, st.cfg, st.floorX, st.floorX + self.bossChunk)
+					st.floorX = st.floorX + self.bossChunk
+				end
+				-- Boss spawn is driven by the CLIENT's boss-intro cutscene: RunGameHud freezes the run,
+				-- shows the banner, then calls RequestBossSpawn (below) which spawns the boss. So we no
+				-- longer auto-spawn here — this loop only keeps the floor extending ahead of the runner.
+			end
+		end
+	end
+end
+
+@ExecSpace("ServerOnly")
+method void SpawnFloorChunk(Entity map, table cfg, number x1, number x2)
+	-- Lay one collision foothold + a row of visual tiles for [x1, x2] (used to grow the boss-arena floor).
+	self:SpawnSegmentFootholds(map, cfg, { { x1, x2 } })
+	local ruid = cfg.tileRuid
+	if ruid == nil or ruid == "" then
+		ruid = self.defaultTileRuid
+	end
+	local tw = 1.0
+	local th = 1.0
+	local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+	if sprite ~= nil and sprite.PixelPerUnit > 0 then
+		tw = sprite.Width / sprite.PixelPerUnit
+		th = sprite.Height / sprite.PixelPerUnit
+	end
+	if tw < 0.2 then tw = 1.0 end
+	if th < 0.2 then th = 1.0 end
+	local topY = cfg.floorY + self.floorTopPad - th / 2
+	local rowStep = th - self.floorRowOverlap
+	if rowStep < 0.2 then
+		rowStep = th
+	end
+	local fillRows = math.ceil(self.floorFillDepth / rowStep)
+	if fillRows < 0 then
+		fillRows = 0
+	end
+	local x = x1
+	while x < x2 - 0.01 do
+		local w = x2 - x
+		if w > tw then
+			w = tw
+		end
+		local cx = x + w / 2
+		local sx = w / tw
+		local row = 0
+		while row <= fillRows do
+			local ry = topY - row * rowStep
+			local rz = row * 0.1
+			-- x-based name keeps every dynamically generated tile unique across chunks.
+			local nm = "FloorVis_" .. tostring(math.floor(cx)) .. "_" .. tostring(row)
+			local fv = _SpawnService:SpawnByModelId("runfloorvisual", nm, Vector3(cx, ry, rz), map)
+			if isvalid(fv) then
+				local spr = fv.SpriteRendererComponent
+				if spr ~= nil then
+					spr.SpriteRUID = ruid
+					spr.DrawMode = SpriteDrawMode.Simple
+				end
+				fv.TransformComponent.Scale = Vector3(sx, 1, 1)
+			end
+			row = row + 1
+		end
+		x = x + w
+	end
+end
+
+@ExecSpace("ServerOnly")
+method string BossModelForId(string id)
+	-- Map a boss id (from a "Boss,<id>,x" course row) to its .model, the same way a "Spawn,normal,x" monster
+	-- id resolves to its model. Only "mushmom" exists today; add a branch per new boss.
+	-- (mushmom stats — HP / contact / meso — come from the MonsterTable row "mushmom", read by MushmomBoss.)
+	return "MushmomBoss"
+end
+
+@ExecSpace("ServerOnly")
+method void SpawnBossById(Entity map, table cfg, number x, string bossId)
+	-- Spawn a boss (by id) at x. The MushmomBoss follow bounds are hardcoded to map01 (-4..40), so widen
+	-- them to the whole running course; otherwise the boss can't follow the runner past x=40.
+	local model = self:BossModelForId(bossId)
+	local my = cfg.floorY + self.monsterYOff
+	local boss = _SpawnService:SpawnByModelId(model, "Boss_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
+	if isvalid(boss) == false then
+		log("[CourseGen] boss spawn FAILED id=" .. tostring(bossId) .. " @x=" .. tostring(x))
+		return
+	end
+	---@type MushmomBoss
+	local mb = boss:GetComponent("script.MushmomBoss")
+	if mb ~= nil then
+		mb.StageMinX = cfg.startX - 10
+		mb.StageMaxX = 999999
+	end
+	log("[CourseGen] boss '" .. tostring(bossId) .. "' spawned @x=" .. tostring(math.floor(x)))
+end
+
+@ExecSpace("Server")
+method void RequestBossSpawn(string mapName)
+	-- Called by the client (RunGameHud) at the end of the boss-intro cutscene. Spawns the arena boss
+	-- once, at the runner's current x + bossAheadX (the same forward distance the old auto-spawn used).
+	if mapName == nil or mapName == "" or self.bossState == nil then
+		return
+	end
+	local st = self.bossState[mapName]
+	if st == nil or st.bossSpawned then
+		return
+	end
+	st.bossSpawned = true
+	local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
+	if isvalid(map) == false then
+		return
+	end
+	local player = self:FindPlayerOnMap(map)
+	local sx = st.triggerX
+	if isvalid(player) then
+		sx = player.TransformComponent.WorldPosition.x
+	end
+	self:SpawnBossById(map, st.cfg, sx + self.bossAheadX, st.bossId)
+	log("[CourseGen] boss spawn requested on " .. tostring(mapName) .. " @x=" .. tostring(math.floor(sx + self.bossAheadX)))
+end
+
 method string TableNameForStage(string stage)
 	-- A stage "1-1" maps to its own DataSet named e.g. "Course1_1".
+	-- No @ExecSpace: pure string helper, runs locally on whichever side calls it (server build +
+	-- client interaction lists both need it).
 	return self.dataSetPrefix .. string.gsub(stage, "-", "_")
 end
 
@@ -84,11 +272,14 @@ end
 
 @ExecSpace("ServerOnly")
 method void ClearCourse(Entity map)
-	-- Destroy any previously generated course entities on this map.
+	-- Destroy any previously generated course entities on this map + drop its boss-arena state.
 	for _, e in ipairs(map.Children:ToTable()) do
 		if self:IsCourseEntity(e.Name) then
 			e:Destroy()
 		end
+	end
+	if self.bossState ~= nil and isvalid(map) then
+		self.bossState[map.Name] = nil
 	end
 end
 
@@ -106,8 +297,9 @@ end
 
 @ExecSpace("ServerOnly")
 method void BuildCourse(string stage, Entity map)
-	-- Read this stage's command rows, resolve config, lay the visual floor, then run the commands.
-	local rows = self:ReadStageRows(stage)
+	-- Read this stage's command rows (Place bundles expanded), resolve config, lay the visual floor,
+	-- then run the commands.
+	local rows = self:ExpandCourseRows(stage)
 	local cfg = { floorY = self.defFloorY, startX = self.defStartX, length = self.defLength, goalX = self.defGoalX, tileRuid = self.defaultTileRuid }
 	local gaps = {}
 	local cmds = {}
@@ -123,19 +315,40 @@ method void BuildCourse(string stage, Entity map)
 			table.insert(cmds, r)
 		end
 	end
-	self:SpawnVisualFloor(map, cfg, gaps)
+	-- Boss course (Set,goal,boss): the boss is placed with a "Boss,<id>,<x>" row like a monster is placed
+	-- with "Spawn,normal,<x>". In arena mode we DON'T spawn it immediately at build time — we remember its
+	-- id and let OnUpdate spawn it (near the player) once the runner reaches the arena, then keep extending
+	-- the floor. So pull the Boss rows out of the immediate dispatch list here.
+	if cfg.bossMode == true then
+		local rest = {}
+		for _, c in ipairs(cmds) do
+			if c.cmd == "Boss" then
+				cfg.bossId = c.p1
+			else
+				table.insert(rest, c)
+			end
+		end
+		cmds = rest
+	end
+	-- Solid segments (course extent minus gaps) drive BOTH the real collision footholds and the
+	-- visual floor tiles, so the visible hole and the real fall-through hole always line up.
+	local segs = self:ComputeSegments(cfg, gaps)
+	self:SpawnSegmentFootholds(map, cfg, segs)
+	self:SpawnVisualFloor(map, cfg, segs)
 	self:Dispatch(map, cfg, cmds)
-	log("[CourseGen] built stage=" .. stage .. " rows=" .. tostring(#rows) .. " cmds=" .. tostring(#cmds))
+	-- Register the arena so OnUpdate extends the floor forever and spawns the boss once the runner arrives.
+	if cfg.bossMode == true then
+		self:StartBossArena(map, cfg)
+	end
+	log("[CourseGen] built stage=" .. stage .. " rows=" .. tostring(#rows) .. " cmds=" .. tostring(#cmds) .. " segs=" .. tostring(#segs) .. " gaps=" .. tostring(#gaps) .. " boss=" .. tostring(cfg.bossMode == true))
 end
 
-@ExecSpace("ServerOnly")
-method table ReadStageRows(string stage)
-	-- Collect every command row from this stage's own DataSet (cols: cmd, p1, p2, p3).
+method table ReadDataSetRows(string name)
+	-- Read every command row (cols: cmd, p1, p2, p3) from a DataSet by name; empty table if missing.
+	-- No @ExecSpace: DataSets exist on both sides, so this runs locally on the caller (server or client).
 	local out = {}
-	local name = self:TableNameForStage(stage)
 	local ds = _DataService:GetTable(name)
 	if ds == nil then
-		log("[CourseGen] no dataset '" .. name .. "' for stage " .. stage .. " (bare floor only)")
 		return out
 	end
 	local n = ds:GetRowCount()
@@ -150,6 +363,94 @@ method table ReadStageRows(string stage)
 	return out
 end
 
+method number PatternSize(table prows)
+	-- A bundle's declared x-footprint (in relative units): an explicit "Set,size,<n>" row if present,
+	-- otherwise the widest item's relative x. Used only for overlap / out-of-bounds warnings — placement
+	-- is always the manual baseX from the Course's Place row.
+	local size = nil
+	local maxX = 0
+	for _, pr in ipairs(prows) do
+		if pr.cmd == "Set" and pr.p1 == "size" then
+			size = tonumber(pr.p2)
+		elseif pr.cmd ~= nil and pr.cmd ~= "" and pr.cmd ~= "Place" and pr.cmd ~= "Set" then
+			local rx = tonumber(pr.p2) or 0
+			if rx > maxX then
+				maxX = rx
+			end
+		end
+	end
+	if size ~= nil then
+		return size
+	end
+	return maxX
+end
+
+method table ExpandCourseRows(string stage)
+	-- Read a stage's rows and expand each "Place,<pattern>,<baseX>" into that pattern's own DataSet
+	-- rows, offsetting every row's x (p2 is ALWAYS the x-coordinate) by baseX. Returns the flat,
+	-- expanded row list. No @ExecSpace so BOTH the server course-build and the client interaction
+	-- list get the identical result. Patterns are authored one-file-per-bundle as "Pattern<Name>".
+	local name = self:TableNameForStage(stage)
+	local rows = self:ReadDataSetRows(name)
+	if #rows == 0 then
+		log("[CourseGen] no dataset '" .. name .. "' for stage " .. tostring(stage) .. " (bare floor only)")
+	end
+	local out = {}
+	-- Footprints of already-placed bundles, for overlap warnings (position is manual; size = occupancy).
+	local placed = {}
+	for _, r in ipairs(rows) do
+		if r.cmd == "Place" then
+			-- p1 = pattern name (→ DataSet "Pattern<name>"), p2 = base X to lay the bundle at,
+			-- p3 = optional base Y (height above floor) that lifts the WHOLE bundle. When given, each
+			-- item's final y = baseY + its own relative y; when omitted, items keep their own y / auto-ground.
+			local pname = r.p1
+			local baseX = tonumber(r.p2) or 0
+			local baseY = tonumber(r.p3)
+			if pname == nil or pname == "" then
+				log("[CourseGen] Place: missing pattern name")
+			else
+				local prows = self:ReadDataSetRows(self.patternPrefix .. pname)
+				if #prows == 0 then
+					log("[CourseGen] Place: pattern '" .. self.patternPrefix .. pname .. "' not found/empty")
+				end
+				-- This bundle's declared footprint [x1, x2] = [baseX, baseX + size].
+				local size = self:PatternSize(prows)
+				local x1 = baseX
+				local x2 = baseX + size
+				for _, pf in ipairs(placed) do
+					if x1 < pf.x2 and x2 > pf.x1 then
+						log("[CourseGen] Place: bundle '" .. pname .. "' [" .. tostring(x1) .. ".." .. tostring(x2) .. "] overlaps '" .. pf.name .. "' [" .. tostring(pf.x1) .. ".." .. tostring(pf.x2) .. "]")
+					end
+				end
+				table.insert(placed, { name = pname, x1 = x1, x2 = x2 })
+				for _, pr in ipairs(prows) do
+					if pr.cmd == "Place" then
+						-- One level only — a pattern must not nest another pattern.
+						log("[CourseGen] Place: nested Place inside a pattern is ignored")
+					elseif pr.cmd == "Set" then
+						-- "Set,size,<n>" is bundle metadata (read by PatternSize); any other Set is ignored
+						-- (patterns never override stage config: floorY/length/goal/speed/tile).
+					elseif pr.cmd ~= nil and pr.cmd ~= "" then
+						local rx = tonumber(pr.p2) or 0
+						if size > 0 and (rx < 0 or rx > size) then
+							log("[CourseGen] Place: '" .. pname .. "' item x=" .. tostring(rx) .. " outside declared size 0.." .. tostring(size))
+						end
+						local ny = pr.p3
+						if baseY ~= nil then
+							-- Place gave a base Y → lift the bundle: item y = baseY + its own relative y (0 if none).
+							ny = tostring(baseY + (tonumber(pr.p3) or 0))
+						end
+						table.insert(out, { cmd = pr.cmd, p1 = pr.p1, p2 = tostring(baseX + rx), p3 = ny })
+					end
+				end
+			end
+		else
+			table.insert(out, r)
+		end
+	end
+	return out
+end
+
 @ExecSpace("ServerOnly")
 method void ApplySet(table cfg, string key, string val)
 	-- "Set" command — p1=key, p2=value. (floorY should match the map's native foothold height.)
@@ -158,6 +459,11 @@ method void ApplySet(table cfg, string key, string val)
 		if val ~= nil and val ~= "" then
 			cfg.tileRuid = val
 		end
+		return
+	end
+	if key == "goal" and val == "boss" then
+		-- Boss course: no fixed clear line. The floor auto-extends forever and a boss appears at the end.
+		cfg.bossMode = true
 		return
 	end
 	local v = tonumber(val)
@@ -176,24 +482,9 @@ method void ApplySet(table cfg, string key, string val)
 end
 
 @ExecSpace("ServerOnly")
-method void SpawnVisualFloor(Entity map, table cfg, table gaps)
-	-- Body-less VISUAL floor (collision = the map's native foothold, which has REAL holes at gaps).
-	-- Tiles are laid per solid SEGMENT (between gaps); the last tile of each segment is scaled
-	-- horizontally to end exactly at the gap edge, so the visual hole matches the real gap.
-	local ruid = cfg.tileRuid
-	if ruid == nil or ruid == "" then
-		ruid = self.defaultTileRuid
-	end
-	local tw = 1.0
-	local th = 1.0
-	local sprite = _ResourceService:LoadSpriteAndWait(ruid)
-	if sprite ~= nil and sprite.PixelPerUnit > 0 then
-		tw = sprite.Width / sprite.PixelPerUnit
-		th = sprite.Height / sprite.PixelPerUnit
-	end
-	if tw < 0.2 then tw = 1.0 end
-	if th < 0.2 then th = 1.0 end
-	-- Solid segments = [startX-4, startX+length+4] minus every gap range.
+method table ComputeSegments(table cfg, table gaps)
+	-- Solid floor segments = [startX-4, startX+length+4] minus every gap range. Shared by the collision
+	-- footholds (SpawnSegmentFootholds) and the visual tiles (SpawnVisualFloor) so both use identical spans.
 	table.sort(gaps, function(a, b)
 		return a.x1 < b.x1
 	end)
@@ -211,12 +502,28 @@ method void SpawnVisualFloor(Entity map, table cfg, table gaps)
 	if endX > cursor then
 		table.insert(segs, { cursor, endX })
 	end
-	-- COLLISION: the RUN MAP already bakes NATIVE footholds matching this course's segments/gaps
-	-- (RunStage1_1 = 4 footholds for 3 gaps; RunStage1_2 = 3 for 2). Spawning runtime CustomFootholds
-	-- on top DOUBLES the floor and — per the verified gotcha — PINS the player's X to 0 the moment it
-	-- lands on a custom one (auto-run MoveVelocity then no-ops while only native arrow input still moves).
-	-- So we do NOT spawn custom footholds here; the runner stands on the native baked floor, and the
-	-- native gaps make the runner physically fall in. (segs below is still used to lay the visual tiles.)
+	return segs
+end
+
+@ExecSpace("ServerOnly")
+method void SpawnVisualFloor(Entity map, table cfg, table segs)
+	-- Body-less VISUAL floor. Collision is the runtime CustomFootholds from SpawnSegmentFootholds, which
+	-- span these SAME segments, so the visible hole and the real fall-through hole always match the gaps.
+	-- Tiles are laid per solid segment; the last tile of each segment is scaled horizontally to end
+	-- exactly at the gap edge, so the visual hole lines up with the segment boundary.
+	local ruid = cfg.tileRuid
+	if ruid == nil or ruid == "" then
+		ruid = self.defaultTileRuid
+	end
+	local tw = 1.0
+	local th = 1.0
+	local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+	if sprite ~= nil and sprite.PixelPerUnit > 0 then
+		tw = sprite.Width / sprite.PixelPerUnit
+		th = sprite.Height / sprite.PixelPerUnit
+	end
+	if tw < 0.2 then tw = 1.0 end
+	if th < 0.2 then th = 1.0 end
 	-- Vertical fill so the background doesn't show below the floor.
 	local topY = cfg.floorY + self.floorTopPad - th / 2
 	local rowStep = th - self.floorRowOverlap
@@ -306,30 +613,6 @@ method void Dispatch(Entity map, table cfg, table cmds)
 end
 
 @ExecSpace("ServerOnly")
-method Entity SpawnProp(Entity map, string name, number x, number worldY, string ruid)
-	-- Spawn a body-less visual prop; interaction is handled client-side by RunGameHud.
-	local prop = _SpawnService:SpawnByModelId("runprop", name, Vector3(x, worldY, 0), map)
-	if isvalid(prop) == false then
-		return nil
-	end
-	local spr = prop.SpriteRendererComponent
-	if spr ~= nil and ruid ~= nil and ruid ~= "" then
-		spr.SpriteRUID = ruid
-	end
-	return prop
-end
-
-@ExecSpace("ServerOnly")
-method number PropHalfHeight(string ruid)
-	-- Half the prop sprite's world height — used to sit a prop's BOTTOM exactly on the floor.
-	local s = _ResourceService:LoadSpriteAndWait(ruid)
-	if s ~= nil and s.PixelPerUnit > 0 then
-		return (s.Height / s.PixelPerUnit) / 2
-	end
-	return 0.5
-end
-
-@ExecSpace("ServerOnly")
 method boolean IsMonster(string id)
 	-- True if `id` is a monster row in the sjy MonsterTable DataSet (normal / mushmom / ...).
 	local ds = _DataService:GetTable("MonsterTable")
@@ -369,16 +652,28 @@ end
 
 @ExecSpace("ServerOnly")
 method void CmdSpawn(Entity map, table cfg, table c)
-	-- "Spawn" command — p1=type, p2=x, p3=optional RUID override.
+	-- "Spawn" command — p1=type, p2=x, p3=optional Y (height ABOVE the floor).
 	-- p1 is a hazard id defined in the ObstacleDef DataSet (spike/obstacle/monster/...),
 	-- or "coin", or a raw registered modelId.
+	-- p3 (yGiven): if provided, the entity is placed at worldY = floorY + yGiven (explicit height,
+	-- e.g. a floating coin arc). If omitted, each type keeps its own auto-grounding behavior.
 	local kind = c.p1
 	local x = tonumber(c.p2) or 0
+	local yGiven = tonumber(c.p3)
 	if kind == nil or kind == "" then
 		return
 	end
 	if kind == "coin" then
-		self:SpawnProp(map, "Coin_" .. tostring(math.floor(x)), x, cfg.floorY + 0.6 + self:PropHalfHeight(self.coinRuid), self.coinRuid)
+		-- Coin is its own model (Models/Pickups/Coin.model, modelId "coin") — sprite + script.Coin baked
+		-- in. The in-model Coin script self-sizes its pickup box and collects on real box-overlap.
+		local cy = cfg.floorY + self.coinFloatY
+		if yGiven ~= nil then
+			cy = cfg.floorY + yGiven
+		end
+		local coin = _SpawnService:SpawnByModelId("coin", "Coin_" .. tostring(math.floor(x)), Vector3(x, cy, 0), map)
+		if isvalid(coin) == false then
+			log("[CourseGen] coin spawn failed @x=" .. tostring(x))
+		end
 		return
 	end
 	-- Mud patch (non-lethal terrain): a ground puddle that SLOWS the runner while walking through it
@@ -423,6 +718,9 @@ method void CmdSpawn(Entity map, table cfg, table c)
 	-- deals contact damage to PlayerHealth server-side. Spawn above the floor so gravity settles it.
 	if self:IsMonster(kind) then
 		local my = cfg.floorY + self.monsterYOff
+		if yGiven ~= nil then
+			my = cfg.floorY + yGiven
+		end
 		local mon = _SpawnService:SpawnByModelId("normalmonster", "Monster_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
 		if isvalid(mon) then
 			-- Tell the shared monster shell WHICH MonsterTable row to be (spore / normal / ...). Without this
@@ -441,6 +739,9 @@ method void CmdSpawn(Entity map, table cfg, table c)
 	local omodel = self:ObstacleModel(kind)
 	if omodel ~= "" then
 		local restY = cfg.floorY + self.obstacleYRest
+		if yGiven ~= nil then
+			restY = cfg.floorY + yGiven
+		end
 		local o = _SpawnService:SpawnByModelId(omodel, "Obstacle_" .. tostring(math.floor(x)), Vector3(x, restY, 0), map)
 		if isvalid(o) then
 			---@type Obstacle
@@ -448,7 +749,11 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			if oc ~= nil then
 				oc.Lifetime = 999999   -- fixed course placement must not auto-despawn before the runner arrives
 					oc.Damage = self:ObstacleDamage(kind)
-					if oc.IsCeiling then
+					if yGiven ~= nil then
+						-- Explicit height wins for both floor and ceiling hazards.
+						oc.TargetY = restY
+						o.TransformComponent.Position = Vector3(x, restY, 0)
+					elseif oc.IsCeiling then
 						-- Hang from the ceiling at CeilingY (FlipY baked in the model). Stay put: no rise-from-below.
 						oc.TargetY = oc.CeilingY
 						o.TransformComponent.Position = Vector3(x, oc.CeilingY, 0)
@@ -461,7 +766,11 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		return
 	end
 	-- Otherwise treat p1 as a registered model id and spawn it directly (custom entities).
-	local e = _SpawnService:SpawnByModelId(kind, "Spawn_" .. tostring(math.floor(x)), Vector3(x, cfg.floorY + 1.0, 0), map)
+	local gy = cfg.floorY + 1.0
+	if yGiven ~= nil then
+		gy = cfg.floorY + yGiven
+	end
+	local e = _SpawnService:SpawnByModelId(kind, "Spawn_" .. tostring(math.floor(x)), Vector3(x, gy, 0), map)
 	if isvalid(e) == false then
 		log("[CourseGen] Spawn: unknown type/model '" .. tostring(kind) .. "'")
 	end
@@ -475,25 +784,11 @@ end
 
 @ExecSpace("ServerOnly")
 method void CmdBoss(Entity map, table cfg, table c)
-	-- "Boss" command — p2=x. Spawns the sjy MushmomBoss model; its in-model MushmomBoss script reads
-	-- "mushmom" from MonsterTable, runs its 2-phase skill AI, and deals contact damage to PlayerHealth.
+	-- "Boss,<id>,<x>" command — place a boss at x, data-driven like "Spawn,normal,x" places a monster.
+	-- (In a boss course (Set,goal,boss) the Boss row is consumed by BuildCourse and the boss appears at
+	-- the arena instead; this direct path is for placing a boss at a fixed spot without arena mode.)
 	local x = tonumber(c.p2) or 0
-	local my = cfg.floorY + self.monsterYOff
-	local boss = _SpawnService:SpawnByModelId("MushmomBoss", "Boss_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
-	if isvalid(boss) == false then
-		log("[CourseGen] Boss spawn failed @x=" .. tostring(x))
-		return
-	end
-	-- Size the boss's follow / charge arena to THIS course so it tracks the auto-running player across the
-	-- whole stage instead of clamping to its default (short) map01 bounds.
-	---@type MushmomBoss
-	local bc = boss:GetComponent("script.MushmomBoss")
-	if bc ~= nil then
-		bc.StageMinX = cfg.startX - 10
-		bc.StageMaxX = cfg.startX + cfg.length
-	end
-	log("[CourseGen] Boss (Mushmom) spawned @x=" .. tostring(x)
-		.. " arena=[" .. tostring(cfg.startX - 10) .. "," .. tostring(cfg.startX + cfg.length) .. "]")
+	self:SpawnBossById(map, cfg, x, c.p1)
 end
 
 end

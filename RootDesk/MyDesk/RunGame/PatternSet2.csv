@@ -1,0 +1,11 @@
+﻿cmd,p1,p2,p3
+Set,size,50,
+Spawn,obstacle,10,
+Spawn,coin,14,2
+Spawn,coin,15,3
+Spawn,coin,16,2
+Gap,5,24,
+Spawn,normal,33,
+Spawn,normal,40,
+Spawn,coin,46,
+Spawn,coin,47,

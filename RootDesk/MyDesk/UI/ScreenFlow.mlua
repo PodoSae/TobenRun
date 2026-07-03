@@ -34,18 +34,15 @@ method void OnBeginPlay()
 	if isvalid(self.startGameButton) then
 		self.startGameHandler = self.startGameButton:ConnectEvent(ButtonClickEvent, self.OnStartGameClick)
 	end
-	-- Wire the 10 stage-select buttons (1-1 .. 2-5) in the lobby.
+	-- Wire the stage-select buttons in the lobby (see StageList — currently 1-1 / 1-2 / 1-3).
 	self.stageHandlers = {}
-	for w = 1, 2 do
-		for s = 1, 5 do
-			local stage = tostring(w) .. "-" .. tostring(s)
-			local path = "/ui/LobbyGroup/Stage_" .. tostring(w) .. "_" .. tostring(s)
-			local btn = _EntityService:GetEntityByPath(path)
-			if isvalid(btn) then
-				local capturedStage = stage
-				local h = btn:ConnectEvent(ButtonClickEvent, function() self:OnStageClick(capturedStage) end)
-				table.insert(self.stageHandlers, { ent = btn, hd = h })
-			end
+	for _, stage in ipairs(self:StageList()) do
+		local path = "/ui/LobbyGroup/Stage_" .. string.gsub(stage, "-", "_")
+		local btn = _EntityService:GetEntityByPath(path)
+		if isvalid(btn) then
+			local capturedStage = stage
+			local h = btn:ConnectEvent(ButtonClickEvent, function() self:OnStageClick(capturedStage) end)
+			table.insert(self.stageHandlers, { ent = btn, hd = h })
 		end
 	end
 	-- Shop screen: hidden at start; wire its open / back / buy buttons.
@@ -91,28 +88,25 @@ method void RefreshSavedUI()
 	-- reaches its StageUnlock threshold (1-1 = 0, always open). Locked stages show a
 	-- Lock overlay entity (dim + lock icon + required total) instead of being enterable.
 	local total = self:GetTotalBest()
-	for w = 1, 2 do
-		for s = 1, 5 do
-			local stage = tostring(w) .. "-" .. tostring(s)
-			local btnPath = "/ui/LobbyGroup/Stage_" .. tostring(w) .. "_" .. tostring(s)
-			local unlock = self:GetStageUnlock(stage)
-			local locked = total < unlock
-			local lockEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock")
-			if isvalid(lockEnt) then
-				lockEnt.Enable = locked
-				local reqEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock/Req")
-				if isvalid(reqEnt) and reqEnt.TextComponent ~= nil then
-					reqEnt.TextComponent.Text = "합계 " .. tostring(unlock)
-				end
+	for _, stage in ipairs(self:StageList()) do
+		local btnPath = "/ui/LobbyGroup/Stage_" .. string.gsub(stage, "-", "_")
+		local unlock = self:GetStageUnlock(stage)
+		local locked = total < unlock
+		local lockEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock")
+		if isvalid(lockEnt) then
+			lockEnt.Enable = locked
+			local reqEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock/Req")
+			if isvalid(reqEnt) and reqEnt.TextComponent ~= nil then
+				reqEnt.TextComponent.Text = "합계 " .. tostring(unlock)
 			end
-			local best = _PlayerSave:GetStageBest(stage)
-			local lbl = _EntityService:GetEntityByPath(btnPath .. "/Best")
-			if isvalid(lbl) and lbl.TextComponent ~= nil then
-				if best > 0 then
-					lbl.TextComponent.Text = "최고 " .. tostring(best)
-				else
-					lbl.TextComponent.Text = ""
-				end
+		end
+		local best = _PlayerSave:GetStageBest(stage)
+		local lbl = _EntityService:GetEntityByPath(btnPath .. "/Best")
+		if isvalid(lbl) and lbl.TextComponent ~= nil then
+			if best > 0 then
+				lbl.TextComponent.Text = "최고 " .. tostring(best)
+			else
+				lbl.TextComponent.Text = ""
 			end
 		end
 	end
@@ -379,12 +373,15 @@ method integer GetTotalBest()
 		return 0
 	end
 	local total = 0
-	for w = 1, 2 do
-		for s = 1, 5 do
-			total = total + _PlayerSave:GetStageBest(tostring(w) .. "-" .. tostring(s))
-		end
+	for _, stage in ipairs(self:StageList()) do
+		total = total + _PlayerSave:GetStageBest(stage)
 	end
 	return total
+end
+
+method table StageList()
+	-- The stages offered in the lobby. Must match the Stage_W_S buttons in LobbyGroup.ui.
+	return { "1-1", "1-2", "1-3" }
 end
 
 method integer GetStageUnlock(string stage)
