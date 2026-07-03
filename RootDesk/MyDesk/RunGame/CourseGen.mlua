@@ -30,6 +30,29 @@ property string patternPrefix = "Pattern"
 property string obstacleRuid = "af921b2251574675834981e2394e05d1"
 @DisplayName("코인 기본 높이(바닥 위)")
 property number coinFloatY = 0.5
+@DisplayName("코인 RUID")
+property string coinRuid = "184093654538492ea60617c0e3dd5c51"
+@DisplayName("공격력 버프 아이템 RUID")
+@Description("로그라이트 공격력 증가 아이템(atkbuff) 스프라이트 (기본: '물리 공격력 상승' 아이템 스프라이트)")
+property string atkBuffRuid = "05763a97e7434f76b426fa2878395687"
+@DisplayName("공격속도 버프 아이템 RUID")
+@Description("로그라이트 공격속도 증가 아이템(aspdbuff) 스프라이트 (기본: '공격속도 +1' 아이템 스프라이트)")
+property string aspdBuffRuid = "39dfb7d3137a48beb17bd428aaf3fea9"
+@DisplayName("관통 버프 아이템 RUID")
+@Description("로그라이트 관통 수 증가 아이템(piercebuff) 스프라이트 (기본: '관통의 비약' 아이템 스프라이트)")
+property string pierceBuffRuid = "1276af77877246568ebae9b4b4f19f54"
+@DisplayName("체력 재생 아이템 RUID")
+@Description("로그라이트 체력 재생 아이템(regenbuff) 스프라이트 (기본: 'HP 회복' 아이템 스프라이트)")
+property string regenBuffRuid = "13111d76481843aca7ef1c0b67e1a608"
+@DisplayName("최대체력 아이템 RUID")
+@Description("로그라이트 최대체력 증가 아이템(maxhpbuff) 스프라이트 (기본: 'MaxHP 상승' 아이템 스프라이트)")
+property string maxHpBuffRuid = "043d30b5581945e2a21f061a0cfc64b3"
+@DisplayName("보호막 아이템 RUID")
+@Description("로그라이트 보호막 아이템(shieldbuff) 스프라이트 (기본: '슈페리얼 프로텍트 실드' 아이템 스프라이트)")
+property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
+@DisplayName("즉시 회복 아이템 RUID")
+@Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
+property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
 @DisplayName("기본 바닥 타일 RUID")
 property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
 @DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
@@ -286,7 +309,7 @@ end
 @ExecSpace("ServerOnly")
 method boolean IsCourseEntity(string nm)
 	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_" }
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_" }
 	for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
@@ -613,6 +636,20 @@ method void Dispatch(Entity map, table cfg, table cmds)
 end
 
 @ExecSpace("ServerOnly")
+method Entity SpawnProp(Entity map, string name, number x, number worldY, string ruid)
+	-- Spawn a body-less visual prop (runprop) with a sprite; interaction is handled client-side by RunGameHud.
+	local prop = _SpawnService:SpawnByModelId("runprop", name, Vector3(x, worldY, 0), map)
+	if isvalid(prop) == false then
+		return nil
+	end
+	local spr = prop.SpriteRendererComponent
+	if spr ~= nil and ruid ~= nil and ruid ~= "" then
+		spr.SpriteRUID = ruid
+	end
+	return prop
+end
+
+@ExecSpace("ServerOnly")
 method boolean IsMonster(string id)
 	-- True if `id` is a monster row in the sjy MonsterTable DataSet (normal / mushmom / ...).
 	local ds = _DataService:GetTable("MonsterTable")
@@ -690,6 +727,55 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			end
 		else
 			log("[CourseGen] mud spawn failed @x=" .. tostring(x))
+		end
+		return
+	end
+	-- Roguelite STAGE-BUFF pickups (로그라이트 아이템): atkbuff(공격력) / aspdbuff(공격속도) / piercebuff(관통 수).
+	-- Reuse the body-less `runprop` visual + attach the generic StageBuffItem script at runtime (§builder-protocol
+	-- 2.5). On contact it applies a stage-scoped buff to PowerStrike (RunGameHud resets per stage → 스테이지 이탈 시
+	-- 소멸). p3 = optional 증가량 override. Fixed placement → no auto-despawn.
+	if kind == "atkbuff" or kind == "aspdbuff" or kind == "piercebuff"
+			or kind == "regenbuff" or kind == "maxhpbuff" or kind == "shieldbuff" or kind == "healbuff" then
+		local ruid = self.atkBuffRuid
+		local buffKind = "attack"
+		local defaultAmt = 0.5
+		if kind == "aspdbuff" then
+			ruid = self.aspdBuffRuid
+			buffKind = "attackspeed"
+			defaultAmt = 0.3
+		elseif kind == "piercebuff" then
+			ruid = self.pierceBuffRuid
+			buffKind = "pierce"
+			defaultAmt = 1
+		elseif kind == "regenbuff" then
+			ruid = self.regenBuffRuid
+			buffKind = "regen"
+			defaultAmt = 5      -- HP/초
+		elseif kind == "maxhpbuff" then
+			ruid = self.maxHpBuffRuid
+			buffKind = "maxhp"
+			defaultAmt = 50     -- 최대체력 +50
+		elseif kind == "shieldbuff" then
+			ruid = self.shieldBuffRuid
+			buffKind = "shield"
+			defaultAmt = 1      -- 보호막 충전 1
+		elseif kind == "healbuff" then
+			ruid = self.healBuffRuid
+			buffKind = "heal"
+			defaultAmt = 9999   -- 즉시 회복(MaxHp 상한으로 clamp = 사실상 풀피). p3로 특정량 지정 가능
+		end
+		local ay = cfg.floorY + 0.7
+		local it = self:SpawnProp(map, "AtkBuff_" .. tostring(math.floor(x)), x, ay, ruid)
+		if isvalid(it) then
+			---@type StageBuffItem
+			local ic = it:AddComponent("script.StageBuffItem")
+			if ic ~= nil then
+				ic.BuffKind = buffKind
+				local amt = tonumber(c.p3)
+				ic.Amount = (amt ~= nil) and amt or defaultAmt
+			end
+		else
+			log("[CourseGen] " .. tostring(kind) .. " spawn failed @x=" .. tostring(x))
 		end
 		return
 	end
