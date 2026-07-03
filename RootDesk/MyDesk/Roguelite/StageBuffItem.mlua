@@ -26,6 +26,12 @@ script StageBuffItem extends Component
     @Delta(0.1)
     property number Amount = 0.3
 
+    -- 강화(로비) 반영용 StatTable 키. 비면 Amount 고정. 값이 있으면 획득 순간 그 플레이어의 PlayerStatManager에서
+    -- GetStatValue(= base + perLevel×강화레벨)를 지급량으로 사용한다(예: ShieldBuffAmt → 강화 시 방어 횟수 ↑).
+    @DisplayName("강화 스탯 키")
+    @Description("이 아이템 지급량을 강화하는 StatTable 키(비면 Amount 고정). 예: ShieldBuffAmt")
+    property string StatKey = ""
+
     @DisplayName("획득 판정 반경(월드유닛)")
     @MinValue(0.1)
     @MaxValue(3)
@@ -72,10 +78,29 @@ script StageBuffItem extends Component
     end
 
     @ExecSpace("ServerOnly")
+    method number ResolveAmount(Entity player)
+        -- 강화 반영 지급량: StatKey가 지정되고 그 플레이어의 PlayerStatManager에 해당 스탯이 정의돼 있으면
+        -- GetStatValue(= base + perLevel×강화레벨)를 지급량으로 쓴다. 없으면 CSV 기본값(self.Amount) 폴백.
+        -- 획득 순간 서버에서 그 플레이어 기준으로 계산하므로 멀티플레이 안전(플레이어마다 강화 레벨이 다름).
+        if self.StatKey == nil or self.StatKey == "" then
+            return self.Amount
+        end
+        ---@type PlayerStatManager
+        local sm = player:GetComponent("script.PlayerStatManager")
+        if sm ~= nil and sm:HasStat(self.StatKey) then
+            return sm:GetStatValue(self.StatKey)
+        end
+        return self.Amount
+    end
+
+    @ExecSpace("ServerOnly")
     method void Grant(Entity player)
-        -- Applies the chosen stage buff to the player's PowerStrike and removes the item.
+        -- Applies the chosen stage buff to the player's PowerStrike/PlayerHealth and removes the item.
         if self.taken then return end
         self.taken = true
+
+        -- 지급량은 강화 반영값(획득 순간 그 플레이어 기준). StatKey 없는 아이템(heal 등)은 Amount 그대로.
+        local amount = self:ResolveAmount(player)
 
         local kind = self.BuffKind
         if kind == "regen" or kind == "maxhp" or kind == "shield" or kind == "heal" then
@@ -84,13 +109,13 @@ script StageBuffItem extends Component
             local hp = player:GetComponent("script.PlayerHealth")
             if hp ~= nil then
                 if kind == "regen" then
-                    hp:AddStageRegen(self.Amount)
+                    hp:AddStageRegen(amount)
                 elseif kind == "maxhp" then
-                    hp:AddStageMaxHp(self.Amount)
+                    hp:AddStageMaxHp(amount)
                 elseif kind == "heal" then
-                    hp:HealInstant(self.Amount)
+                    hp:HealInstant(amount)
                 else
-                    hp:AddStageShield(self.Amount)
+                    hp:AddStageShield(amount)
                 end
             else
                 log_warning("[StageBuffItem] player has no script.PlayerHealth — buff not applied")
@@ -101,11 +126,11 @@ script StageBuffItem extends Component
             local ps = player:GetComponent("script.PowerStrike")
             if ps ~= nil then
                 if kind == "attackspeed" then
-                    ps:AddStageAttackSpeedMult(self.Amount)
+                    ps:AddStageAttackSpeedMult(amount)
                 elseif kind == "pierce" then
-                    ps:AddStagePierce(self.Amount)
+                    ps:AddStagePierce(amount)
                 else
-                    ps:AddStageAttackMult(self.Amount)
+                    ps:AddStageAttackMult(amount)
                 end
             else
                 log_warning("[StageBuffItem] player has no script.PowerStrike — buff not applied")
@@ -113,8 +138,8 @@ script StageBuffItem extends Component
         end
 
         self:PlayPickupEffect(self.Entity.TransformComponent.WorldPosition)
-        log("[StageBuffItem] '" .. tostring(self.BuffKind) .. "' +" .. tostring(self.Amount)
-            .. " to " .. tostring(player.Name))
+        log("[StageBuffItem] '" .. tostring(self.BuffKind) .. "' +" .. tostring(amount)
+            .. " (key=" .. tostring(self.StatKey) .. ") to " .. tostring(player.Name))
         -- Tiny delay so the effect can fire before the entity is gone.
         self.Entity:Destroy(0.1)
     end

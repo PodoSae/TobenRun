@@ -272,6 +272,16 @@ method string TableNameForStage(string stage)
 end
 
 @ExecSpace("Server")
+method void ForceRebuildCourse(string stage, string mapName)
+	-- 디버그용 강제 재빌드: mapStage 가드를 초기화해 같은 스테이지라도 매번 코스를 새로 짓는다(BossTestMap 재진입 시
+	-- 몬스터/버프/보스가 항상 새로 생성되도록 RunGameHud가 이 경로를 쓴다).
+	if self.mapStage ~= nil then
+		self.mapStage[mapName] = nil
+	end
+	self:RequestBuildCourse(stage, mapName)
+end
+
+@ExecSpace("Server")
 method void RequestBuildCourse(string stage, string mapName)
 	-- Entry point: build (or rebuild) a stage's course on the given map. Clears the previous one.
 	if stage == nil or stage == "" or mapName == nil or mapName == "" then
@@ -739,30 +749,37 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		local ruid = self.atkBuffRuid
 		local buffKind = "attack"
 		local defaultAmt = 0.5
+		local statKey = "AtkBuffAmt"   -- 강화 시 이 아이템 지급량↑ StatTable 키(획득 순간 플레이어별 반영)
 		if kind == "aspdbuff" then
 			ruid = self.aspdBuffRuid
 			buffKind = "attackspeed"
 			defaultAmt = 0.3
+			statKey = "AspdBuffAmt"
 		elseif kind == "piercebuff" then
 			ruid = self.pierceBuffRuid
 			buffKind = "pierce"
 			defaultAmt = 1
+			statKey = "PierceBuffAmt"
 		elseif kind == "regenbuff" then
 			ruid = self.regenBuffRuid
 			buffKind = "regen"
 			defaultAmt = 5      -- HP/초
+			statKey = "RegenBuffAmt"
 		elseif kind == "maxhpbuff" then
 			ruid = self.maxHpBuffRuid
 			buffKind = "maxhp"
 			defaultAmt = 50     -- 최대체력 +50
+			statKey = "MaxHpBuffAmt"
 		elseif kind == "shieldbuff" then
 			ruid = self.shieldBuffRuid
 			buffKind = "shield"
 			defaultAmt = 1      -- 보호막 충전 1
+			statKey = "ShieldBuffAmt"
 		elseif kind == "healbuff" then
 			ruid = self.healBuffRuid
 			buffKind = "heal"
 			defaultAmt = 9999   -- 즉시 회복(MaxHp 상한으로 clamp = 사실상 풀피). p3로 특정량 지정 가능
+			statKey = ""        -- 즉시 풀피라 강화 대상 아님
 		end
 		local ay = cfg.floorY + 0.7
 		local it = self:SpawnProp(map, "AtkBuff_" .. tostring(math.floor(x)), x, ay, ruid)
@@ -771,6 +788,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			local ic = it:AddComponent("script.StageBuffItem")
 			if ic ~= nil then
 				ic.BuffKind = buffKind
+				ic.StatKey = statKey
 				local amt = tonumber(c.p3)
 				ic.Amount = (amt ~= nil) and amt or defaultAmt
 			end

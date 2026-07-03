@@ -1263,12 +1263,25 @@ script MushmomBoss extends Component
         end
     end
 
+    -- ── 피격 이펙트(보스 전용, 캐릭터 피격과 구분) — MonsterUnit과 동일 규칙: 적은 노란 사방 스파크, 캐릭터는 빨간 스파크 ──
+    @DisplayName("피격 파티클 크기")
+    @MinValue(0.1)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number HitParticleScale = 1.1
+    @DisplayName("피격 파티클 높이 보정")
+    property number HitParticleOffsetY = 0.8
+    @DisplayName("피격 파티클 색")
+    property Color HitParticleColor = Color(1, 1, 0.6, 1)
+
     @ExecSpace("ServerOnly")
     @EventSender("Self")
     handler HandleHitEvent(HitEvent event)
         -- Player's SwordBeam (or any HitBox attack) damages the boss. On HP<=0, grant meso and die.
         -- While groggy the boss is a wide-open weak point, so incoming damage is multiplied.
         if self.dead then return end
+        -- 적 전용 피격 타격 이펙트(전 클라). 캐릭터 피격(빨간 스파크)과 구분되는 노란 사방 스파크.
+        self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
         local dmg = event.TotalDamage
         if self.groggy then
             dmg = dmg * self.GroggyDamageMultiplier
@@ -1287,6 +1300,18 @@ script MushmomBoss extends Component
         end
     end
 
+    @ExecSpace("Multicast")
+    method void PlayHitParticle(Vector3 pos)
+        -- 보스 피격 타격 이펙트(전 클라 재생). 캐릭터 피격(PlayerHealth = 빨간 SparkExplosion)과 구분되도록 사방으로
+        -- 튀는 노란 SparkRadialExplosion을 쓴다(MonsterUnit과 동일 규칙). HitParticleColor/Scale/OffsetY로 조절.
+        if not isvalid(self.Entity) then return end
+        local s = self.HitParticleScale
+        _ParticleService:PlayBasicParticle(
+            BasicParticleType.SparkRadialExplosion, self.Entity,
+            Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z), 0,
+            Vector3(s, s, s), false, { Color = self.HitParticleColor })
+    end
+
     @ExecSpace("ServerOnly")
     method void ApplyExternalDamage(number amount, Entity attacker)
         -- Damage from a source that bypasses the HitEvent pipeline — the player's ultimate, which sweeps the
@@ -1301,6 +1326,7 @@ script MushmomBoss extends Component
             amount = amount * self.GroggyDamageMultiplier
         end
         self.Hp = self.Hp - amount
+        self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
         log("[MushmomBoss] ultimate dmg -" .. tostring(amount) .. " -> hp=" .. tostring(self.Hp))
         -- Show a floating damage number: the ultimate bypasses the HitEvent pipeline, so the auto DamageSkin
         -- never fires for it — display one manually (client-space Play, same as the groggy crit number).

@@ -25,10 +25,14 @@ script PlayerHealth extends Component
     @HideFromInspector property integer stageShieldCharges = 0  -- 남은 보호막 충전(피격 1회 완전 무효화)
 
     -- Hit feedback (effects played when the player takes damage). Inspector-tunable.
+    -- 피격 카메라 흔들림 — 직관적 타격감을 위해 강하고 짧게(펀치감). 인스펙터에서 조절 가능.
     @DisplayName("카메라 흔들림 강도")
-    property number ShakeIntensity = 0.3
+    property number ShakeIntensity = 0.6
     @DisplayName("카메라 흔들림 시간")
-    property number ShakeDuration = 0.25
+    property number ShakeDuration = 0.3
+    -- 캐릭터 피격 스파크 색. 몬스터 피격(MonsterUnit = 노란 사방 스파크)과 구분되도록 기본 빨강("피해 받음").
+    @DisplayName("피격 파티클 색(캐릭터)")
+    property Color HitParticleColor = Color(1, 0.25, 0.25, 1)
     -- Damage number skin shown over the player (taken-hit skin).
     -- Default DamageSkinSettingComponent.DamageSkinId — the very skin the monster's auto-mode damage
     -- number already renders with in this project, so the manual _DamageSkinService:Play call is
@@ -48,6 +52,10 @@ script PlayerHealth extends Component
     property number ShieldAuraScale = 1.5
     -- 재생 중인 오라의 핸들(클라 로컬). 0 = 없음.
     @HideFromInspector property integer shieldAuraSerial = 0
+
+    -- 디버그(BossTestMap 좌상단): 스테이지 버프 총합 + 강화 레벨 요약. 서버가 0.25s마다 조합해 @Sync → RunGameHud가 표시.
+    @HideFromInspector @Sync property string StageBuffDebug = ""
+    @HideFromInspector property number dbgComposeTimer = 0
 
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
@@ -77,6 +85,44 @@ script PlayerHealth extends Component
         if self.stageRegenPerSec > 0 and not self.dead and self.CurrentHp < self.MaxHp then
             self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + self.stageRegenPerSec * delta)
         end
+        -- 디버그 문자열 갱신(0.25s마다). BossTestMap에서 RunGameHud가 이 @Sync 값을 좌상단에 표시한다.
+        self.dbgComposeTimer = self.dbgComposeTimer + delta
+        if self.dbgComposeTimer >= 0.25 then
+            self.dbgComposeTimer = 0
+            self:ComposeStageBuffDebug()
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ComposeStageBuffDebug()
+        -- 스테이지 버프 총합 + 강화 레벨을 한 문자열로 조합(서버). PowerStrike/PlayerStatManager를 같은 엔티티에서 읽는다.
+        ---@type PowerStrike
+        local ps = self.Entity:GetComponent("script.PowerStrike")
+        local atkMult = 1.0
+        local aspdMult = 1.0
+        local pierce = 0
+        if ps ~= nil then
+            atkMult = ps.stageAttackMult
+            aspdMult = ps.stageAttackSpeedMult
+            pierce = ps.stagePierceBonus
+        end
+        ---@type PlayerStatManager
+        local sm = self.Entity:GetComponent("script.PlayerStatManager")
+        local aL = sm ~= nil and sm:GetLevel("AtkBuffAmt") or 0
+        local sL = sm ~= nil and sm:GetLevel("AspdBuffAmt") or 0
+        local pL = sm ~= nil and sm:GetLevel("PierceBuffAmt") or 0
+        local rL = sm ~= nil and sm:GetLevel("RegenBuffAmt") or 0
+        local hL = sm ~= nil and sm:GetLevel("MaxHpBuffAmt") or 0
+        local kL = sm ~= nil and sm:GetLevel("ShieldBuffAmt") or 0
+        self.StageBuffDebug =
+            "[디버그] 스테이지 버프\n"
+            .. "공격 x" .. string.format("%.2f", atkMult) .. "  공속 x" .. string.format("%.2f", aspdMult)
+            .. "  관통 +" .. tostring(math.floor(pierce)) .. "\n"
+            .. "보호막 " .. tostring(self.stageShieldCharges) .. "  재생 " .. string.format("%.0f", self.stageRegenPerSec)
+            .. "/s  최대HP +" .. string.format("%.0f", self.stageMaxHpBonus) .. "\n"
+            .. "HP " .. string.format("%.0f", self.CurrentHp) .. "/" .. string.format("%.0f", self.MaxHp) .. "\n"
+            .. "강화Lv 공" .. tostring(aL) .. " 속" .. tostring(sL) .. " 관" .. tostring(pL)
+            .. " 재" .. tostring(rL) .. " 체" .. tostring(hL) .. " 막" .. tostring(kL)
     end
 
     @ExecSpace("ServerOnly")
@@ -313,19 +359,26 @@ script PlayerHealth extends Component
             Vector2(1, 1), 1.0, 1.0, LitMode.Default
         )
 
+        -- 캐릭터 피격 스파크(빨강 틴트). 몬스터 피격(노란 사방 스파크, MonsterUnit.PlayHitParticle)과 색·형태 모두 구분.
         _ParticleService:PlayBasicParticle(
             BasicParticleType.SparkExplosion, e,
-            Vector3(wp.x, wp.y + 0.7, wp.z), 0, Vector3(1, 1, 1), false, {}
+            Vector3(wp.x, wp.y + 0.7, wp.z), 0, Vector3(1, 1, 1), false,
+            { Color = self.HitParticleColor }
         )
     end
 
     @ExecSpace("Client")
     method void ShakeCameraOnHit()
         -- Runs only on the hit player's client (targetUserId is passed as the last call-site arg).
+        -- 피격당한 본인 화면에서만 실행되는 피드백: (1) 카메라 흔들림 (2) 전체화면 빨간 플래시.
         -- _CameraService:GetCurrentCameraComponent() is ClientOnly, so this must run client-side.
         local cam = _CameraService:GetCurrentCameraComponent()
         if isvalid(cam) then
             cam:ShakeCamera(self.ShakeIntensity, self.ShakeDuration)
+        end
+        -- 전체화면 빨간 피격 플래시(소유 클라 화면). RunGameHud가 오버레이 알파를 페이드한다.
+        if _RunGameHud ~= nil then
+            _RunGameHud:FlashDamage()
         end
     end
 

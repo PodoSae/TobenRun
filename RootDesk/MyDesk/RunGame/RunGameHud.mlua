@@ -51,6 +51,11 @@ property boolean bossSeen = false
 property number bossIntroApproach = 8
 @DisplayName("보스 등장 연출 시간(초)")
 property number bossIntroDuration = 3.0
+-- 치트(BossTestDebug, B키)로 들어가는 보스 테스트 맵: 골 접근과 무관하게 도착 즉시 보스 경고 인트로를 재생한다.
+-- 정식 보스 코스는 goalX 접근으로 발동하지만, 테스트 맵은 flat arena라 접근 트리거가 없어 이 맵 이름으로 감지한다.
+-- 비우면("") 도착-즉시 인트로 사용 안 함.
+@DisplayName("도착 즉시 보스 인트로 재생 맵(치트 보스테스트용)")
+property string BossIntroOnArriveMap = "BossTestMap"
 property integer bossIntroState = 0
 property number bossIntroCountdown = 0
 -- BossIntroGroup root (DefaultShow=false → Enable to show the banner). Injected by the UI builder.
@@ -60,6 +65,26 @@ property Entity bossIntroGroup = "5f0e1d04-cf84-447a-8e4f-a0fd31ac5c58"
 property Entity warnBanner = "47df7781-b8e8-4e32-9752-aae753c2d1c4"
 property Entity beaconL = "2df040f4-e6d6-4c18-b074-1c883156919c"
 property Entity beaconR = "d5310c38-d34e-42aa-9717-f63457741a43"
+-- 경고 애니메이션 시계/프레임 추적. @Logic에서 self._T 임시상태는 프레임 간 지속되지 않아 시계가 누적되지 못하고
+-- 배너가 frame1에 고정됐다. bossIntroCountdown처럼 선언된 property로 유지한다(비동기·클라 로컬).
+@HideFromInspector property number warnT = 0
+@HideFromInspector property integer warnLastLit = -1
+-- 경고 테두리(빨간 사각 박스: WARNING+보스이름을 감쌈) 그룹. 인트로 동안 CanvasGroup 알파를 사인파로 진동시켜
+-- 맥박치듯 깜빡이게 한다. UI 빌더가 UUID를 주입한다.
+property Entity warnBorder = "972bc666-5581-4579-ac1f-f173ed56143d"
+-- 피격 화면 플래시(전체화면 빨간 오버레이). 피격당한 본인 클라 화면에서만 번쩍인다. PlayerHealth가 FlashDamage를
+-- 호출해 알파를 최대로 올리고, OnUpdate가 남은 시간을 줄이며 알파를 0으로 페이드한다. UI 빌더가 UUID 주입.
+property Entity damageFlash = "f44b684e-8a95-4b4b-8382-aa72a6816475"
+@DisplayName("피격 플래시 지속(초)")
+property number DamageFlashDuration = 0.3
+@DisplayName("피격 플래시 최대 진하기(알파)")
+@MinValue(0)
+@MaxValue(1)
+@Delta(0.05)
+property number DamageFlashPeak = 0.4
+@HideFromInspector property number damageFlashRemain = 0
+-- 디버그 스탯 표시(BossTestMap 좌상단): PlayerHealth.StageBuffDebug(@Sync)를 그대로 보여준다. UI 빌더가 UUID 주입.
+property Entity dbgStats = "a889b2eb-5b8b-48b2-bbfa-824f8e597e78"
 property integer score = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
@@ -118,6 +143,32 @@ method void OnUpdate(number delta)
 		self:OnArriveMap(player)
 	end
 
+	-- 피격 화면 플래시 페이드: 남은 시간에 비례해 빨간 오버레이 알파를 낮춘다(사망/정지와 무관하게 항상 진행).
+	if self.damageFlashRemain > 0 then
+		self.damageFlashRemain = self.damageFlashRemain - delta
+		if isvalid(self.damageFlash) and self.damageFlash.SpriteGUIRendererComponent ~= nil then
+			local a = 0
+			if self.damageFlashRemain > 0 and self.DamageFlashDuration > 0 then
+				a = self.DamageFlashPeak * (self.damageFlashRemain / self.DamageFlashDuration)
+			end
+			local c = self.damageFlash.SpriteGUIRendererComponent.Color
+			self.damageFlash.SpriteGUIRendererComponent.Color = Color(c.r, c.g, c.b, a)
+		end
+	end
+
+	-- 디버그 스탯 오버레이: BossTestMap에서만 표시. 로컬 플레이어의 PlayerHealth.StageBuffDebug(@Sync)를 그대로 출력.
+	if isvalid(self.dbgStats) then
+		local showDbg = (self.BossIntroOnArriveMap ~= "" and self.curMapName == self.BossIntroOnArriveMap)
+		self.dbgStats.Enable = showDbg
+		if showDbg and self.dbgStats.TextComponent ~= nil then
+			---@type PlayerHealth
+			local hp = player:GetComponent("script.PlayerHealth")
+			if hp ~= nil then
+				self.dbgStats.TextComponent.Text = hp.StageBuffDebug
+			end
+		end
+	end
+
 	if self.isAlive == false then
 		return
 	end
@@ -154,19 +205,23 @@ method void OnUpdate(number delta)
 
 	-- Coins are collected by each Coin pickup's own box-overlap (script.Coin → AddCoin); no loop here.
 
+	-- Boss intro cutscene gate — runs for BOTH a real boss course (approach-triggered near goalX) and the
+	-- cheat boss-test map (triggered on map arrival, see OnArriveMap). While it plays (state 1) keep the
+	-- runner frozen and skip normal boss-clear / gap / clear handling; the countdown ends it, which resumes
+	-- the run (and, for a real boss arena, asks the server to spawn the boss). bossIntroState is only ever
+	-- set to 1 by BeginBossIntro, so on non-boss stages this gate never fires.
+	if self.bossIntroState == 1 then
+		self:AnimateWarnStripe(delta)
+		self.bossIntroCountdown = self.bossIntroCountdown - delta
+		if self.bossIntroCountdown <= 0 then
+			self:EndBossIntro()
+		end
+		return
+	end
+
 	-- End condition. Normal course: reaching goalX clears. Boss course: never clear at goalX — keep
 	-- running (the floor auto-extends server-side) and clear only when the boss is defeated.
 	if self.bossMode then
-		-- Boss intro cutscene gate. While it plays (state 1) keep the runner frozen and skip normal
-		-- boss-clear / gap handling; the countdown ends it, which resumes the run and spawns the boss.
-		if self.bossIntroState == 1 then
-			self:AnimateWarnStripe(delta)
-			self.bossIntroCountdown = self.bossIntroCountdown - delta
-			if self.bossIntroCountdown <= 0 then
-				self:EndBossIntro()
-			end
-			return
-		end
 		if self.bossIntroState == 0 and self.goalX > self.spawnX and x >= self.goalX - self.bossIntroApproach then
 			self:BeginBossIntro()
 			return
@@ -314,7 +369,12 @@ method void OnArriveMap(Entity player)
 	-- Resolve this stage's course config (Set commands) and ask the server to build it.
 	local cfg = self:ResolveStageConfig(self.curStage)
 	if self.curStage ~= nil and self.curStage ~= "" and _CourseGen ~= nil then
-		_CourseGen:RequestBuildCourse(self.curStage, self.curMapName)
+		-- 디버그 맵(BossTestMap)은 매 진입 강제 재빌드(가드 무시) → 재진입해도 몬스터/버프/보스가 항상 새로 생성.
+		if self.BossIntroOnArriveMap ~= "" and self.curMapName == self.BossIntroOnArriveMap then
+			_CourseGen:ForceRebuildCourse(self.curStage, self.curMapName)
+		else
+			_CourseGen:RequestBuildCourse(self.curStage, self.curMapName)
+		end
 	end
 	-- Stand the runner at the start of the generated floor.
 	local sx = cfg.startX
@@ -351,8 +411,15 @@ method void OnArriveMap(Entity player)
 	if self.pendingStart then
 		self.pendingStart = false
 		self.isAlive = true
-		self:SetRunnerActive(true)
-		log("[RunGameHud] auto-start on arrival")
+		if self.BossIntroOnArriveMap ~= "" and self.curMapName == self.BossIntroOnArriveMap then
+			-- 치트 보스 테스트 맵: 골 접근과 무관하게 도착 즉시 보스 경고 인트로를 재생한다. 연출이 끝나면
+			-- EndBossIntro가 러너를 재개한다(보스는 CourseBossTest의 Boss 행으로 이미 배치됨).
+			self:BeginBossIntro()
+			log("[RunGameHud] boss-test map: boss intro on arrival (" .. tostring(self.curMapName) .. ")")
+		else
+			self:SetRunnerActive(true)
+			log("[RunGameHud] auto-start on arrival")
+		end
 	else
 		self.isAlive = false
 		self:SetRunnerActive(false)
@@ -613,6 +680,13 @@ method void CheckBossClear()
 end
 
 @ExecSpace("ClientOnly")
+method void FlashDamage()
+	-- 피격 시 호출: 전체화면 빨간 플래시를 가장 진한 상태로 시작한다. OnUpdate가 알파를 0으로 페이드한다.
+	-- PlayerHealth가 피격당한 본인 클라(소유자)에서만 호출하므로, 맞은 사람 화면에서만 번쩍인다.
+	self.damageFlashRemain = self.DamageFlashDuration
+end
+
+@ExecSpace("ClientOnly")
 method void BeginBossIntro()
 	-- Freeze the runner and show the boss-approach banner. A per-frame countdown in OnUpdate ends it.
 	self.bossIntroState = 1
@@ -626,38 +700,30 @@ method void BeginBossIntro()
 		self.bossIntroGroup.Enable = true
 	end
 	-- Reset the warning-animation clock + frame trackers so each boss intro starts fresh.
-	self._T.warnT = 0
-	self._T.lastBi = -1
-	self._T.lastLit = nil
+	self.warnT = 0
+	self.warnLastLit = -1
 	log("[RunGameHud] boss intro begin")
 end
 
 @ExecSpace("ClientOnly")
 method void AnimateWarnStripe(number delta)
-	-- Play the two GIF-derived animations by swapping sprite frames each tick (ImageRUID = frame RUID):
-	--   • WARNING neon banner — 3-frame bright→mid→dim ping-pong pulse.
-	--   • 경광등 beacons (L/R) — 2-frame lit/dim flash.
-	-- Driven from OnUpdate while the boss-intro banner is up (bossIntroState == 1). Frames are set only
-	-- on index change (not every frame) to avoid re-loading the same sprite.
-	self._T.warnT = (self._T.warnT or 0) + delta
-	local t = self._T.warnT
+	-- WARNING 배너는 이제 animationclip(Warning_Banner, RUID 70195e46…)이 SpriteGUIRenderer에서 네이티브
+	-- 루프 재생(AnimClipPlayType=Loop)되므로 코드에서 프레임을 교체하지 않는다. 여기서는 좌우 경광등(경광등 스프라이트
+	-- 2장)만 lit↔dim으로 점멸시킨다. bossIntroState==1 동안 OnUpdate에서 매 프레임 구동.
+	self.warnT = self.warnT + delta
+	local t = self.warnT
 
-	-- WARNING banner pulse: indices 1,2,3,2 (bright, mid, dim, mid) at ~8 steps/sec.
-	local bframes = { "f12974911b03429f9c9a60ce6099761a", "7afbd37cdbb34759a76cd257c79a8f71", "91f6208cbf874133995d9fbf5d39da34" }
-	local seq = { 1, 2, 3, 2 }
-	local bi = seq[(math.floor(t * 8.0) % 4) + 1]
-	if bi ~= self._T.lastBi then
-		self._T.lastBi = bi
-		if isvalid(self.warnBanner) and self.warnBanner.SpriteGUIRendererComponent ~= nil then
-			self.warnBanner.SpriteGUIRendererComponent.ImageRUID = DataRef(bframes[bi])
-		end
+	-- 경고 테두리 깜빡임: 빨간 박스의 CanvasGroup 알파를 사인파로 0.4~1.0 진동(맥박치듯). Color/알파 런타임 변경은
+	-- 검증된 방식이라 ImageRUID 교체와 달리 확실히 반영된다.
+	if isvalid(self.warnBorder) and self.warnBorder.CanvasGroupComponent ~= nil then
+		self.warnBorder.CanvasGroupComponent.GroupAlpha = 0.4 + 0.6 * (0.5 + 0.5 * math.sin(t * 9.0))
 	end
 
-	-- 경광등 flash: lit ↔ dim ~3 times/sec.
-	local lit = (math.floor(t * 6.0) % 2 == 0)
-	if lit ~= self._T.lastLit then
-		self._T.lastLit = lit
-		local bruid = lit and "7a5bd88218b64ec09af116dfef435645" or "3f258684bd89487ea9d2f8c1827ea5ca"
+	-- 경광등 flash: lit ↔ dim ~3 times/sec. (정수 플래그로 추적 — property는 nil을 담지 않도록 -1/0/1.)
+	local litFlag = (math.floor(t * 6.0) % 2 == 0) and 1 or 0
+	if litFlag ~= self.warnLastLit then
+		self.warnLastLit = litFlag
+		local bruid = (litFlag == 1) and "7a5bd88218b64ec09af116dfef435645" or "3f258684bd89487ea9d2f8c1827ea5ca"
 		if isvalid(self.beaconL) and self.beaconL.SpriteGUIRendererComponent ~= nil then
 			self.beaconL.SpriteGUIRendererComponent.ImageRUID = DataRef(bruid)
 		end

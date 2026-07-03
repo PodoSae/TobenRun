@@ -22,6 +22,9 @@ script StatUpgradeUI extends Logic
     property any speedHandler = nil
     property any resetHandler = nil
 
+    -- 로그라이트 6종 강화(임시, 오른쪽 버튼): 경로로 찾아 연결한 {ent, hd, key, short, def} 목록.
+    property any buffBtns = nil
+
     method void OnBeginPlay()
         -- Caches definitions, labels the buttons from the data table, and wires clicks.
         self.powerDef = self:LoadDef(self.powerStatKey)
@@ -44,6 +47,7 @@ script StatUpgradeUI extends Logic
             self.resetHandler = self.btnReset.Entity:ConnectEvent(ButtonClickEvent, self.OnReset)
         end
 
+        self:WireBuffButtons()
         self:RefreshDisplay()
     end
 
@@ -94,6 +98,41 @@ script StatUpgradeUI extends Logic
         end
     end
 
+    method table BuffStatList()
+        -- 로그라이트 6종 강화(임시): StatTable 키 / 버튼 라벨 / DefaultGroup 내 버튼 이름.
+        return {
+            { key = "AtkBuffAmt",    short = "공격력",   path = "BuffUp_Atk" },
+            { key = "AspdBuffAmt",   short = "공속",     path = "BuffUp_Aspd" },
+            { key = "PierceBuffAmt", short = "관통",     path = "BuffUp_Pierce" },
+            { key = "RegenBuffAmt",  short = "재생",     path = "BuffUp_Regen" },
+            { key = "MaxHpBuffAmt",  short = "최대체력", path = "BuffUp_MaxHp" },
+            { key = "ShieldBuffAmt", short = "보호막",   path = "BuffUp_Shield" },
+        }
+    end
+
+    method void WireBuffButtons()
+        -- 오른쪽 임시 강화 버튼 6개를 경로로 찾아 클릭 → RequestUpgrade(key)에 연결. def를 캐시해 라벨에 값 표시.
+        self.buffBtns = {}
+        for _, item in ipairs(self:BuffStatList()) do
+            local ent = _EntityService:GetEntityByPath("/ui/DefaultGroup/" .. item.path)
+            if isvalid(ent) then
+                local capturedKey = item.key
+                local hd = ent:ConnectEvent(ButtonClickEvent, function() self:OnBuffUp(capturedKey) end)
+                table.insert(self.buffBtns, { ent = ent, hd = hd, key = item.key, short = item.short, def = self:LoadDef(item.key) })
+            else
+                log("[StatUpgradeUI] buff button not found: " .. tostring(item.path))
+            end
+        end
+    end
+
+    method void OnBuffUp(string statKey)
+        -- 강화 버튼 클릭 → 서버에 업그레이드 요청(영구, PlayerStatManager가 DataStorage에 저장).
+        local mgr = self:GetManager()
+        if mgr ~= nil then
+            mgr:RequestUpgrade(statKey)
+        end
+    end
+
     method void OnUpdate(number delta)
         -- Reflects the synced levels in the UI labels.
         self:RefreshDisplay()
@@ -118,6 +157,22 @@ script StatUpgradeUI extends Logic
         -- Updates both value labels from the displayed (synced) state.
         self:SetValueText(self.powerValue, self.powerDef, self.powerStatKey)
         self:SetValueText(self.speedValue, self.speedDef, self.speedStatKey)
+
+        -- 오른쪽 임시 강화 버튼 라벨: "이름 Lv.N (지급량)". 지급량 = base + perLevel×레벨.
+        if self.buffBtns ~= nil then
+            local mgr = self:GetManager()
+            for _, rec in ipairs(self.buffBtns) do
+                if isvalid(rec.ent) and rec.ent.TextComponent ~= nil and rec.def ~= nil then
+                    local level = mgr ~= nil and mgr:GetLevel(rec.key) or 0
+                    local value = rec.def.base + rec.def.perLevel * level
+                    local suffix = " Lv." .. tostring(level)
+                    if rec.def.maxLevel > 0 and level >= rec.def.maxLevel then
+                        suffix = " MAX"
+                    end
+                    rec.ent.TextComponent.Text = rec.short .. suffix .. " (" .. string.format("%g", value) .. ")"
+                end
+            end
+        end
     end
 
     method void OnEndPlay()
@@ -130,6 +185,14 @@ script StatUpgradeUI extends Logic
         end
         if self.resetHandler ~= nil and isvalid(self.btnReset) then
             self.btnReset.Entity:DisconnectEvent(ButtonClickEvent, self.resetHandler)
+        end
+        if self.buffBtns ~= nil then
+            for _, rec in ipairs(self.buffBtns) do
+                if isvalid(rec.ent) and rec.hd ~= nil then
+                    rec.ent:DisconnectEvent(ButtonClickEvent, rec.hd)
+                end
+            end
+            self.buffBtns = nil
         end
     end
 

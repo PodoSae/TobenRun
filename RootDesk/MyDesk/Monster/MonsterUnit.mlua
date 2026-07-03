@@ -59,6 +59,19 @@ script MonsterUnit extends Component
     property number JumpFwd = 2
     @HideFromInspector property number jumpTimer = 0
 
+    -- ── 피격 이펙트(몬스터 전용, 캐릭터 피격과 구분) ──
+    -- 검기 등 HitBox 공격이 명중하면 몬스터 위치에 파티클을 재생한다. 캐릭터 피격(PlayerHealth = 빨간 SparkExplosion)과
+    -- 확실히 구분되도록 몬스터는 사방으로 튀는 노란 SparkRadialExplosion을 쓴다. 서버 HandleHitEvent → Multicast로 전 클라 재생.
+    @DisplayName("피격 파티클 크기")
+    @MinValue(0.1)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number HitParticleScale = 0.8
+    @DisplayName("피격 파티클 높이 보정")
+    property number HitParticleOffsetY = 0.5
+    @DisplayName("피격 파티클 색")
+    property Color HitParticleColor = Color(1, 1, 0.6, 1)
+
     @HideFromInspector property boolean movingRight = true
     @HideFromInspector property number spawnX = 0
 
@@ -139,12 +152,26 @@ script MonsterUnit extends Component
         -- Beam (or any HitBox attack) damages the monster. On HP<=0, grant meso to the killer and die.
         if self.dead then return end
         self.Hp = self.Hp - event.TotalDamage
+        -- 몬스터 전용 피격 타격 이펙트(전 클라). 캐릭터 피격(빨간 스파크)과 구분되는 노란 사방 스파크.
+        self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
         log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' hit -" .. tostring(event.TotalDamage)
             .. " -> hp=" .. tostring(self.Hp))
         if self.Hp <= 0 then
             self.Hp = 0
             self:Die(event.AttackerEntity)
         end
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayHitParticle(Vector3 pos)
+        -- 몬스터 피격 타격 이펙트(전 클라 재생). 캐릭터 피격(PlayerHealth = 빨간 SparkExplosion)과 구분되도록 사방으로
+        -- 튀는 노란 SparkRadialExplosion을 쓴다. HitParticleColor/Scale/OffsetY로 인스펙터에서 조절 가능.
+        if not isvalid(self.Entity) then return end
+        local s = self.HitParticleScale
+        _ParticleService:PlayBasicParticle(
+            BasicParticleType.SparkRadialExplosion, self.Entity,
+            Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z), 0,
+            Vector3(s, s, s), false, { Color = self.HitParticleColor })
     end
 
     @ExecSpace("ServerOnly")
