@@ -1,0 +1,44 @@
+@Logic
+script BossTestDebug extends Logic
+
+    -- DEV-ONLY boss test entry. Press the debug key (default B) anywhere in-game to jump straight into
+    -- the dedicated boss arena (map BossTestMap + course CourseBossTest) so the Mushmom boss can be tested
+    -- in isolation without going through the lobby stage list. Reuses RunGameHud:GoToStage, which handles
+    -- the teleport, course build (flat arena + boss), and auto-run start. Remove this Logic for release.
+
+    @DisplayName("보스 테스트 스테이지 이름")
+    property string BossStage = "BossTest"
+    @DisplayName("보스 테스트 맵 이름")
+    property string BossMap = "BossTestMap"
+
+    property any keyHandler = nil
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- Bind the debug key on the local client (input is client-side).
+        self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+        log("[BossTestDebug] ready - press B to enter " .. tostring(self.BossMap))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnKeyDown(KeyDownEvent event)
+        -- B → enter the boss test arena via the existing stage-entry path.
+        if event.key ~= KeyboardKey.B then return end
+        if _RunGameHud == nil then
+            log("[BossTestDebug] RunGameHud not available")
+            return
+        end
+        log("[BossTestDebug] entering boss test: stage=" .. tostring(self.BossStage) .. " map=" .. tostring(self.BossMap))
+        _RunGameHud:GoToStage(self.BossStage, self.BossMap)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- Release the input subscription.
+        if self.keyHandler ~= nil then
+            _InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+            self.keyHandler = nil
+        end
+    end
+
+end

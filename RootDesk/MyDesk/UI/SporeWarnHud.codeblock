@@ -1,0 +1,33 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "codeblock://8f3d9e45-5636-423b-9e0b-0e4bd14aaa47",
+  "ContentType": "x-mod/codeblock",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "CoreVersion": {
+        "Major": 0,
+        "Minor": 2
+      },
+      "ScriptVersion": {
+        "Major": 1,
+        "Minor": 1
+      },
+      "Description": "",
+      "Id": "8f3d9e45-5636-423b-9e0b-0e4bd14aaa47",
+      "Language": 1,
+      "Name": "SporeWarnHud",
+      "Type": 5,
+      "Source": 0,
+      "Target": null
+    }
+  }
+}

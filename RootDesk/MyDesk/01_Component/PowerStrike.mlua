@@ -40,6 +40,8 @@ script PowerStrike extends SkillComponent
     property string EffectResourceId = "88a17d40d6e34abd948cac09724b22fa"
 
     property PlayerControllerComponent controller = nil
+    -- Ultimate ref for the auto-fire suppression (궁극기 중 일반공격 미발동, 기획 §3.3). Lazily resolved.
+    property any ult = nil
 
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
@@ -51,6 +53,8 @@ script PowerStrike extends SkillComponent
         -- Object pool: every SwordBeam this skill ever spawns, reused instead of destroyed.
         self._T.beams = {}
         self._T.beamCount = 0
+        -- Direction to the nearest detected monster, refreshed each HasMonsterInRange call; drives beam aim.
+        self._T.aimDir = 1
 
         -- Hold fire until the startup grace elapses (counted down in OnUpdate) so the map can finish loading.
         self._T.ready = false
@@ -80,6 +84,18 @@ script PowerStrike extends SkillComponent
         return 1
     end
 
+    method number GetEffectiveDamage()
+        -- Per-beam attack power = base Damage scaled by the AttackPower stat — the SAME value fed into each
+        -- sword beam (see OnActivate). Public so other skills (e.g. the ultimate) can size their damage off
+        -- the player's attack power without duplicating the stat lookup. Server-side (stat defs are
+        -- server-only); returns base Damage unscaled if the stat manager is unavailable.
+        local power = 1.0
+        if self.statManager ~= nil then
+            power = self.statManager:GetStatValue(self.PowerStatKey)
+        end
+        return self.Damage * power
+    end
+
     method void OnActivate()
         -- Server-side (called from base Activate inside the Server RPC). Fires one sword beam.
         log("[PowerStrike] OnActivate (server) by " .. tostring(self.Entity and self.Entity.Name or "unknown"))
@@ -91,7 +107,9 @@ script PowerStrike extends SkillComponent
         end
         local effectiveDamage = self.Damage * power
 
-        local direction = self:GetFacingDirection()
+        -- Fire toward the nearest detected monster (set by HasMonsterInRange), NOT the engine LookDirectionX
+        -- (which the runner never resets and a hit corrupts). Fallback +1 = run direction.
+        local direction = self._T.aimDir or 1
 
         self:FireBeam(direction, effectiveDamage)
 
@@ -176,39 +194,58 @@ script PowerStrike extends SkillComponent
         -- Server-side auto-fire gate (SkillManager calls only when off cooldown). Hold fire until the
         -- startup grace has elapsed (map fully loaded), then fire only when a monster is within range.
         if self._T.ready ~= true then return false end
+        -- 궁극기(돌진) 중에는 일반공격(검기) 미발동. Independent guard at the fire gate so the beam is blocked even
+        -- if SkillManager's own ult ref ever fails; lazily resolved so a one-shot lookup miss can't disable it.
+        if self.ult == nil then self.ult = self.Entity:GetComponent("script.UltimateSkill") end
+        if self.ult ~= nil and self.ult.Active then return false end
         return self:HasMonsterInRange()
     end
 
     method boolean HasMonsterInRange()
-        -- True when a monster (a non-player entity carrying a HitComponent) is within DetectRange AND
-        -- ahead of the player in the facing direction. CollisionSimulator:OverlapAll is non-damaging. Server-side.
+        -- True when a monster (a non-player entity carrying a HitComponent) is within DetectRange on EITHER side.
+        -- The beam is ALWAYS fired forward (aimDir = +1), so "don't attack enemies behind" is enforced by the
+        -- fire DIRECTION, not by the detection: a right-traveling beam simply can't reach a monster on the left.
+        -- Detecting both sides is what keeps the player firing right after the body-slam, when the boss briefly
+        -- ends up level with / behind the auto-running player before it repositions back to the front (a
+        -- front-only detect made the player stop firing until the boss returned ahead). CollisionSimulator
+        -- :OverlapAll is non-damaging. Server-side.
+        --
+        -- Why not a stored "facing": the player is an auto-runner driven by DIRECT MoveVelocity writes, so the
+        -- engine's PlayerControllerComponent.LookDirectionX is NOT refreshed by running. A hit reaction/knockback
+        -- flips LookDirectionX and it then sticks (nothing resets it), which used to make the forward gate fail
+        -- forever after the first hit → "player stops attacking after being hit". Aiming at the detected target
+        -- removes that corruptible dependency entirely.
         local tr = self.Entity.TransformComponent
         if tr == nil then return false end
 
         local sim = _CollisionService:GetSimulator(self.Entity)
         if sim == nil then return false end
 
-        local dir = self:GetFacingDirection()
         local wp = tr.WorldPosition
         local shape = CircleShape(Vector2(wp.x, wp.y), self.DetectRange)
 
         local hits = sim:OverlapAll(CollisionGroups.HitBox, shape)
         if hits == nil then return false end
 
+        -- Any monster on either side within range gates firing (the beam direction, below, keeps it forward-only).
+        local found = false
         for i, comp in ipairs(hits) do
             if comp ~= nil and isvalid(comp) then
                 local e = comp.Entity
                 -- A monster carries a HitComponent but is neither the player itself nor a player.
                 if e ~= nil and isvalid(e) and e ~= self.Entity and e.PlayerComponent == nil then
-                    -- Only fire at monsters ahead in the facing direction (the beam flies forward).
-                    local mp = e.TransformComponent.WorldPosition
-                    if (mp.x - wp.x) * dir >= -0.2 then
-                        return true
-                    end
+                    found = true
+                    break
                 end
             end
         end
-        return false
+
+        if not found then return false end
+        -- Always fire FORWARD (+1 / right = the run direction). The beam travels right, so it never hits an
+        -- enemy behind the player (already passed) — that is how "don't attack enemies behind" is enforced —
+        -- and it never depends on the hit-corruptible LookDirectionX.
+        self._T.aimDir = 1
+        return true
     end
 
     @ExecSpace("Multicast")

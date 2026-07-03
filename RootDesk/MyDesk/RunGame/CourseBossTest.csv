@@ -1,0 +1,13 @@
+﻿cmd,p1,p2,p3
+Set,floorY,0,
+Set,length,420,
+Set,goal,400,
+Set,speed,3,
+Set,tile,2b73e2c6c05143a192ea6d1a08966349,
+Spawn,mud,10,
+Spawn,mud,16,
+Spawn,spore,25,
+Spawn,normal,30,
+Spawn,orange,35,
+Spawn,sporewall,40,
+Boss,,5,

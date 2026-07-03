@@ -9,6 +9,10 @@ script PlayerHealth extends Component
     property number respawnX = 0
     property number respawnY = 0
 
+    -- Death gate: once HP hits 0 the player is "dead" (no further damage) until the revive popup
+    -- resolves (부활 = heal in place / 포기 = heal + lobby). Replaces the old silent auto-respawn.
+    property boolean dead = false
+
     -- Brief invulnerability after a hit so one obstacle does not drain HP every frame.
     property number invulnTime = 0.7
     property number invulnRemain = 0
@@ -28,6 +32,7 @@ script PlayerHealth extends Component
     method void OnBeginPlay()
         -- Initializes HP to full and records the spawn point used for respawn-on-death.
         self.CurrentHp = self.MaxHp
+        self.dead = false
         self.invulnRemain = 0
         local wp = self.Entity.TransformComponent.WorldPosition
         self.respawnX = wp.x
@@ -46,7 +51,8 @@ script PlayerHealth extends Component
 
     @ExecSpace("ServerOnly")
     method void TakeDamage(number amount)
-        -- Server-side damage entry point. Ignored while invulnerable or for non-positive damage.
+        -- Server-side damage entry point. Ignored while dead, invulnerable, or for non-positive damage.
+        if self.dead then return end
         if amount <= 0 then return end
         if self.invulnRemain > 0 then return end
 
@@ -63,22 +69,44 @@ script PlayerHealth extends Component
 
         if self.CurrentHp <= 0 then
             self.CurrentHp = 0
-            self:Respawn()
+            self:Die()
         end
     end
 
     @ExecSpace("ServerOnly")
-    method void Respawn()
-        -- Refills HP and teleports the player back to the recorded spawn point.
-        log("[PlayerHealth] HP depleted - respawning at start")
-
+    method void Die()
+        -- HP depleted: freeze the player and open the revive / give-up popup on the owning client.
+        -- No more damage lands until the player chooses (dead gate in TakeDamage).
+        if self.dead then return end
+        self.dead = true
         local movement = self.Entity.MovementComponent
         if movement ~= nil then
-            movement:SetWorldPosition(Vector2(self.respawnX, self.respawnY))
+            movement:Stop()
         end
+        local pc = self.Entity.PlayerComponent
+        if pc ~= nil then
+            self:ShowReviveClient(pc.UserId)
+        end
+        log("[PlayerHealth] HP depleted - awaiting revive choice")
+    end
 
+    @ExecSpace("Client")
+    method void ShowReviveClient()
+        -- Runs only on the dead player's client (targetUserId passed as the last call-site arg).
+        -- Opens the revive popup (which pauses the run and shows 부활 / 포기).
+        if _RevivePopup ~= nil then
+            _RevivePopup:Show()
+        end
+    end
+
+    @ExecSpace("Server")
+    method void RequestRevive()
+        -- Client (revive popup button) → server. Heal in place and lift the dead gate so the run resumes
+        -- from where the player fell rather than teleporting back to a stale start point.
+        self.dead = false
         self.CurrentHp = self.MaxHp
         self.invulnRemain = self.invulnTime
+        log("[PlayerHealth] revived HP=" .. tostring(self.CurrentHp))
     end
 
     @ExecSpace("Multicast")

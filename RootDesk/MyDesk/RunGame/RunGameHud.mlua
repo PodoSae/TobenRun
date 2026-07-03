@@ -241,6 +241,22 @@ method void Setup(Entity player)
 end
 
 @ExecSpace("ClientOnly")
+method void ResetUltimate()
+	-- Zero the ultimate gauge at stage start so a charge from a previous stage does not carry over.
+	-- ResetGauge is a @Server RPC on the player's UltimateSkill, so the actual write lands on the
+	-- authoritative server and syncs back to the HUD.
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	---@type UltimateSkill
+	local ult = player:GetComponent("script.UltimateSkill")
+	if ult ~= nil then
+		ult:ResetGauge()
+	end
+end
+
+@ExecSpace("ClientOnly")
 method void OnArriveMap(Entity player)
 	-- Re-initialize per-map run state whenever the player enters a (new) map.
 	-- The course start is the configured start X; the goal is this stage's goal X.
@@ -270,6 +286,8 @@ method void OnArriveMap(Entity player)
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = false
 	end
+	-- Reset the ultimate gauge so it starts empty each stage (no carry-over from the previous stage).
+	self:ResetUltimate()
 	-- Rebuild coin / gap interactions for this stage.
 	self:BuildCourseInteractions(self.curStage)
 	self:SetScore(0)
@@ -346,6 +364,8 @@ method void StartGame()
 	self.bestX = self.spawnX
 	self.score = 0
 	self.coinScore = 0
+	-- Reset the ultimate gauge so each run begins with an empty charge.
+	self:ResetUltimate()
 	self:BuildCourseInteractions(self.curStage)
 	self.isAlive = true
 	self:SetRunnerActive(true)
@@ -684,6 +704,40 @@ method void TickScoreAnim()
 	if isvalid(self.finalScoreText) then
 		self.finalScoreText.TextComponent.Text = "SCORE  " .. tostring(math.floor(self.scoreAnimCur))
 	end
+end
+
+@ExecSpace("ClientOnly")
+method void PauseForDeath()
+	-- Freeze the run while the revive popup is open (called by RevivePopup on death).
+	self.isAlive = false
+	self:SetRunnerActive(false)
+	local player = _UserService.LocalPlayer
+	if isvalid(player) and player.MovementComponent ~= nil then
+		player.MovementComponent:Stop()
+	end
+	log("[RunGameHud] paused for death (revive popup)")
+end
+
+@ExecSpace("ClientOnly")
+method void ResumeAfterRevive()
+	-- Resume running after the player chose 부활 (revive in place).
+	self.isAlive = true
+	self:SetRunnerActive(true)
+	log("[RunGameHud] resumed after revive")
+end
+
+@ExecSpace("ClientOnly")
+method void GoLobby()
+	-- Return to the lobby (used by the revive 포기 button). Stops the run and shows the lobby screen.
+	self.isAlive = false
+	self:SetRunnerActive(false)
+	self.bestX = self.spawnX
+	self.score = 0
+	self:SetScore(0)
+	if _ScreenFlow ~= nil then
+		_ScreenFlow:ShowLobby()
+	end
+	log("[RunGameHud] give-up -> lobby")
 end
 
 @ExecSpace("ClientOnly")

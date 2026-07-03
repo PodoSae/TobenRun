@@ -1,0 +1,52 @@
+@Logic
+script SporeWarnHud extends Logic
+
+    -- Screen-space warning HUD for the spore barrage. Three fixed ⚠ markers at the RIGHT edge of the screen
+    -- (top / mid / bottom = 상/중/하 lanes). Because these are UI (screen-space), they never track a world
+    -- position, so they don't jitter the way the old world-space marker did. The server-side ScreenSporeBarrage
+    -- calls SetLane(lane, on) (Multicast) to flash the matching lane just before it fires that lane's spore.
+    -- Ref-counted per lane so multiple barrages telegraphing the same lane don't cancel each other.
+
+    -- UI entities (bound by the UIBuilder to ui/SporeWarnGroup.ui).
+    property Entity warnTop = "56631ae1-daad-43b4-a181-9978ded1dbf6"
+    property Entity warnMid = "73279b48-3c78-4ad8-aaf9-50225f30ea8d"
+    property Entity warnBot = "1ef319fe-3e5d-4586-8819-acea49aebd78"
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- Start hidden on each client.
+        self._T.count = { 0, 0, 0 }
+        self:Apply(0)
+        self:Apply(1)
+        self:Apply(2)
+    end
+
+    @ExecSpace("Multicast")
+    method void SetLane(integer lane, boolean on)
+        -- Server → all clients: ref-count the lane's warning and refresh its visibility. lane: 0=top,1=mid,2=bot.
+        if lane < 0 or lane > 2 then return end
+        if self._T.count == nil then self._T.count = { 0, 0, 0 } end
+        local idx = lane + 1
+        self._T.count[idx] = self._T.count[idx] + (on and 1 or -1)
+        if self._T.count[idx] < 0 then self._T.count[idx] = 0 end
+        self:Apply(lane)
+    end
+
+    method void Apply(integer lane)
+        -- Enable the lane marker when its ref-count is positive (runs on the client that owns the UI).
+        local e = self:LaneEntity(lane)
+        if isvalid(e) then
+            local c = 0
+            if self._T.count ~= nil then c = self._T.count[lane + 1] or 0 end
+            e.Enable = c > 0
+        end
+    end
+
+    method Entity LaneEntity(integer lane)
+        -- Map a lane index to its bound UI entity. 0=top,1=mid,2=bot.
+        if lane == 0 then return self.warnTop end
+        if lane == 1 then return self.warnMid end
+        return self.warnBot
+    end
+
+end

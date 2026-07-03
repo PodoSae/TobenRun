@@ -2,11 +2,15 @@
 script SkillManager extends Component
 
     property table skills = nil
+    -- Ultimate dash ref: 궁극기(돌진) 중에는 자동 공격 미발동 (기획 §3.3). Checked once in OnUpdate so it
+    -- suppresses EVERY auto-fire skill regardless of each skill's own ShouldAutoActivate override.
+    property any ult = nil
 
     method void OnBeginPlay()
         -- Collects skill components. Auto-attack is driven server-side in OnUpdate.
         -- Stat values are owned by PlayerStatManager; skills read them directly.
         self.skills = {}
+        self.ult = self.Entity:GetComponent("script.UltimateSkill")
         if self.Entity ~= nil then
             -- User @Component lookup MUST go through GetComponent("script.X"); dot access
             -- (self.Entity.PowerStrike) returns nil for script components (LIA-1114), which
@@ -31,6 +35,11 @@ script SkillManager extends Component
         -- Auto-attack: server-authoritative. Runs only on the server, so each ready skill
         -- fires exactly once per cooldown. Activate() self-gates on cooldown.
         if self.skills == nil then return end
+        -- 궁극기(돌진) 중에는 자동 공격 전면 미발동 (기획 §3.3). Active is server-authoritative → valid here.
+        -- Lazily re-resolve the ref so a one-shot OnBeginPlay miss (component add/respawn timing) can't leave
+        -- self.ult permanently nil and silently disable the suppression.
+        if self.ult == nil then self.ult = self.Entity:GetComponent("script.UltimateSkill") end
+        if self.ult ~= nil and self.ult.Active then return end
 
         for i, skill in ipairs(self.skills) do
             -- IsReady gates on cooldown; ShouldAutoActivate is the per-skill fire condition

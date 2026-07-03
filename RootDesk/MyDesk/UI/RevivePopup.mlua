@@ -1,0 +1,101 @@
+@Logic
+script RevivePopup extends Logic
+
+    -- Revive / give-up popup shown when the local player's HP hits 0 (문서 7.1 / 4.2 부활창).
+    -- PlayerHealth (server) detects death and calls ShowReviveClient on the owning client, which calls
+    -- Show() here. The player picks 부활 (heal in place + resume the run) or 포기 (heal + return to lobby).
+    -- ClientOnly @Logic; the actual HP change is a @Server RPC on the player's PlayerHealth.
+
+    -- Bound to /ui/RevivePopupGroup entities by the UIBuilder (UUIDs injected on write).
+    property Entity popupRoot = "211a86d0-9d7f-4260-91fb-d19abba45634"    -- content panel toggled on/off (group root stays shown so this runs)
+    property Entity reviveBtn = "6e406da6-aa89-4bbb-9fb8-4ec7c74582dd"
+    property Entity giveupBtn = "1ca39f61-6a95-47f1-8e29-60a565b27e5c"
+
+    property any reviveHandler = nil
+    property any giveupHandler = nil
+
+    @ExecSpace("ClientOnly")
+    method void OnBeginPlay()
+        -- Start hidden and wire the two choice buttons.
+        if isvalid(self.popupRoot) then
+            self.popupRoot.Enable = false
+        end
+        if isvalid(self.reviveBtn) then
+            self.reviveHandler = self.reviveBtn:ConnectEvent(ButtonClickEvent, self.OnReviveClick)
+        end
+        if isvalid(self.giveupBtn) then
+            self.giveupHandler = self.giveupBtn:ConnectEvent(ButtonClickEvent, self.OnGiveupClick)
+        end
+        log("[RevivePopup] ready")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Show()
+        -- Freeze the run and reveal the revive / give-up choice.
+        if _RunGameHud ~= nil then
+            _RunGameHud:PauseForDeath()
+        end
+        if isvalid(self.popupRoot) then
+            self.popupRoot.Enable = true
+        end
+        log("[RevivePopup] shown")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Hide()
+        -- Hide the popup content.
+        if isvalid(self.popupRoot) then
+            self.popupRoot.Enable = false
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnReviveClick(ButtonClickEvent event)
+        -- 부활: heal the player in place (server) and resume running.
+        self:Hide()
+        self:ReviveLocalPlayer()
+        if _RunGameHud ~= nil then
+            _RunGameHud:ResumeAfterRevive()
+        end
+        log("[RevivePopup] revive chosen")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnGiveupClick(ButtonClickEvent event)
+        -- 포기: heal the player (so it's ready in the lobby) and return to the lobby screen.
+        self:Hide()
+        self:ReviveLocalPlayer()
+        if _RunGameHud ~= nil then
+            _RunGameHud:GoLobby()
+        end
+        log("[RevivePopup] give up -> lobby")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ReviveLocalPlayer()
+        -- Ask the server to refill the local player's HP and clear the dead flag.
+        local player = _UserService.LocalPlayer
+        if isvalid(player) == false then
+            return
+        end
+        ---@type PlayerHealth
+        local hp = player:GetComponent("script.PlayerHealth")
+        if isvalid(hp) then
+            hp:RequestRevive()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnEndPlay()
+        -- Release button subscriptions.
+        if isvalid(self.reviveBtn) and self.reviveHandler ~= nil then
+            self.reviveBtn:DisconnectEvent(ButtonClickEvent, self.reviveHandler)
+            self.reviveHandler = nil
+        end
+        if isvalid(self.giveupBtn) and self.giveupHandler ~= nil then
+            self.giveupBtn:DisconnectEvent(ButtonClickEvent, self.giveupHandler)
+            self.giveupHandler = nil
+        end
+    end
+
+end
