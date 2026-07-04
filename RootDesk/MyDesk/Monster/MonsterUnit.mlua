@@ -39,8 +39,9 @@ script MonsterUnit extends Component
     property number PatrolRange = 5.0
 
     -- Periodic jump 몸통 박치기 (주황버섯). Data-driven per monster; JumpInterval 0 = never jumps (스포아/슬라임).
-    -- On each interval the monster launches from the ground toward the nearest player (lunge) with an upward
-    -- + forward impulse. All three are inspector-tunable and overridden by the MonsterTable jump* columns.
+    -- On each interval the monster hops in its PATROL direction (no player homing / no chasing) with an upward
+    -- + forward impulse. Contact damage is handled by ContactCheck. Inspector-tunable and overridden by the
+    -- MonsterTable jump* columns.
     @DisplayName("점프 주기(초)")
     @Description("0이면 점프하지 않음. >0이면 이 주기마다 플레이어 쪽으로 점프 몸통박치기")
     @MinValue(0)
@@ -52,7 +53,7 @@ script MonsterUnit extends Component
     @MaxValue(30)
     @Delta(0.5)
     property number JumpForce = 7
-    @DisplayName("점프 전방 힘(플레이어 방향)")
+    @DisplayName("점프 전방 힘(순찰 방향)")
     @MinValue(0)
     @MaxValue(30)
     @Delta(0.5)
@@ -91,7 +92,8 @@ script MonsterUnit extends Component
         self.body = self.Entity.RigidbodyComponent
         self.spawnX = self.Entity.TransformComponent.WorldPosition.x
         if isvalid(self.movement) then self.movement.InputSpeed = self.PatrolSpeed end
-        self.movingRight = (_UtilLogic:RandomDouble() < 0.5)
+        -- 항상 왼쪽으로만(방향전환 없음). 스프라이트도 왼쪽 향해 1회 고정.
+        self.movingRight = false
         self:ApplyFacing()
     end
 
@@ -232,9 +234,9 @@ script MonsterUnit extends Component
 
     @ExecSpace("ServerOnly")
     method void JumpTick(number delta)
-        -- Periodic jump 몸통 박치기 (주황버섯). Disabled when JumpInterval<=0 (스포아/슬라임 never jump). Only
-        -- launches from the ground; waits until grounded again before the next jump. Lunges toward the nearest
-        -- player (upward + forward impulse) so it reads as a body-slam rather than a hop in place.
+        -- 주기적 제자리 점프(주황버섯). 플레이어를 향하지 않는다 — 추적/호밍 없이 현재 순찰 방향(movingRight)으로만
+        -- 살짝 튄다. 몸통박치기 데미지는 ContactCheck(근접 박스)가 처리하므로 호밍 없이도 부딪히면 데미지가 들어간다.
+        -- JumpInterval<=0이면 점프 안 함(스포아/슬라임). 지상에서만 발동, 착지 후 다음 점프.
         if self.JumpInterval <= 0 then return end
         if not isvalid(self.body) then return end
         self.jumpTimer = self.jumpTimer + delta
@@ -242,71 +244,23 @@ script MonsterUnit extends Component
         if self.body:IsOnGround() == false then return end
         self.jumpTimer = 0
 
-        local dir = self:DirToNearestPlayer()
-        if dir ~= 0 then
-            self.movingRight = (dir > 0)
-            self:ApplyFacing()
-        end
+        local dir = self.movingRight and 1 or -1
         self.body:AddForce(Vector2(dir * self.JumpFwd, self.JumpForce))
-        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' JUMP dir=" .. tostring(dir)
-            .. " force=(" .. tostring(dir * self.JumpFwd) .. "," .. tostring(self.JumpForce) .. ")")
-    end
-
-    @ExecSpace("ServerOnly")
-    method number DirToNearestPlayer()
-        -- Sign of the x-offset to the nearest player on this map (+1 right / -1 left / 0 none-or-aligned).
-        local map = self.Entity.CurrentMap
-        if not isvalid(map) then return 0 end
-        local mapComp = map.MapComponent
-        if not isvalid(mapComp) then return 0 end
-        local users = _UserService:GetUsersByMapComponent(mapComp)
-        if users == nil then return 0 end
-
-        local myX = self.Entity.TransformComponent.WorldPosition.x
-        local nearestD = 99999
-        local dir = 0
-        for i, user in ipairs(users) do
-            if isvalid(user) then
-                local dx = user.TransformComponent.WorldPosition.x - myX
-                local ad = math.abs(dx)
-                if ad < nearestD then
-                    nearestD = ad
-                    if dx > 0.01 then
-                        dir = 1
-                    elseif dx < -0.01 then
-                        dir = -1
-                    else
-                        dir = 0
-                    end
-                end
-            end
-        end
-        return dir
+        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' HOP dir=" .. tostring(dir))
     end
 
     @ExecSpace("ServerOnly")
     method void Patrol()
-        -- Walks back and forth within PatrolRange of the spawn point, reversing at the band edge or a
-        -- foothold end. MoveToDirection's second arg is 0 (deltaTime applies only on ladders).
+        -- 항상 왼쪽으로만 이동한다(방향전환 없음 — 러너에서 다가오는 플레이어 쪽을 향함). 왼쪽 풋홀드 끝에 닿으면
+        -- 떨어지지 않게 그 자리에서 멈춘다. MoveToDirection의 2번째 인자는 0(사다리에서만 deltaTime 적용).
         if not isvalid(self.movement) then return end
         if isvalid(self.body) and self.body:IsOnGround() == false then return end
 
-        local x = self.Entity.TransformComponent.WorldPosition.x
-        local prev = self.movingRight
-        if x > self.spawnX + self.PatrolRange then self.movingRight = false end
-        if x < self.spawnX - self.PatrolRange then self.movingRight = true end
-
-        -- Reverse before walking off the foothold edge. PredictFootholdEnd returns true when the body
-        -- CAN still move `distance` in that direction, so reverse only when it CANNOT (== false = at edge).
-        -- (Reversing on the true case would flip every frame mid-foothold → rapid left/right jitter.)
-        if isvalid(self.body) and self.body:PredictFootholdEnd(0.5, self.movingRight) == false then
-            self.movingRight = not self.movingRight
+        -- 왼쪽 끝(더 왼쪽으로 못 감)이면 멈춘다. PredictFootholdEnd는 그 방향으로 아직 이동 가능하면 true(=false면 끝).
+        if isvalid(self.body) and self.body:PredictFootholdEnd(0.5, false) == false then
+            return
         end
-
-        if self.movingRight ~= prev then self:ApplyFacing() end
-
-        local dir = self.movingRight and 1 or -1
-        self.movement:MoveToDirection(Vector2(dir, 0), 0)
+        self.movement:MoveToDirection(Vector2(-1, 0), 0)
     end
 
     @ExecSpace("ServerOnly")

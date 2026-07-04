@@ -16,9 +16,36 @@ script SoundManager extends Logic
 	-- (PlaySound guards empty, so the slide stays silent rather than erroring on a bad RUID).
 	property string slideSoundRUID = ""
 
+	-- ── BGM (background music) ──
+	-- BGM is a SINGLE-track channel in _SoundService: PlayBGM replaces whatever is currently playing,
+	-- and calling it again with the SAME id restarts the track from 0. So we remember the current track
+	-- and only issue PlayBGM when it actually CHANGES. All _SoundService BGM calls are @ExecSpace("Client"),
+	-- and these methods have no @ExecSpace so they run on the caller's side — call them from client code
+	-- (e.g. RunGameHud, which is ClientOnly).
+	property number bgmVolume = 1.0
+	-- Currently-playing BGM RUID ("" = none). Guards against restarting the same track every frame.
+	property string currentBgmRUID = ""
+
 	method void OnBeginPlay()
 		-- Marks the manager as live (helps confirm the singleton registered).
 		log("[SoundManager] ready")
+	end
+
+	method void PlayBGM(string ruid)
+		-- Switches the background music. No-op when the requested track is empty or already playing,
+		-- so it is safe to call every stage arrival / frame without restarting the song.
+		if ruid == "" then return end
+		if ruid == self.currentBgmRUID then return end
+		self.currentBgmRUID = ruid
+		_SoundService:PlayBGM(ruid, self.bgmVolume * self.masterVolume)
+		log("[SoundManager] BGM -> " .. ruid)
+	end
+
+	method void StopBGM()
+		-- Stops the background music and clears the current-track memory.
+		if self.currentBgmRUID == "" then return end
+		self.currentBgmRUID = ""
+		_SoundService:StopBGM(false)
 	end
 
 	method void PlaySound(string ruid, number volume)

@@ -62,7 +62,7 @@
           "@components": [
             {
               "@type": "MOD.Core.BackgroundComponent",
-              "TemplateRUID": "794ad8421e2543d8a6d2c70307637450",
+              "TemplateRUID": "66c93ff2984b4b258b91afa3a4674ce2",
               "Type": 1,
               "Enable": true
             }
@@ -150,7 +150,7 @@
               "SortingLayer": "MapLayer0",
               "TileMapVersion": 1,
               "TileSetRUID": {
-                "DataId": "0cb48999533e4102b25ecf7c77f4af77"
+                "DataId": "4507cc77368647cdb4f84c9687275223"
               },
               "Tiles": [],
               "Enable": true

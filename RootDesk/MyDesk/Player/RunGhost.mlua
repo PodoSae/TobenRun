@@ -11,39 +11,79 @@ script RunGhost extends Component
 	-- Alpha the ghost starts at (then fades linearly to 0).
 	property number StartAlpha = 0.5
 
+	-- Slide pose: when the player is sliding at the moment this ghost is dropped, the spawner
+	-- (RunSpeedEffect.SpawnGhostServer) sets this to true on the server. @Sync so every client's
+	-- RunGhost poses the ghost as CROUCH (+ vertical squash) to match the sliding player, instead of
+	-- the default running pose. Keep CrouchSquashY equal to Slide.squashY so ghost & player match.
+	@Sync property boolean Crouch = false
+	property number CrouchSquashY = 0.55
+
 	property AvatarRendererComponent renderer = nil
 	property number life = 0
+	-- Base (unsquashed) scale captured once so ApplyPose can set an ABSOLUTE squashed scale
+	-- (idempotent — safe to call from both OnBeginPlay and OnSyncProperty without stacking squash).
+	property Vector3 baseScale = Vector3(1, 1, 1)
 
 	method void OnBeginPlay()
-		-- Caches the avatar renderer, applies the initial translucency, and poses the ghost as
-		-- running (client visual only). Avatar state authority is client-side, so the pose is set
-		-- here via BodyActionStateChangeEvent (enum-direct, needs no StateComponent registration)
-		-- rather than StateComponent:ChangeState.
+		-- Caches the avatar renderer, applies the initial translucency, and poses the ghost (running,
+		-- or crouch when it was dropped mid-slide). Avatar state authority is client-side, so the pose is
+		-- set via BodyActionStateChangeEvent (enum-direct, needs no StateComponent registration) rather
+		-- than StateComponent:ChangeState.
 		if not self:IsClient() then return end
-		
+
 		self.renderer = self.Entity.AvatarRendererComponent
 		if isvalid(self.renderer) then
 			self.renderer:SetAlpha(self.StartAlpha)
 		end
 
-		-- Best-effort running pose. If the avatar body has not composed yet this is harmless —
-		-- the ghost simply shows the default stand pose instead (no error either way).
-		local poseEvent = BodyActionStateChangeEvent()
-		poseEvent.ActionState = MapleAvatarBodyActionState.Walk
-		poseEvent.needResetAction = true
-		self.Entity:SendEvent(poseEvent)
-
-		-- Force the ghost to face right on spawn. The avatar defaults to facing left
-		-- (PlayerControllerComponent.LookDirectionX = -1), and an avatar entity IGNORES
-		-- SpriteRenderer.FlipX / TransformComponent.Scale.x (the avatar renderer paints over them) —
-		-- which is why the old Scale approach did nothing. The horizontal mirror must go through the
-		-- entity transform's QuaternionRotation: w = -1 is MSW's horizontal-flip encoding.
 		local transform = self.Entity.TransformComponent
 		if isvalid(transform) then
+			self.baseScale = transform.Scale
+			-- Force the ghost to face right on spawn. The avatar defaults to facing left
+			-- (PlayerControllerComponent.LookDirectionX = -1), and an avatar entity IGNORES
+			-- SpriteRenderer.FlipX / TransformComponent.Scale.x (the avatar renderer paints over them) —
+			-- which is why the old Scale approach did nothing. The horizontal mirror must go through the
+			-- entity transform's QuaternionRotation: w = -1 is MSW's horizontal-flip encoding.
 			transform.QuaternionRotation = Quaternion(0, 0, 0, -1)
 		end
 
+		-- Pose from the (possibly already-synced) Crouch flag. OnSyncProperty re-applies if Crouch
+		-- arrives after this runs, so a slide ghost never gets stuck in the running pose.
+		self:ApplyPose()
+
 		-- log("[RunGhost] OnBeginPlay - renderer: " .. tostring(isvalid(self.renderer)))
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyPose()
+		-- Applies the ghost's body pose + vertical squash based on Crouch. Crouch => CROUCH body action
+		-- and a squashed Y scale (matches the sliding player); otherwise the running WALK pose at full
+		-- scale. Absolute scale write (from baseScale) makes repeated calls idempotent.
+		local actionState = MapleAvatarBodyActionState.Walk
+		local squash = 1.0
+		if self.Crouch then
+			actionState = MapleAvatarBodyActionState.Crouch
+			squash = self.CrouchSquashY
+		end
+
+		local ev = BodyActionStateChangeEvent()
+		ev.ActionState = actionState
+		ev.needResetAction = true
+		self.Entity:SendEvent(ev)
+
+		local t = self.Entity.TransformComponent
+		if isvalid(t) then
+			t.Scale = Vector3(self.baseScale.x, self.baseScale.y * squash, self.baseScale.z)
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void OnSyncProperty(string name, any value)
+		-- Crouch may sync in AFTER OnBeginPlay poses the ghost — re-pose so a mid-slide ghost switches
+		-- from the default running pose to crouch without a lingering wrong pose.
+		if name == "Crouch" then
+			self:ApplyPose()
+		end
 	end
 
 	method void OnUpdate(number delta)

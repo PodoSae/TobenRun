@@ -54,7 +54,7 @@ property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
 @Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
 property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
 @DisplayName("기본 바닥 타일 RUID")
-property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
+property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
 @DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
 property number monsterYOff = 1.0
 @DisplayName("장애물 안착 높이 보정")
@@ -290,17 +290,55 @@ method void RequestBuildCourse(string stage, string mapName)
 	if self.mapStage == nil then
 		self.mapStage = {}
 	end
-	if self.mapStage[mapName] == stage then
-		return
-	end
 	local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
 	if isvalid(map) == false then
 		log("[CourseGen] map not found: " .. mapName)
 		return
 	end
+	-- 로그라이트 스테이지 버프는 스테이지 한정(transient)이다. 스테이지에 (재)진입할 때마다 서버 권위적으로 이 맵의
+	-- 모든 플레이어 버프를 초기화한다. 빌드 가드(같은 스테이지 재진입 → 코스 재생성 skip)보다 먼저 실행하므로, 코스를
+	-- 다시 안 짓는 재진입에서도 리셋은 항상 수행된다. 기존 RunGameHud의 클라 주도 ResetStageBuff는 맵 전환 중
+	-- LocalPlayer/컴포넌트가 잠깐 nil이면 유실될 수 있어(그때 서버 버프가 그대로 남아 "나갔다 들어오면 재적용"),
+	-- 버프를 적용하는 곳과 같은 서버(ServerOnly)에서 한 번 더 확실히 초기화한다.
+	self:ResetStageBuffsOnMap(map)
+	if self.mapStage[mapName] == stage then
+		return
+	end
 	self.mapStage[mapName] = stage
 	self:ClearCourse(map)
 	self:BuildCourse(stage, map)
+end
+
+@ExecSpace("ServerOnly")
+method void ResetStageBuffsOnMap(Entity map)
+	-- 이 맵의 모든 플레이어의 로그라이트 스테이지 버프(PowerStrike 공격계열 + PlayerHealth 체력계열)를 서버측에서
+	-- 초기화한다. StageBuffItem이 서버(ServerOnly)에서 버프를 적용하는 것과 동일한 권위 지점이므로 RPC 타이밍/맵
+	-- 전환 레이스가 없다. ResetStageBuff / ResetStageHealthBuffs는 @Server 메서드라 서버에서 호출하면 즉시 실행된다.
+	if isvalid(map) == false then
+		return
+	end
+	local mapComp = map.MapComponent
+	if isvalid(mapComp) == false then
+		return
+	end
+	local users = _UserService:GetUsersByMapComponent(mapComp)
+	if users == nil then
+		return
+	end
+	for _, user in ipairs(users) do
+		if isvalid(user) then
+			---@type PowerStrike
+			local ps = user:GetComponent("script.PowerStrike")
+			if ps ~= nil then
+				ps:ResetStageBuff()
+			end
+			---@type PlayerHealth
+			local hp = user:GetComponent("script.PlayerHealth")
+			if hp ~= nil then
+				hp:ResetStageHealthBuffs()
+			end
+		end
+	end
 end
 
 @ExecSpace("ServerOnly")
