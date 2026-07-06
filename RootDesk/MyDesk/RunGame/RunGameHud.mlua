@@ -398,12 +398,26 @@ method void OnArriveMap(Entity player)
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = false
 	end
+	-- 이전 스테이지의 경고 사운드가 루프 중이었다면 정지(연출 도중 맵 전환 등 예외 대비).
+	if _SoundManager ~= nil then
+		_SoundManager:StopBossWarning()
+	end
 	-- Reset the ultimate gauge so it starts empty each stage (no carry-over from the previous stage).
 	self:ResetUltimate()
 	-- Reset roguelite stage buffs (attack up, ...) so they don't carry into the next stage.
 	self:ResetStageBuff()
 	-- Rebuild coin / gap interactions for this stage.
 	self:BuildCourseInteractions(self.curStage)
+	-- 스테이지 BGM 재생(코스의 Set,bgm,<ruid>). SoundManager가 빈 값/동일 곡을 무시하므로 재진입해도 재시작되지
+	-- 않는다. 값이 없는 스테이지는 이전 BGM을 그대로 유지한다.
+	-- 진단: cfg.bgm이 ''이면 데이터셋(Course{stage})에 Set,bgm 행이 로드되지 않은 것(Refresh 필요), RUID가 찍히면
+	-- 데이터는 정상이고 SoundManager/재생 쪽을 봐야 한다.
+	log("[RunGameHud] stage bgm stage=" .. tostring(self.curStage) .. " bgm='" .. tostring(cfg.bgm) .. "'")
+	if _SoundManager ~= nil then
+		_SoundManager:PlayBGM(cfg.bgm)
+	else
+		log("[RunGameHud] _SoundManager is nil — BGM skipped")
+	end
 	self:SetScore(0)
 	self:UpdateProgress()
 	log("[RunGameHud] arrived map=" .. tostring(self.curMapName) .. " spawnX=" .. tostring(self.spawnX) .. " goalX=" .. tostring(self.goalX))
@@ -534,7 +548,7 @@ end
 @ExecSpace("ClientOnly")
 method table ResolveStageConfig(string stage)
 	-- Resolve a stage's floorY / startX / goalX from CourseGen defaults + the stage's "Set" commands.
-	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0, speed = self.courseSpeed, length = 120.0, bossMode = false }
+	local cfg = { floorY = 0.0, startX = 0.0, goalX = 110.0, speed = self.courseSpeed, length = 120.0, bossMode = false, bgm = "" }
 	if _CourseGen ~= nil then
 		cfg.length = _CourseGen.defLength
 	end
@@ -557,6 +571,9 @@ method table ResolveStageConfig(string stage)
 			local raw = ds:GetCell(i, "p2")
 			if key == "goal" and raw == "boss" then
 				cfg.bossMode = true
+			elseif key == "bgm" then
+				-- 스테이지 기본 BGM RUID(문자열). tonumber 게이트 앞에서 처리해야 숫자 파싱에 걸러지지 않는다.
+				cfg.bgm = raw
 			else
 				local v = tonumber(raw)
 				if v ~= nil then
@@ -707,6 +724,10 @@ method void BeginBossIntro()
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = true
 	end
+	-- 경고 배너가 뜨는 동안 경고 사운드(사이렌)를 루프 재생. EndBossIntro에서 StopBossWarning으로 멈춘다.
+	if _SoundManager ~= nil then
+		_SoundManager:StartBossWarning()
+	end
 	-- Reset the warning-animation clock + frame trackers so each boss intro starts fresh.
 	self.warnT = 0
 	self.warnLastLit = -1
@@ -747,6 +768,10 @@ method void EndBossIntro()
 	self.bossIntroState = 2
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = false
+	end
+	-- 배너가 사라지면 루프 재생 중이던 경고 사운드를 정지.
+	if _SoundManager ~= nil then
+		_SoundManager:StopBossWarning()
 	end
 	if self.isAlive then
 		self:SetRunnerActive(true)

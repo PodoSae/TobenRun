@@ -1,0 +1,71 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "model://runtimetilelayer",
+  "ContentType": "x-mod/model",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "Version": 1,
+      "Name": "RuntimeTileLayer",
+      "BaseModelId": null,
+      "Id": "RuntimeTileLayer",
+      "Components": [
+        "MOD.Core.TransformComponent",
+        "MOD.Core.RectTileMapComponent"
+      ],
+      "Properties": [],
+      "Values": [
+        {
+          "TargetType": "MOD.Core.RectTileMapComponent",
+          "Name": "TileSetRUID",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": "9dfea3808bbd49a5877d8624df21b1c7"
+        },
+        {
+          "TargetType": "MOD.Core.RectTileMapComponent",
+          "Name": "GridSize",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "MOD.Core.MODVector2, MOD.Core, Version=26.5.0.0, Culture=neutral, PublicKeyToken=null"
+          },
+          "Value": {
+            "$type": "MOD.Core.MODVector2, MOD.Core",
+            "x": 1.0,
+            "y": 1.0
+          }
+        },
+        {
+          "TargetType": "MOD.Core.RectTileMapComponent",
+          "Name": "SortingLayer",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": "MapLayer0"
+        },
+        {
+          "TargetType": "MOD.Core.RectTileMapComponent",
+          "Name": "OrderInLayer",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 2
+        }
+      ],
+      "EventLinks": [],
+      "Children": []
+    }
+  }
+}

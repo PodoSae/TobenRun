@@ -76,6 +76,9 @@ script RunSpeedEffect extends Component
 	-- ───────── Cached / runtime state ─────────
 	property RigidbodyComponent body = nil
 	property AvatarRendererComponent avatar = nil
+	-- Slide skill ref (local player): read its client-side `active` so a ghost dropped mid-slide is
+	-- posed as crouch instead of running.
+	property any slide = nil
 	property string sortingLayer = ""
 	property integer avatarOrder = 4
 	property Vector3 lastGhostPos = Vector3(0, 0, 0)
@@ -89,6 +92,7 @@ script RunSpeedEffect extends Component
 
 		self.body = self.Entity.RigidbodyComponent
 		self.avatar = self.Entity.AvatarRendererComponent
+		self.slide = self.Entity:GetComponent("script.Slide")
 		if isvalid(self.avatar) then
 			self.sortingLayer = self.avatar.SortingLayer
 			self.avatarOrder = self.avatar.OrderInLayer
@@ -177,7 +181,15 @@ script RunSpeedEffect extends Component
 		local pc = self.Entity.PlayerComponent
 		if isvalid(pc) then userId = pc.UserId end
 
-		self:SpawnGhostServer(pos, userId)
+		-- Slide pose: if the player is mid-slide right now, the ghost should crouch too (not run).
+		local crouch = false
+		if self.slide ~= nil then
+			---@type Slide
+			local sl = self.slide
+			crouch = sl.active
+		end
+
+		self:SpawnGhostServer(pos, userId, crouch)
 
 		if not self.loggedGhost then
 			self.loggedGhost = true
@@ -186,16 +198,17 @@ script RunSpeedEffect extends Component
 	end
 
 	@ExecSpace("Server")
-	method void SpawnGhostServer(Vector3 pos, string userId)
-		-- Spawns the avatar ghost on the server, clones the player's look, sets a running pose,
-		-- and schedules its removal so the client-side fade finishes exactly on destroy.
+	method void SpawnGhostServer(Vector3 pos, string userId, boolean crouch)
+		-- Spawns the avatar ghost on the server, clones the player's look, sets the pose (running, or
+		-- crouch when dropped mid-slide), and schedules its removal so the client-side fade finishes
+		-- exactly on destroy.
 		local map = self.Entity.CurrentMap
 		if not isvalid(map) then return end
 
 		self.ghostCount = self.ghostCount + 1
 		local ghost = _SpawnService:SpawnByModelId(self.ghostModelId, "RunGhost_" .. tostring(self.ghostCount), pos, map)
-		
-		
+
+
 		if not isvalid(ghost) then
 			log_warning("[RunSpeedEffect] ghost spawn failed for modelId=" .. tostring(self.ghostModelId))
 			return
@@ -205,6 +218,16 @@ script RunSpeedEffect extends Component
 		local costume = ghost.CostumeManagerComponent
 		if isvalid(costume) and userId ~= "" then
 			costume.DefaultEquipUserId = userId
+		end
+
+		-- Slide pose flag → RunGhost (@Sync) so every client poses this ghost as crouch to match the
+		-- sliding player. Set in the same server tick as the spawn so it rides the initial replication.
+		if crouch then
+			---@type RunGhost
+			local rg = ghost:GetComponent("script.RunGhost")
+			if rg ~= nil then
+				rg.Crouch = true
+			end
 		end
 
 		-- Pose is set client-side by the ghost's own RunGhost component (BodyActionStateChangeEvent),

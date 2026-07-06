@@ -62,8 +62,8 @@
           "Value": {
             "$type": "MOD.Core.MODVector3, MOD.Core",
             "x": 1.19999981,
-            "y": 5.0,
-            "z": 1.0
+            "y": 5,
+            "z": 1
           }
         },
         {
@@ -91,7 +91,7 @@
             "$type": "MODNativeType",
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 3.0
+          "Value": 3
         },
         {
           "TargetType": "MOD.Core.TransformComponent",
@@ -102,10 +102,10 @@
           },
           "Value": {
             "$type": "MOD.Core.MODQuaternion, MOD.Core",
-            "x": 0.0,
-            "y": 0.0,
-            "z": 0.0,
-            "w": 1.0
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "w": 1
           }
         },
         {
@@ -162,7 +162,7 @@
             "$type": "MODNativeType",
             "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 0.0
+          "Value": 0
         },
         {
           "TargetType": "MOD.Core.MODEntity",
@@ -256,7 +256,7 @@
                   "$type": "MOD.Core.MODVector3, MOD.Core",
                   "x": 0.0067,
                   "y": -0.0365,
-                  "z": 0.0
+                  "z": 0
                 }
               },
               {
@@ -268,10 +268,10 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODQuaternion, MOD.Core",
-                  "x": 0.0,
-                  "y": 0.0,
-                  "z": 0.0,
-                  "w": 1.0
+                  "x": 0,
+                  "y": 0,
+                  "z": 0,
+                  "w": 1
                 }
               },
               {
@@ -284,8 +284,8 @@
                 "Value": {
                   "$type": "MOD.Core.MODVector3, MOD.Core",
                   "x": 0.851815045,
-                  "y": 1.0,
-                  "z": 1.0
+                  "y": 1,
+                  "z": 1
                 }
               },
               {
@@ -402,7 +402,7 @@
                   "$type": "MOD.Core.MODVector3, MOD.Core",
                   "x": 0.0008,
                   "y": 0.6732,
-                  "z": 0.0
+                  "z": 0
                 }
               },
               {
@@ -416,7 +416,7 @@
                   "$type": "MOD.Core.MODVector3, MOD.Core",
                   "x": 1.69999993,
                   "y": 0.5,
-                  "z": 1.0
+                  "z": 1
                 }
               },
               {
@@ -428,10 +428,10 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODQuaternion, MOD.Core",
-                  "x": 0.0,
-                  "y": 0.0,
-                  "z": 0.0,
-                  "w": 1.0
+                  "x": 0,
+                  "y": 0,
+                  "z": 0,
+                  "w": 1
                 }
               },
               {

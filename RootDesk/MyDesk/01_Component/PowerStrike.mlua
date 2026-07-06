@@ -172,6 +172,9 @@ script PowerStrike extends SkillComponent
 
         self:FireBeam(direction, effectiveDamage)
 
+        -- 검기 스윙 사운드는 SwordBeam이 발사(Launch) 시 자체 동기화(@Sync launchSeq → OnSyncProperty)로 재생한다.
+        -- 이렇게 해야 사운드가 검기 비주얼과 같은 복제 채널을 타서 싱크가 맞는다(별도 Multicast는 채널이 달라 어긋남).
+
         -- Optional cast flourish attached to the player.
         local localOffset = Vector3(direction * self.BeamForwardOffset, self.BeamVerticalOffset, 0)
         --self:PlaySkillEffect(localOffset, direction)

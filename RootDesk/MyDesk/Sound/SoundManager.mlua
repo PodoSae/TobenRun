@@ -16,9 +16,52 @@ script SoundManager extends Logic
 	-- (PlaySound guards empty, so the slide stays silent rather than erroring on a bad RUID).
 	property string slideSoundRUID = ""
 
+	-- Coin pickup SFX — a bright "ding/chime" when the runner grabs a coin.
+	-- Centralized here so it can be swapped without touching Coin.mlua.
+	property string coinSoundRUID = "ce43a601dcdf49e5bcf08222af97fe62"
+
+	-- Boss-intro warning SFX — the alarm/siren that plays with the "WARNING" banner when a boss stage begins.
+	-- Centralized here so it can be swapped without touching RunGameHud.mlua.
+	property string bossWarningSoundRUID = "f3a493f358374ab9a105dca515c6ea43"
+
+	-- Sword-beam swing SFX — the "whoosh/slash" played the moment the player fires a sword beam (PowerStrike).
+	-- Centralized here so it can be swapped without touching PowerStrike.mlua.
+	property string swordSwingSoundRUID = "adab9d68a17241379996c838058eb522"
+
+	-- Player-hurt SFX — a short impact + grunt when the local player takes damage. Played on the hit player's
+	-- client only (see PlayerHealth.ShakeCameraOnHit). Centralized here so it can be swapped in one place.
+	property string playerHurtSoundRUID = "2c8167a0cb714642a2ab82855a1c2bab"
+
+	-- ── BGM (background music) ──
+	-- BGM is a SINGLE-track channel in _SoundService: PlayBGM replaces whatever is currently playing,
+	-- and calling it again with the SAME id restarts the track from 0. So we remember the current track
+	-- and only issue PlayBGM when it actually CHANGES. All _SoundService BGM calls are @ExecSpace("Client"),
+	-- and these methods have no @ExecSpace so they run on the caller's side — call them from client code
+	-- (e.g. RunGameHud, which is ClientOnly).
+	property number bgmVolume = 1.0
+	-- Currently-playing BGM RUID ("" = none). Guards against restarting the same track every frame.
+	property string currentBgmRUID = ""
+
 	method void OnBeginPlay()
 		-- Marks the manager as live (helps confirm the singleton registered).
 		log("[SoundManager] ready")
+	end
+
+	method void PlayBGM(string ruid)
+		-- Switches the background music. No-op when the requested track is empty or already playing,
+		-- so it is safe to call every stage arrival / frame without restarting the song.
+		if ruid == "" then return end
+		if ruid == self.currentBgmRUID then return end
+		self.currentBgmRUID = ruid
+		_SoundService:PlayBGM(ruid, self.bgmVolume * self.masterVolume)
+		log("[SoundManager] BGM -> " .. ruid)
+	end
+
+	method void StopBGM()
+		-- Stops the background music and clears the current-track memory.
+		if self.currentBgmRUID == "" then return end
+		self.currentBgmRUID = ""
+		_SoundService:StopBGM(false)
 	end
 
 	method void PlaySound(string ruid, number volume)
@@ -35,6 +78,39 @@ script SoundManager extends Logic
 	method void PlaySlide()
 		-- Ground slide whoosh.
 		self:PlaySound(self.slideSoundRUID, 1.0)
+	end
+
+	method void PlayCoin()
+		-- Coin pickup chime.
+		self:PlaySound(self.coinSoundRUID, 1.0)
+	end
+
+	method void StartBossWarning()
+		-- Boss-intro warning alarm — LOOPS for the whole warning banner duration. Call StopBossWarning to end it.
+		if self.bossWarningSoundRUID == "" then return end
+		_SoundService:PlayLoopSound(self.bossWarningSoundRUID, self.masterVolume)
+	end
+
+	method void StopBossWarning()
+		-- Stops the looping boss-intro warning alarm started by StartBossWarning.
+		if self.bossWarningSoundRUID == "" then return end
+		_SoundService:StopSound(self.bossWarningSoundRUID)
+	end
+
+	method void PlayBossWarningOnce()
+		-- 보스 접근/등장 경고음(1회). 배너의 루프 사이렌(StartBossWarning)과 별개로, 코스에서 보스가 스폰될 때 1회 울린다.
+		self:PlaySound(self.bossWarningSoundRUID, 1.0)
+	end
+
+	method void PlaySwordSwing()
+		-- Sword-beam swing whoosh, played when the player fires a beam.
+		self:PlaySound(self.swordSwingSoundRUID, 1.0)
+	end
+
+	method void PlayPlayerHurt()
+		-- Player-hurt impact/grunt. Call from the hit player's client (PlayerHealth.ShakeCameraOnHit) so only
+		-- the damaged player hears it.
+		self:PlaySound(self.playerHurtSoundRUID, 1.0)
 	end
 
 end

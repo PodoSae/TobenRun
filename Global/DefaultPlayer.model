@@ -915,6 +915,155 @@
             "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
           "Value": false
+        },
+        {
+          "TargetType": "script.PlayerController",
+          "Name": "stunRemaining",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerController",
+          "Name": "serverAttackBlocked",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": false
+        },
+        {
+          "TargetType": "script.PlayerController",
+          "Name": "lastAttackBlocked",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": false
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "baseMaxHp",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "stageMaxHpBonus",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "stageRegenPerSec",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "stageShieldCharges",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Int64, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "ShieldAuraOffset",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "MOD.Core.MODVector3, MOD.Core, Version=26.5.0.0, Culture=neutral, PublicKeyToken=null"
+          },
+          "Value": {
+            "$type": "MOD.Core.MODVector3, MOD.Core",
+            "x": 0,
+            "y": -0.1,
+            "z": 0
+          }
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "shieldAuraSerial",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Int64, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "StageBuffDebug",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": ""
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "dbgComposeTimer",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PowerStrike",
+          "Name": "stageAttackMult",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 1
+        },
+        {
+          "TargetType": "script.PowerStrike",
+          "Name": "stageAttackSpeedMult",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 1
+        },
+        {
+          "TargetType": "script.PowerStrike",
+          "Name": "stagePierceBonus",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "ShieldAuraScale",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 1.2000000476837158
+        },
+        {
+          "TargetType": "MOD.Core.CostumeManagerComponent",
+          "Name": "CustomTwoHandedWeaponEquip",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": "43ad7bfeb9184252b24e6d60f76c17e5"
         }
       ],
       "EventLinks": [],

@@ -194,6 +194,16 @@ script UltimateSkill extends Component
                     self.baseFallSpeedMaxY = self.body.FallSpeedMaxY
                 end
             end
+            -- Cancel any residual JUMP momentum so the glide starts LEVEL no matter the activation state.
+            -- FallSpeedMaxY=0 only caps DOWNWARD fall speed, so an upward jump velocity (점프 후 궁극기 발동)
+            -- would otherwise survive with no gravity left to decay it and the player floats up (버그). SetForce
+            -- REPLACES the current velocity (the same call DoubleJump uses); keep the forward input (MoveVelocity.x)
+            -- and zero only Y. Skipped once the player has jumped during the ultimate (gravityReleased) so the
+            -- jump arc isn't wiped. Grounded activation is unaffected (Y is already ~0). Runs once per activation.
+            if self.body ~= nil and not self.gravityReleased then
+                local mv = self.body.MoveVelocity
+                self.body:SetForce(Vector2(mv.x, 0))
+            end
             self.boosting = true
         end
         if self.controller ~= nil then self.controller.speedMultiplier = self.DashSpeedMul end

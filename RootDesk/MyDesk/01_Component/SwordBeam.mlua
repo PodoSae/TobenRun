@@ -28,6 +28,11 @@ script SwordBeam extends Component
     -- credited to the right player. Server-side only; not synced.
     @HideFromInspector property Entity OwnerEntity = nil
 
+    -- Launch counter, bumped on every Launch (server). Because it's @Sync it replicates on the SAME channel
+    -- as the beam's transform/renderer, so the client hears the swing exactly when the beam appears — unlike a
+    -- separate Multicast SFX (different channel → desync). OnSyncProperty (client) plays the swing on each bump.
+    @Sync property integer launchSeq = 0
+
     -- Max travel distance (world units) from the LAUNCH POINT before the beam recycles. This is RELATIVE to
     -- where it was fired — not a fixed world rectangle. The runner scrolls the player rightward with no bound,
     -- so the old fixed BoundMaxX (=90, map01's tile edge) made every beam spawn already out-of-bounds and
@@ -62,6 +67,8 @@ script SwordBeam extends Component
         self._T.fired = true
         self._T.lifetime = 0
         self._T.dirX = (dir >= 0) and 1 or -1
+        -- Bump the synced launch trigger so each client plays the swing SFX in step with this beam's visual.
+        self.launchSeq = self.launchSeq + 1
         -- Pierce state: remaining distinct hits + the set of entity ids already counted (so the same enemy
         -- lingering in the hit box across frames is counted once).
         self._T.pierceLeft = (pierce ~= nil and pierce >= 1) and pierce or 1
@@ -159,6 +166,17 @@ script SwordBeam extends Component
             renderer.Enable = false
         end
         self.Entity.TransformComponent.Position = self.ParkPosition
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnSyncProperty(string name, any value)
+        -- Client hook: when the synced launch counter bumps, the beam just launched on THIS client's view —
+        -- play the swing SFX now so it lands with the beam's appearance. value>0 skips the initial 0-state sync.
+        if name == "launchSeq" and value > 0 then
+            if _SoundManager ~= nil then
+                _SoundManager:PlaySwordSwing()
+            end
+        end
     end
 
     @ExecSpace("Client")

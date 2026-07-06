@@ -54,7 +54,7 @@ property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
 @Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
 property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
 @DisplayName("기본 바닥 타일 RUID")
-property string defaultTileRuid = "6d4015ce2c274b8db709b7b07a09b181"
+property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
 @DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
 property number monsterYOff = 1.0
 @DisplayName("장애물 안착 높이 보정")
@@ -75,6 +75,9 @@ property any mapStage = nil
 -- Server registry: mapName -> boss-arena state (for a course whose goal == "boss"): infinite floor
 -- generation + one-time boss spawn. { cfg, floorX, triggerX, bossSpawned }.
 property any bossState = nil
+-- Server registry: mapName -> 고정 x 보스 대기 상태(비-아레나 Boss,,x). { x, bossId, cfg, warned, spawned }.
+-- 빌드 시 즉시 스폰하지 않고, 플레이어가 접근하면 경고음 → 스폰(낙하)으로 이어간다.
+property any pendingBoss = nil
 @DisplayName("보스전 바닥 미리생성 여유거리")
 property number bossLookahead = 25.0
 @DisplayName("보스전 바닥 청크 길이")
@@ -82,13 +85,22 @@ property number bossChunk = 20.0
 @DisplayName("보스 등장 접근 거리")
 property number bossApproach = 12.0
 @DisplayName("보스 등장 시 앞쪽 거리")
-property number bossAheadX = 15.0
+@Description("보스 스폰 X = 플레이어 X + 이 값. 화면 가시 반폭(PC≈6.4)보다 작아야 등장 낙하 연출이 화면에 보인다. 낙하 중 러너가 더 다가오므로 6이면 화면 중앙우측에 확실히 보임")
+property number bossAheadX = 6.0
+-- 고정 x 보스(Boss,,x, 비-아레나): 플레이어가 보스 x의 이만큼 왼쪽에 오면 경고음/스폰. 경고가 스폰보다 먼저 울리도록 warn > spawn.
+@DisplayName("고정보스 경고 선행거리")
+@Description("플레이어가 보스 x - 이 값 지점에 오면 경고음 1회 재생(스폰보다 먼저)")
+property number bossPendingWarnAhead = 14.0
+@DisplayName("고정보스 스폰 선행거리")
+@Description("플레이어가 보스 x - 이 값 지점에 오면 보스 스폰(하늘에서 낙하). 화면에 보이도록 가시 반폭보다 작게")
+property number bossPendingSpawnAhead = 6.0
 
 @ExecSpace("ServerOnly")
 method void OnBeginPlay()
 	-- Init the per-map registries on the server.
 	self.mapStage = {}
 	self.bossState = {}
+	self.pendingBoss = {}
 end
 
 @ExecSpace("ServerOnly")
@@ -153,6 +165,39 @@ method void OnUpdate(number delta)
 				-- longer auto-spawn here — this loop only keeps the floor extending ahead of the runner.
 			end
 		end
+	end
+
+	-- 고정 x 보스(비-아레나 Boss,,x): 플레이어가 접근하면 경고음(선행) → 스폰(하늘에서 낙하)으로 연출을 이어간다.
+	if self.pendingBoss ~= nil then
+		for mapName, pb in pairs(self.pendingBoss) do
+			if pb ~= nil and pb.spawned == false then
+				local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
+				local player = self:FindPlayerOnMap(map)
+				if isvalid(player) then
+					local px = player.TransformComponent.WorldPosition.x
+					-- 1) 경고음: 스폰보다 먼저(warn 선행거리) 1회.
+					if pb.warned == false and px >= pb.x - self.bossPendingWarnAhead then
+						pb.warned = true
+						self:PlayBossWarningSound()
+						log("[CourseGen] boss warning (approach) @x=" .. tostring(pb.x))
+					end
+					-- 2) 스폰: 화면에 보이는 선행거리에서 보스 생성 → 보스 OnBeginPlay의 낙하 연출이 이어진다.
+					if px >= pb.x - self.bossPendingSpawnAhead then
+						pb.spawned = true
+						self:SpawnBossById(map, pb.cfg, pb.x, pb.bossId)
+						log("[CourseGen] pending boss spawned @x=" .. tostring(pb.x))
+					end
+				end
+			end
+		end
+	end
+end
+
+@ExecSpace("Multicast")
+method void PlayBossWarningSound()
+	-- 전 클라: 코스 보스 접근/등장 경고음(1회). _SoundManager/_SoundService는 클라 공간이라 Multicast로 재생.
+	if _SoundManager ~= nil then
+		_SoundManager:PlayBossWarningOnce()
 	end
 end
 
@@ -290,17 +335,55 @@ method void RequestBuildCourse(string stage, string mapName)
 	if self.mapStage == nil then
 		self.mapStage = {}
 	end
-	if self.mapStage[mapName] == stage then
-		return
-	end
 	local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
 	if isvalid(map) == false then
 		log("[CourseGen] map not found: " .. mapName)
 		return
 	end
+	-- 로그라이트 스테이지 버프는 스테이지 한정(transient)이다. 스테이지에 (재)진입할 때마다 서버 권위적으로 이 맵의
+	-- 모든 플레이어 버프를 초기화한다. 빌드 가드(같은 스테이지 재진입 → 코스 재생성 skip)보다 먼저 실행하므로, 코스를
+	-- 다시 안 짓는 재진입에서도 리셋은 항상 수행된다. 기존 RunGameHud의 클라 주도 ResetStageBuff는 맵 전환 중
+	-- LocalPlayer/컴포넌트가 잠깐 nil이면 유실될 수 있어(그때 서버 버프가 그대로 남아 "나갔다 들어오면 재적용"),
+	-- 버프를 적용하는 곳과 같은 서버(ServerOnly)에서 한 번 더 확실히 초기화한다.
+	self:ResetStageBuffsOnMap(map)
+	if self.mapStage[mapName] == stage then
+		return
+	end
 	self.mapStage[mapName] = stage
 	self:ClearCourse(map)
 	self:BuildCourse(stage, map)
+end
+
+@ExecSpace("ServerOnly")
+method void ResetStageBuffsOnMap(Entity map)
+	-- 이 맵의 모든 플레이어의 로그라이트 스테이지 버프(PowerStrike 공격계열 + PlayerHealth 체력계열)를 서버측에서
+	-- 초기화한다. StageBuffItem이 서버(ServerOnly)에서 버프를 적용하는 것과 동일한 권위 지점이므로 RPC 타이밍/맵
+	-- 전환 레이스가 없다. ResetStageBuff / ResetStageHealthBuffs는 @Server 메서드라 서버에서 호출하면 즉시 실행된다.
+	if isvalid(map) == false then
+		return
+	end
+	local mapComp = map.MapComponent
+	if isvalid(mapComp) == false then
+		return
+	end
+	local users = _UserService:GetUsersByMapComponent(mapComp)
+	if users == nil then
+		return
+	end
+	for _, user in ipairs(users) do
+		if isvalid(user) then
+			---@type PowerStrike
+			local ps = user:GetComponent("script.PowerStrike")
+			if ps ~= nil then
+				ps:ResetStageBuff()
+			end
+			---@type PlayerHealth
+			local hp = user:GetComponent("script.PlayerHealth")
+			if hp ~= nil then
+				hp:ResetStageHealthBuffs()
+			end
+		end
+	end
 end
 
 @ExecSpace("ServerOnly")
@@ -698,6 +781,19 @@ method string ObstacleModel(string id)
 end
 
 @ExecSpace("ServerOnly")
+method number ObstacleVisualHalfHeight(Entity o)
+	-- 장애물 스프라이트의 실제 반높이(월드유닛) = (height / PixelPerUnit) * |scale.y| * 0.5. 바닥 접지 계산용.
+	-- Obstacle.AutoSizeHitbox와 동일하게 LoadSpriteAndWait로 스프라이트를 읽는다(장애물은 static sprite라 안전).
+	-- 로드 실패 시 기존 고정값(obstacleYRest)으로 폴백해 최소한 배치는 되게 한다.
+	local spr = o.SpriteRendererComponent
+	if spr == nil then return self.obstacleYRest end
+	local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
+	if sp == nil or sp.PixelPerUnit <= 0 then return self.obstacleYRest end
+	local sy = o.TransformComponent.Scale.y
+	return (sp.Height / sp.PixelPerUnit) * math.abs(sy) * 0.5
+end
+
+@ExecSpace("ServerOnly")
 method void CmdSpawn(Entity map, table cfg, table c)
 	-- "Spawn" command — p1=type, p2=x, p3=optional Y (height ABOVE the floor).
 	-- p1 is a hazard id defined in the ObstacleDef DataSet (spike/obstacle/monster/...),
@@ -862,7 +958,12 @@ method void CmdSpawn(Entity map, table cfg, table c)
 						oc.TargetY = oc.CeilingY
 						o.TransformComponent.Position = Vector3(x, oc.CeilingY, 0)
 					else
-						oc.TargetY = restY  -- floor placement: already at rest height, no rise
+						-- 바닥 접지: 스프라이트 반높이만큼 표면 위로 올려, 밑면이 표면(floorY+floorTopPad)에 정확히 닿게 한다.
+						-- 고정 obstacleYRest는 스프라이트 높이를 무시해 큰 장애물이 파묻히던 문제를 해결(종류/크기 무관 정렬).
+						local surfaceY = cfg.floorY + self.floorTopPad
+						local groundedY = surfaceY + self:ObstacleVisualHalfHeight(o)
+						oc.TargetY = groundedY
+						o.TransformComponent.Position = Vector3(x, groundedY, 0)
 					end
 			end
 			-- sprite + size are baked into the per-type model; Obstacle self-sizes its hitbox.
@@ -888,11 +989,14 @@ end
 
 @ExecSpace("ServerOnly")
 method void CmdBoss(Entity map, table cfg, table c)
-	-- "Boss,<id>,<x>" command — place a boss at x, data-driven like "Spawn,normal,x" places a monster.
-	-- (In a boss course (Set,goal,boss) the Boss row is consumed by BuildCourse and the boss appears at
-	-- the arena instead; this direct path is for placing a boss at a fixed spot without arena mode.)
+	-- "Boss,<id>,<x>" command — place a boss at a FIXED x (non-arena course, goal=number).
+	-- 빌드 시 즉시 스폰하면 플레이어가 도달하기 전 화면 밖에서 등장 연출이 소모된다. 대신 대기 등록만 하고,
+	-- OnUpdate가 플레이어 접근을 감지해 경고음 → 스폰(하늘에서 낙하)으로 이어간다.
+	-- (boss course(Set,goal,boss)에서는 Boss 행이 BuildCourse에서 걸러져 아레나 경로로 가므로 여기 안 옴.)
 	local x = tonumber(c.p2) or 0
-	self:SpawnBossById(map, cfg, x, c.p1)
+	if self.pendingBoss == nil then self.pendingBoss = {} end
+	self.pendingBoss[map.Name] = { x = x, bossId = c.p1, cfg = cfg, warned = false, spawned = false }
+	log("[CourseGen] boss pending (approach-spawn) @x=" .. tostring(x))
 end
 
 end

@@ -33,6 +33,47 @@ script MushmomBoss extends Component
     -- Skill cast sound (Mushmom Skill1).
     property string CastSoundRUID = "5da7bb48092947f395e9f76f601323ca"
 
+    -- === 등장 연출: 하늘에서 쿵 낙하 (경고 UI 후 보스가 나타날 때) ===
+    @DisplayName("등장 낙하 높이")
+    @Description("스폰 순간 이 높이(월드유닛)만큼 하늘 위에서 시작해 지면으로 낙하. 0이면 낙하 연출 없음")
+    @MinValue(0)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number EntranceDropHeight = 9.0
+    @DisplayName("등장 낙하 중력 배율")
+    @Description("낙하 동안 Rigidbody 중력 배율(1=평상시). 클수록 빠르게 떨어져 쿵. 물리 낙하라 실제 발판(원래 위치)에 안착")
+    @MinValue(1)
+    @MaxValue(20)
+    @Delta(0.5)
+    property number EntranceGravity = 4.0
+    @DisplayName("등장 낙하 최대시간(안전)")
+    @Description("착지 감지 실패 시 이 시간 후 강제 종료(무한 낙하 방지)")
+    @MinValue(0.5)
+    @MaxValue(6)
+    @Delta(0.5)
+    property number EntranceMaxTime = 2.5
+    @DisplayName("착지 카메라 흔들림 세기")
+    @MinValue(0)
+    @MaxValue(3)
+    @Delta(0.05)
+    property number EntranceShakeIntensity = 0.9
+    @DisplayName("착지 카메라 흔들림 시간(초)")
+    @MinValue(0)
+    @MaxValue(2)
+    @Delta(0.05)
+    property number EntranceShakeDuration = 0.5
+    @DisplayName("착지 먼지 크기")
+    @MinValue(0.1)
+    @MaxValue(6)
+    @Delta(0.1)
+    property number EntranceDustScale = 2.4
+    @DisplayName("등장 낙하 이미지")
+    @Description("낙하 중 표시할 클립(비면 기본 이미지). Mushmom jump 클립 기본값")
+    property string FallRUID = "5ecbcc4002a5491aafd7e1d3191c6ddc"
+    @DisplayName("착지 사운드 RUID")
+    @Description("착지 '쿵' 순간 재생할 사운드(비면 없음). 기본: 무거운 충격/붐 사운드")
+    property string LandSoundRUID = "b5537b3582ae4b33a0464365ebb76e55"
+
     -- === Phase system ===
     @DisplayName("2페이즈 전환 HP 비율")
     @Description("현재 HP가 (최대HP * 이 값) 이하로 떨어지면 2페이즈로 전환")
@@ -363,6 +404,7 @@ script MushmomBoss extends Component
     @HideFromInspector property boolean groggy = false
     @HideFromInspector property boolean shockwave = false
     @HideFromInspector property boolean engaged = false
+    @HideFromInspector property boolean entering = false
     @HideFromInspector property number chargeDir = -1
 
     @ExecSpace("ServerOnly")
@@ -375,6 +417,7 @@ script MushmomBoss extends Component
         self.groggy = false
         self.shockwave = false
         self.engaged = false
+        self.entering = false
         self.phase = 1
         self:LoadFromTable()
         self.Hp = self.MaxHp
@@ -403,6 +446,8 @@ script MushmomBoss extends Component
         -- engagement gate (self.engaged) in OnUpdate. Resume happens on Die / OnEndPlay.
 
         self:SetSprite(self.StandRUID)
+        -- 등장 연출: 경고 UI 후 스폰되는 순간 하늘 위로 올려 낙하 → 착지 쿵. 낙하 동안 다른 로직은 정지된다.
+        self:BeginEntrance()
         log("[MushmomBoss] OnBeginPlay hp=" .. tostring(self.MaxHp) .. " phase=1")
     end
 
@@ -438,6 +483,12 @@ script MushmomBoss extends Component
     method void OnUpdate(number delta)
         -- Drives facing, the skill scheduler, 몸박 (contact) damage, and the body-slam charge / groggy states.
         if self.dead then return end
+
+        -- 등장 낙하 연출 진행 중에는 스킬/추적/몸박 등 모든 로직을 정지하고 낙하만 처리.
+        if self.entering then
+            self:UpdateEntrance(delta)
+            return
+        end
 
         -- Phase promotion is checked in every state (groggy hits can cross the threshold too).
         self:UpdatePhase()
@@ -1198,6 +1249,87 @@ script MushmomBoss extends Component
     end
 
     @ExecSpace("ServerOnly")
+    method void BeginEntrance()
+        -- 등장 낙하 시작: 하늘 위로 순간이동한 뒤 '물리 중력'으로 낙하시켜 실제 발판(원래 서는 위치)에 정확히 안착시킨다.
+        -- (스크립트로 Y를 스폰값에 스냅하면 스폰 쿠션 높이(monsterYOff)만큼 공중에 떠서 착지하므로, 물리+IsOnGround로
+        --  실제 안착 위치를 쓴다.) 낙하 동안만 중력을 EntranceGravity배로 키워 스냅하게 떨어진다 → 착지 시 원복.
+        if self.EntranceDropHeight <= 0 then return end
+        local body = self.Entity.RigidbodyComponent
+        local m = self.Entity.MovementComponent
+        local t = self.Entity.TransformComponent
+        if not isvalid(body) or not isvalid(m) or not isvalid(t) then return end
+        local wp = t.WorldPosition
+        self._T.entranceGravitySaved = body.Gravity
+        body.Gravity = self.EntranceGravity
+        self._T.entranceAirborne = false
+        self._T.entranceTime = 0
+        self.entering = true
+        m:SetWorldPosition(Vector2(wp.x, wp.y + self.EntranceDropHeight))
+        if self.FallRUID ~= "" then self:SetSprite(self.FallRUID) end
+        log("[MushmomBoss] entrance drop begin (+" .. tostring(self.EntranceDropHeight) .. ")")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void UpdateEntrance(number delta)
+        -- 물리 낙하 대기: 리프트 후 공중에 뜬 뒤 발판에 닿으면(IsOnGround) 실제 안착 위치에서 착지(쿵). 낙하 중 플레이어를 바라본다.
+        local body = self.Entity.RigidbodyComponent
+        local t = self.Entity.TransformComponent
+        if not isvalid(body) or not isvalid(t) then self:EndEntrance() return end
+        self:FacePlayer()
+        self._T.entranceTime = (self._T.entranceTime or 0) + delta
+
+        if body:IsOnGround() == false then
+            self._T.entranceAirborne = true         -- 리프트 반영되어 공중에 뜬 상태 확인(착지 오판 방지)
+        elseif self._T.entranceAirborne == true then
+            local wp = t.WorldPosition               -- 착지! 실제 안착 위치에서 임팩트.
+            self:EndEntrance()
+            self:OnEntranceLand(Vector3(wp.x, wp.y, wp.z))
+            return
+        end
+
+        -- 안전장치: 어떤 이유로 착지 감지가 안 되면 최대시간 뒤 강제 종료(무한 entering 방지).
+        if self._T.entranceTime >= self.EntranceMaxTime then
+            local wp = t.WorldPosition
+            self:EndEntrance()
+            self:OnEntranceLand(Vector3(wp.x, wp.y, wp.z))
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void EndEntrance()
+        -- 등장 낙하 종료: 중력 원복 + entering 해제 + 기본 이미지 + 착지 직후 스킬 폭주 방지(skillTimer 리셋).
+        local body = self.Entity.RigidbodyComponent
+        if isvalid(body) and self._T.entranceGravitySaved ~= nil then
+            body.Gravity = self._T.entranceGravitySaved
+        end
+        self.entering = false
+        self:SetSprite(self.StandRUID)
+        self.skillTimer = self.SkillInterval
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEntranceLand(Vector3 pos)
+        -- 착지 순간의 임팩트(연출 전용, 데미지 없음): 전 클라 먼지 폭발 + 카메라 흔들림 + 옵션 사운드.
+        self:PlayLandingImpact(pos)
+        log("[MushmomBoss] entrance landed at y=" .. string.format("%.2f", pos.y))
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayLandingImpact(Vector3 pos)
+        -- 전 클라 재생: 착지 먼지(DustExplosion, 원형 충격파+연기) + 카메라 흔들림 + 옵션 '쿵' 사운드.
+        if not isvalid(self.Entity) then return end
+        local s = self.EntranceDustScale
+        _ParticleService:PlayBasicParticle(BasicParticleType.DustExplosion, self.Entity, pos, 0, Vector3(s, s, s), false, {})
+        local cam = _CameraService:GetCurrentCameraComponent()
+        if isvalid(cam) then
+            cam:ShakeCamera(self.EntranceShakeIntensity, self.EntranceShakeDuration)
+        end
+        if self.LandSoundRUID ~= "" then
+            _SoundService:PlaySound(self.LandSoundRUID, 1.0)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
     method void SetSprite(string ruid)
         -- Swaps the sprite clip ONLY when it actually changes. Reassigning the same SpriteRUID every frame
         -- restarts the animation at frame 0 (looks frozen), so the per-frame follow loop must go through this.
@@ -1274,6 +1406,17 @@ script MushmomBoss extends Component
     @DisplayName("피격 파티클 색")
     property Color HitParticleColor = Color(1, 1, 0.6, 1)
 
+    -- 피격 애니메이션(히트 플래시): MonsterUnit과 동일 규칙. Pattern A 스프라이트 보스라 아바타식 ChangeState("HIT")를
+    -- 못 쓰므로, 피격 순간 Color를 잠깐 틴트했다 되돌린다. SetSprite(SpriteRUID 교체)와 독립 채널이라 텔레그래프/그로기
+    -- 스프라이트 연출과 충돌하지 않는다.
+    @DisplayName("피격 플래시 색")
+    property Color HitFlashColor = Color(1, 0.35, 0.35, 1)
+    @DisplayName("피격 플래시 시간(초)")
+    @MinValue(0.02)
+    @MaxValue(0.5)
+    @Delta(0.01)
+    property number HitFlashDuration = 0.09
+
     @ExecSpace("ServerOnly")
     @EventSender("Self")
     handler HandleHitEvent(HitEvent event)
@@ -1282,6 +1425,8 @@ script MushmomBoss extends Component
         if self.dead then return end
         -- 적 전용 피격 타격 이펙트(전 클라). 캐릭터 피격(빨간 스파크)과 구분되는 노란 사방 스파크.
         self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
+        -- 피격 애니메이션: 스프라이트 히트 플래시(전 클라).
+        self:PlayHitFlash()
         local dmg = event.TotalDamage
         if self.groggy then
             dmg = dmg * self.GroggyDamageMultiplier
@@ -1312,6 +1457,29 @@ script MushmomBoss extends Component
             Vector3(s, s, s), false, { Color = self.HitParticleColor })
     end
 
+    @ExecSpace("Multicast")
+    method void PlayHitFlash()
+        -- 피격 애니메이션(히트 플래시): 스프라이트를 HitFlashColor로 잠깐 틴트했다가 원색 복구. 전 클라 재생.
+        -- Color는 SetSprite(SpriteRUID)와 독립 채널이라 텔레그래프/그로기 스프라이트 교체와 충돌하지 않는다.
+        local sprite = self.Entity.SpriteRendererComponent
+        if not isvalid(sprite) then return end
+        if self._T.flashing ~= true then
+            self._T.origColor = sprite.Color
+        end
+        self._T.flashing = true
+        sprite.Color = self.HitFlashColor
+        if self._T.flashTimerId ~= nil then
+            _TimerService:ClearTimer(self._T.flashTimerId)
+        end
+        self._T.flashTimerId = _TimerService:SetTimerOnce(function()
+            if isvalid(sprite) then
+                sprite.Color = self._T.origColor or Color(1, 1, 1, 1)
+            end
+            self._T.flashing = false
+            self._T.flashTimerId = nil
+        end, self.HitFlashDuration)
+    end
+
     @ExecSpace("ServerOnly")
     method void ApplyExternalDamage(number amount, Entity attacker)
         -- Damage from a source that bypasses the HitEvent pipeline — the player's ultimate, which sweeps the
@@ -1327,6 +1495,7 @@ script MushmomBoss extends Component
         end
         self.Hp = self.Hp - amount
         self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
+        self:PlayHitFlash()
         log("[MushmomBoss] ultimate dmg -" .. tostring(amount) .. " -> hp=" .. tostring(self.Hp))
         -- Show a floating damage number: the ultimate bypasses the HitEvent pipeline, so the auto DamageSkin
         -- never fires for it — display one manually (client-space Play, same as the groggy crit number).
