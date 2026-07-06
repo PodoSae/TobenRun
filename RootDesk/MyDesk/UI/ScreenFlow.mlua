@@ -3,6 +3,8 @@ script ScreenFlow extends Logic
 
 property Entity titleRoot = "e6d3da67-eb3c-4afd-9abe-cf06ec90ed0e"
 property Entity lobbyRoot = "6d97a194-546c-4732-b0c9-b0f843872f61"
+-- Stage-select screen root (map selection lives here now; toggled like the shop).
+property Entity stageSelectRoot = "8c910774-9791-4dd1-8c70-f55550f68b93"
 property Entity startButton = "4cc83fed-af0a-48bc-a88a-2a3fa9747f9c"
 property Entity backButton = "1d6433fa-a4ea-41f6-a01b-fb36b2daf066"
 property Entity startGameButton = "86b0e64c-95b4-411a-94de-64f02121927d"
@@ -13,6 +15,8 @@ property any startHandler = nil
 property any backHandler = nil
 property any startGameHandler = nil
 property any stageHandlers = nil
+property any stageSelectOpenHandler = nil
+property any stageSelectBackHandler = nil
 property any shopOpenHandler = nil
 property any shopBackHandler = nil
 property any shopCells = nil
@@ -28,6 +32,10 @@ method void OnBeginPlay()
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = false
 	end
+	-- Stage-select screen starts hidden (opened from the lobby).
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
+	end
 	if isvalid(self.startButton) then
 		self.startHandler = self.startButton:ConnectEvent(ButtonClickEvent, self.OnStartClick)
 	end
@@ -37,16 +45,25 @@ method void OnBeginPlay()
 	if isvalid(self.startGameButton) then
 		self.startGameHandler = self.startGameButton:ConnectEvent(ButtonClickEvent, self.OnStartGameClick)
 	end
-	-- Wire the stage-select buttons in the lobby (see StageList — currently 1-1 / 1-2 / 1-3).
+	-- Wire the stage buttons in the StageSelect screen (see StageList — currently 1-1 / 1-2 / 1-3).
 	self.stageHandlers = {}
 	for _, stage in ipairs(self:StageList()) do
-		local path = "/ui/LobbyGroup/Stage_" .. string.gsub(stage, "-", "_")
+		local path = "/ui/StageSelectGroup/Stage_" .. string.gsub(stage, "-", "_")
 		local btn = _EntityService:GetEntityByPath(path)
 		if isvalid(btn) then
 			local capturedStage = stage
 			local h = btn:ConnectEvent(ButtonClickEvent, function() self:OnStageClick(capturedStage) end)
 			table.insert(self.stageHandlers, { ent = btn, hd = h })
 		end
+	end
+	-- Lobby -> StageSelect entry button, and StageSelect -> Lobby back button.
+	local stageBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StageBtn")
+	if isvalid(stageBtn) then
+		self.stageSelectOpenHandler = stageBtn:ConnectEvent(ButtonClickEvent, self.OnStageSelectOpenClick)
+	end
+	local stageBack = _EntityService:GetEntityByPath("/ui/StageSelectGroup/BackBtn")
+	if isvalid(stageBack) then
+		self.stageSelectBackHandler = stageBack:ConnectEvent(ButtonClickEvent, self.OnStageSelectBackClick)
 	end
 	-- Shop screen: hidden at start; wire its open / back / buy buttons.
 	local shop = _EntityService:GetEntityByPath("/ui/ShopGroup")
@@ -107,12 +124,16 @@ method void RefreshSavedUI()
 	if isvalid(shopGold) and shopGold.TextComponent ~= nil then
 		shopGold.TextComponent.Text = goldText
 	end
+	local stageGold = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Gold")
+	if isvalid(stageGold) and stageGold.TextComponent ~= nil then
+		stageGold.TextComponent.Text = goldText
+	end
 	-- Stage unlock gating: a stage opens once the SUM of all stages best scores
 	-- reaches its StageUnlock threshold (1-1 = 0, always open). Locked stages show a
 	-- Lock overlay entity (dim + lock icon + required total) instead of being enterable.
 	local total = self:GetTotalBest()
 	for _, stage in ipairs(self:StageList()) do
-		local btnPath = "/ui/LobbyGroup/Stage_" .. string.gsub(stage, "-", "_")
+		local btnPath = "/ui/StageSelectGroup/Stage_" .. string.gsub(stage, "-", "_")
 		local unlock = self:GetStageUnlock(stage)
 		local locked = total < unlock
 		local lockEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock")
@@ -451,6 +472,9 @@ method void OnStageClick(string stage)
 		return
 	end
 	local mapName = row:GetItem("map")
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
+	end
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = false
 	end
@@ -464,10 +488,38 @@ method void OnStageClick(string stage)
 end
 
 @ExecSpace("ClientOnly")
+method void OnStageSelectOpenClick(ButtonClickEvent event)
+	-- Lobby → StageSelect screen (map selection).
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = true
+	end
+	self:RefreshSavedUI()
+	log("[ScreenFlow] -> StageSelect")
+end
+
+@ExecSpace("ClientOnly")
+method void OnStageSelectBackClick(ButtonClickEvent event)
+	-- StageSelect → Lobby.
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	log("[ScreenFlow] StageSelect -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
 method void OnStartClick(ButtonClickEvent event)
 	-- Title clicked → go to the lobby.
 	if isvalid(self.titleRoot) then
 		self.titleRoot.Enable = false
+	end
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
 	end
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = true
@@ -493,6 +545,9 @@ method void ShowLobby()
 	-- Show the lobby screen (called after a run ends from the result panel).
 	if isvalid(self.titleRoot) then
 		self.titleRoot.Enable = false
+	end
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
 	end
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = true
@@ -538,6 +593,16 @@ method void OnEndPlay()
 			end
 		end
 		self.stageHandlers = nil
+	end
+	local stageBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StageBtn")
+	if isvalid(stageBtn) and self.stageSelectOpenHandler ~= nil then
+		stageBtn:DisconnectEvent(ButtonClickEvent, self.stageSelectOpenHandler)
+		self.stageSelectOpenHandler = nil
+	end
+	local stageBack = _EntityService:GetEntityByPath("/ui/StageSelectGroup/BackBtn")
+	if isvalid(stageBack) and self.stageSelectBackHandler ~= nil then
+		stageBack:DisconnectEvent(ButtonClickEvent, self.stageSelectBackHandler)
+		self.stageSelectBackHandler = nil
 	end
 	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
 	if isvalid(shopBtn) and self.shopOpenHandler ~= nil then
