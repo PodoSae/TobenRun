@@ -492,7 +492,7 @@ script UltimateSkill extends Component
                                 ---@type MushmomBoss
                                 local boss = bc
                                 local dmg = self:GetPlayerAttackPower() * self.BossDamageMul
-                                boss:ApplyExternalDamage(dmg, self.Entity)
+                                boss:ApplyExternalDamage(dmg, self.Entity, false)
                                 self.bossDmgTimer = self.BossDamageTickInterval
                                 log("[UltimateSkill] boss tick dmg=" .. tostring(dmg)
                                     .. " bossX=" .. tostring(bp.x) .. " cx=" .. tostring(cx)
@@ -524,7 +524,7 @@ script UltimateSkill extends Component
         if boss ~= nil then
             if self.bossDmgTimer <= 0 then
                 local dmg = self:GetPlayerAttackPower() * self.BossDamageMul
-                boss:ApplyExternalDamage(dmg, self.Entity)
+                boss:ApplyExternalDamage(dmg, self.Entity, false)
                 self.bossDmgTimer = self.BossDamageTickInterval
             end
             return

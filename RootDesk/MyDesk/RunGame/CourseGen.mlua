@@ -53,6 +53,24 @@ property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
 @DisplayName("즉시 회복 아이템 RUID")
 @Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
 property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
+@DisplayName("자석 아이템 RUID")
+@Description("자석(magnet) 스프라이트 (기본: '검은 자석')")
+property string magnetRuid = "08b6bdf6f8a44eb9ac23a3b97b3c906d"
+@DisplayName("슬로우검 아이템 RUID")
+@Description("슬로우검(slowsword) 스프라이트")
+property string slowSwordRuid = "a88caa5fbd8646b8aeb331896f7d286d"
+@DisplayName("도트검 아이템 RUID")
+@Description("도트검(dotsword) 스프라이트 (기본: '좋아보이는 검')")
+property string dotSwordRuid = "7c92e0752a8342bb9fc05c2bafebdeae"
+@DisplayName("궁극기 게이지 물약 RUID")
+@Description("궁극기 게이지 물약(ultgauge) 스프라이트 (기본: '마나 엘릭서')")
+property string ultPotionRuid = "3b778fe9d0b64a52a038b1c72cb58454"
+@DisplayName("무적 아이템 RUID")
+@Description("무적(invincible) 스프라이트 (기본: '무적')")
+property string invincibleRuid = "52616cd70c2943c5b632ec687dd2a452"
+@DisplayName("타수 아이템 RUID")
+@Description("타수 증가(hitbuff) 스프라이트 (기본: 타격/연타 아이콘)")
+property string hitBuffRuid = "66cccfa4ee3846ea9fa3e7e641be771a"
 @DisplayName("기본 바닥 타일 RUID")
 property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
 @DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
@@ -841,7 +859,9 @@ method void CmdSpawn(Entity map, table cfg, table c)
 	-- 2.5). On contact it applies a stage-scoped buff to PowerStrike (RunGameHud resets per stage → 스테이지 이탈 시
 	-- 소멸). p3 = optional 증가량 override. Fixed placement → no auto-despawn.
 	if kind == "atkbuff" or kind == "aspdbuff" or kind == "piercebuff"
-			or kind == "regenbuff" or kind == "maxhpbuff" or kind == "shieldbuff" or kind == "healbuff" then
+			or kind == "regenbuff" or kind == "maxhpbuff" or kind == "shieldbuff" or kind == "healbuff"
+			or kind == "magnet" or kind == "slowsword" or kind == "dotsword"
+			or kind == "ultgauge" or kind == "invincible" or kind == "hitbuff" then
 		local ruid = self.atkBuffRuid
 		local buffKind = "attack"
 		local defaultAmt = 0.5
@@ -876,6 +896,36 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			buffKind = "heal"
 			defaultAmt = 9999   -- 즉시 회복(MaxHp 상한으로 clamp = 사실상 풀피). p3로 특정량 지정 가능
 			statKey = ""        -- 즉시 풀피라 강화 대상 아님
+		elseif kind == "magnet" then
+			ruid = self.magnetRuid
+			buffKind = "magnet"
+			defaultAmt = 6      -- 자석 지속(초). p3로 지정 가능
+			statKey = ""
+		elseif kind == "slowsword" then
+			ruid = self.slowSwordRuid
+			buffKind = "slowsword"
+			defaultAmt = 0      -- 감속량은 PowerStrike.SlowStrength가 결정(획득마다 중첩)
+			statKey = ""
+		elseif kind == "dotsword" then
+			ruid = self.dotSwordRuid
+			buffKind = "dotsword"
+			defaultAmt = 0      -- 틱 데미지는 PowerStrike.DotPerStack가 결정(획득마다 중첩)
+			statKey = ""
+		elseif kind == "ultgauge" then
+			ruid = self.ultPotionRuid
+			buffKind = "ultgauge"
+			defaultAmt = 10     -- 궁극기 게이지 % (MaxGauge의 10%). p3로 지정 가능
+			statKey = ""
+		elseif kind == "invincible" then
+			ruid = self.invincibleRuid
+			buffKind = "invincible"
+			defaultAmt = 0      -- 무적 지속은 PlayerHealth.InvincibleDuration이 결정
+			statKey = ""
+		elseif kind == "hitbuff" then
+			ruid = self.hitBuffRuid
+			buffKind = "hitbuff"
+			defaultAmt = 0      -- 추가 발사 수는 PowerStrike.HitPerStack가 결정(획득마다 중첩)
+			statKey = ""
 		end
 		local ay = cfg.floorY + 0.7
 		local it = self:SpawnProp(map, "AtkBuff_" .. tostring(math.floor(x)), x, ay, ruid)

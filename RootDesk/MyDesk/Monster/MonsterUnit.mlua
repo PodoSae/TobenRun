@@ -107,6 +107,27 @@ script MonsterUnit extends Component
     property any body = nil
     property boolean dead = false
 
+    -- ── 슬로우검 / 도트검 디버프(검기 명중 시 공격자의 PowerStrike에서 읽어 이 몬스터에 적용) ──
+    -- 몬스터는 스테이지마다 새로 스폰/삭제되므로, 이 몬스터 개체 수명 = "스테이지 종료까지" 유지와 동일하다.
+    @HideFromInspector property number slowApplied = 1     -- 적용된 감속 배율(1=정상). 더 강한 감속만 반영.
+    @HideFromInspector property number dotDps = 0          -- 틱당 도트 데미지
+    @HideFromInspector property number dotRemain = 0       -- 남은 도트 지속(초)
+    @HideFromInspector property number dotTickTimer = 0    -- 틱 누적 타이머
+    @HideFromInspector property any dotOwner = nil         -- 도트를 건 플레이어(도트 처치 시 메소/게이지 지급용)
+    @DisplayName("도트 초당 틱 수")
+    property number DotTicksPerSec = 3
+
+    -- 타수(제자리 다단히트): 검기 명중 시 짧은 간격(BurstInterval)으로 명중 데미지를 burstHits번 더 가한다.
+    @HideFromInspector property integer burstHits = 0
+    @HideFromInspector property number burstDamage = 0
+    @HideFromInspector property number burstTimer = 0
+    @HideFromInspector property any burstOwner = nil
+    @DisplayName("다단히트 타격 간격(초)")
+    @MinValue(0.02)
+    @MaxValue(0.5)
+    @Delta(0.01)
+    property number BurstInterval = 0.07
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
         -- Loads stats from the data table, fills HP, and caches movement components for patrol. Server only.
@@ -186,6 +207,8 @@ script MonsterUnit extends Component
         -- Beam (or any HitBox attack) damages the monster. On HP<=0, grant meso to the killer and die.
         if self.dead then return end
         self.Hp = self.Hp - event.TotalDamage
+        -- 슬로우검/도트검/타수: 이 검기를 쏜 플레이어의 PowerStrike 스테이지 버프를 이 몬스터에 적용(감속/도트/다단히트).
+        self:ApplyAttackerDebuffs(event.AttackerEntity, event.TotalDamage)
         -- 몬스터 전용 피격 타격 이펙트(전 클라). 캐릭터 피격(빨간 스파크)과 구분되는 노란 사방 스파크.
         self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
         -- 피격 애니메이션: hit 클립이 있으면 스프라이트 스왑(정식), 없으면 히트 플래시로 폴백.
@@ -313,6 +336,120 @@ script MonsterUnit extends Component
         self:Patrol()
         self:JumpTick(delta)
         self:ContactCheck(delta)
+        self:DotTick(delta)
+        self:BurstTick(delta)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplyAttackerDebuffs(Entity attacker, number hitDamage)
+        -- 검기 명중 시, 그 검기를 쏜 플레이어의 PowerStrike 슬로우검/도트검/타수 스테이지 버프를 이 몬스터에 적용.
+        -- attacker = SwordBeam 엔티티 → OwnerEntity(플레이어) → PowerStrike. hitDamage = 이 명중의 데미지(다단히트 추가타에 사용).
+        if not isvalid(attacker) then return end
+        ---@type SwordBeam
+        local beam = attacker:GetComponent("script.SwordBeam")
+        if beam == nil or not isvalid(beam.OwnerEntity) then return end
+        ---@type PowerStrike
+        local ps = beam.OwnerEntity:GetComponent("script.PowerStrike")
+        if ps == nil then return end
+        -- 슬로우: 더 강한 감속(더 작은 배율)만 반영. 스테이지 종료(=몬스터 소멸)까지 유지.
+        if ps.stageSlowMult < self.slowApplied then
+            self:ApplySlow(ps.stageSlowMult)
+        end
+        -- 도트: 틱당 데미지 + 지속(재명중 시 갱신). 처치 크레딧용 소유자 기록.
+        if ps.stageDotDamage > 0 then
+            self:ApplyDot(ps.stageDotDamage, ps.DotDuration, beam.OwnerEntity)
+        end
+        -- 타수(제자리 다단히트): 이 명중 데미지를 stageExtraHits번 더 짧은 간격으로 가한다.
+        if ps.stageExtraHits > 0 and hitDamage > 0 then
+            self:StartHitBurst(ps.stageExtraHits, hitDamage, beam.OwnerEntity)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplySlow(number mult)
+        -- 몬스터 이동속도를 mult 배율로 저하(PatrolSpeed 기준 InputSpeed 재설정). 이 개체 수명 동안 유지.
+        self.slowApplied = mult
+        if isvalid(self.movement) then
+            self.movement.InputSpeed = self.PatrolSpeed * mult
+        end
+        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' slowed x" .. tostring(mult))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplyDot(number dps, number duration, Entity owner)
+        -- 도트 부여/갱신: 틱당 dps(더 큰 값 반영), duration초 동안 초당 DotTicksPerSec회. 재명중 시 지속 갱신.
+        if dps > self.dotDps then self.dotDps = dps end
+        self.dotRemain = duration
+        self.dotOwner = owner
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DotTick(number delta)
+        -- 도트 데미지: 남은 지속 동안 초당 DotTicksPerSec회 dotDps 데미지. HP<=0이면 도트 처치 처리.
+        if self.dotRemain <= 0 or self.dotDps <= 0 then return end
+        self.dotRemain = self.dotRemain - delta
+        local interval = 1.0 / self.DotTicksPerSec
+        self.dotTickTimer = self.dotTickTimer + delta
+        while self.dotTickTimer >= interval do
+            self.dotTickTimer = self.dotTickTimer - interval
+            if self.dead then return end
+            self.Hp = self.Hp - self.dotDps
+            self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
+            if self.Hp <= 0 then
+                self.Hp = 0
+                self:DieCredited(self.dotOwner)
+                return
+            end
+        end
+        if self.dotRemain <= 0 then
+            self.dotDps = 0
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void StartHitBurst(integer count, number damage, Entity owner)
+        -- 타수(제자리 다단히트): 이 몬스터에 damage를 count번 더, BurstInterval 간격으로 가한다. 재명중 시 남은 버스트에 누적.
+        self.burstHits = self.burstHits + count
+        self.burstDamage = damage
+        self.burstOwner = owner
+    end
+
+    @ExecSpace("ServerOnly")
+    method void BurstTick(number delta)
+        -- 남은 추가 타격을 BurstInterval마다 1회씩 가한다(제자리 다단히트). HP<=0이면 처치.
+        if self.burstHits <= 0 or self.burstDamage <= 0 then return end
+        local interval = self.BurstInterval
+        if interval <= 0 then interval = 0.07 end
+        self.burstTimer = self.burstTimer + delta
+        while self.burstTimer >= interval and self.burstHits > 0 do
+            self.burstTimer = self.burstTimer - interval
+            if self.dead then return end
+            self.burstHits = self.burstHits - 1
+            self.Hp = self.Hp - self.burstDamage
+            self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
+            if self.Hp <= 0 then
+                self.Hp = 0
+                self:DieCredited(self.burstOwner)
+                return
+            end
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DieCredited(Entity owner)
+        -- 검기 엔티티가 아닌 소스(도트/다단히트)로 처치: 크레딧(메소+궁극기 게이지)을 소유 플레이어에게 직접 지급.
+        if self.dead then return end
+        self.dead = true
+        if isvalid(owner) then
+            ---@type PlayerWallet
+            local wallet = owner:GetComponent("script.PlayerWallet")
+            if isvalid(wallet) then wallet:AddMeso(self.MesoReward) end
+            ---@type UltimateSkill
+            local ult = owner:GetComponent("script.UltimateSkill")
+            if ult ~= nil then ult:AddGauge(ult.KillGaugeGain) end
+        end
+        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' died (dot/burst)")
+        self.Entity:Destroy(0.4)
     end
 
     @ExecSpace("ServerOnly")

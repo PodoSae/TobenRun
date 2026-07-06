@@ -3,15 +3,36 @@
 script PlayerHudUI extends Logic
 
     -- Bound to DefaultGroup HP-bar entities by the UIBuilder (UUIDs injected on write).
-    property SpriteGUIRendererComponent hpFill = "d987cab6-2583-498e-addb-49591d4b00a3"
-    property TextComponent hpLabel = "14cb0b5c-041f-4622-99aa-f2a15e60cfb7"
+    property SpriteGUIRendererComponent hpFill = "6c704fcf-e98d-4c73-a9ce-534facf052f2"
+    property TextComponent hpLabel = "80e4390a-06e4-4bc3-ade0-b6bd10d08efe"
 
-    -- Ultimate gauge bar (UUIDs injected by the UIBuilder on write).
-    property SpriteGUIRendererComponent ultFill = "c4ad8dcf-5af3-46cc-91dc-c1149b9492d6"
-    property TextComponent ultLabel = "b3d60bb8-36e3-4c0e-bb73-dc5ae59219c2"
+    -- Player-frame nickname label (top-left portrait cluster). UUID injected by the UIBuilder on write.
+    property TextComponent nameLabel = "5fbaff15-c2e3-4710-b242-ae72a4e866eb"
+    -- Cache of the last nickname pushed to the label so we only write when it actually changes.
+    property string lastName = ""
 
-    -- Throttle counter for the once-per-second gauge diagnostic log (remove after debugging).
-    property integer dbgFrame = 0
+    -- Ultimate cooldown icon (bottom-right): a clockwise gray radial overlays the skill icon while the
+    -- ultimate is still charging (covers the not-yet-charged portion; clears when ready). UUIDs injected on write.
+    property SpriteGUIRendererComponent ultCdFill = "75a5be7d-1192-40cc-a91c-2aa87829cb72"
+    property TextComponent ultCdText = "dcbb6e28-b5fc-4df4-abda-45c116ce63d0"
+
+    -- 지속시간 있는 로그라이트 버프의 우상단 쿨타임 아이콘(자석/슬로우검/도트검). 각 group은 활성 시에만 Enable,
+    -- fill(라디얼 회색)은 경과 비율을 덮고, text는 남은 초. UUID는 UIBuilder가 주입.
+    property Entity buffMagnetGroup = "cd73ff9a-289a-4760-a502-6af77e72e29e"
+    property SpriteGUIRendererComponent buffMagnetFill = "550dd78c-c47e-4fd6-b624-04cbc9d062eb"
+    property TextComponent buffMagnetText = "87a6f464-2204-4696-9930-a0236bf376cc"
+    property Entity buffSlowGroup = "d84de743-97a5-4651-a619-6e32339cca0e"
+    property SpriteGUIRendererComponent buffSlowFill = "53ca7124-b4f7-4c22-aabe-b9422f03be89"
+    property TextComponent buffSlowText = "64097c11-5a52-4254-b713-b72259389b1e"
+    property Entity buffDotGroup = "44c120c1-d995-4787-88dd-565d56aebae3"
+    property SpriteGUIRendererComponent buffDotFill = "6ca1ddaa-1120-4eac-be1a-ec5ef930809b"
+    property TextComponent buffDotText = "a1fccf39-8919-4148-9d92-26af2e9a4bbd"
+    property Entity buffInvincibleGroup = "19b132ad-2433-4f11-ad47-6ccb06f12af4"
+    property SpriteGUIRendererComponent buffInvincibleFill = "23ad6b55-05dc-40d4-a53c-f57f3101f454"
+    property TextComponent buffInvincibleText = "9b54b4f9-0164-4f1e-933f-d44022c73c6b"
+    property Entity buffHitGroup = "a97b05ef-f6f4-42a0-8bd6-2220bd5a60b2"
+    property SpriteGUIRendererComponent buffHitFill = "47499881-9733-4813-8818-7ee5f9fd8dfb"
+    property TextComponent buffHitText = "8a0a0852-ac33-41dc-bff1-7fa67b48f470"
 
     method void OnUpdate(number delta)
         -- Drives both HUD bars each frame. HP and ULT update INDEPENDENTLY so that a missing/nil
@@ -21,6 +42,79 @@ script PlayerHudUI extends Logic
 
         self:UpdateHpBar(player)
         self:UpdateUltGauge(player)
+        self:UpdateName(player)
+        self:UpdateBuffIcons(player)
+    end
+
+    method void UpdateBuffIcons(Entity player)
+        -- 지속시간 있는 버프 4종의 우상단 쿨타임 아이콘을 갱신한다(자석=MagnetBuff 클라 로컬, 슬로우/도트=PowerStrike @Sync, 무적=PlayerHealth @Sync).
+        -- 자석: 클라 @Logic의 남은 시간 사용.
+        if _MagnetBuff ~= nil then
+            self:SetBuffIcon(self.buffMagnetGroup, self.buffMagnetFill, self.buffMagnetText,
+                _MagnetBuff.remain, _MagnetBuff.activeDuration)
+        end
+
+        local now = _UtilLogic.ServerElapsedSeconds
+
+        -- 무적: PlayerHealth의 @Sync 종료 시각 - 서버 경과시간 = 남은 시간.
+        ---@type PlayerHealth
+        local hp = player:GetComponent("script.PlayerHealth")
+        if hp ~= nil then
+            local invRemain = (hp.invincibleEnd > 0) and (hp.invincibleEnd - now) or 0
+            self:SetBuffIcon(self.buffInvincibleGroup, self.buffInvincibleFill, self.buffInvincibleText, invRemain, hp.InvincibleDuration)
+        end
+
+        -- 슬로우검/도트검: PowerStrike의 @Sync 만료 시각 - 서버 경과시간 = 남은 시간.
+        ---@type PowerStrike
+        local ps = player:GetComponent("script.PowerStrike")
+        if ps == nil then
+            self:SetBuffIcon(self.buffSlowGroup, self.buffSlowFill, self.buffSlowText, 0, 1)
+            self:SetBuffIcon(self.buffDotGroup, self.buffDotFill, self.buffDotText, 0, 1)
+            self:SetBuffIcon(self.buffHitGroup, self.buffHitFill, self.buffHitText, 0, 1)
+            return
+        end
+        local slowRemain = (ps.buffSlowEnd > 0) and (ps.buffSlowEnd - now) or 0
+        local dotRemain = (ps.buffDotEnd > 0) and (ps.buffDotEnd - now) or 0
+        local hitRemain = (ps.buffHitEnd > 0) and (ps.buffHitEnd - now) or 0
+        self:SetBuffIcon(self.buffSlowGroup, self.buffSlowFill, self.buffSlowText, slowRemain, ps.SlowBuffDuration)
+        self:SetBuffIcon(self.buffDotGroup, self.buffDotFill, self.buffDotText, dotRemain, ps.DotBuffDuration)
+        self:SetBuffIcon(self.buffHitGroup, self.buffHitFill, self.buffHitText, hitRemain, ps.HitBuffDuration)
+    end
+
+    method void SetBuffIcon(Entity group, SpriteGUIRendererComponent fill, TextComponent text, number remain, number duration)
+        -- 남은 시간이 있으면 아이콘을 켜고 라디얼(회색=경과분)과 남은 초를 갱신, 없으면 숨긴다.
+        if not isvalid(group) then return end
+        if remain <= 0 then
+            if group.Enable then group.Enable = false end
+            return
+        end
+        if not group.Enable then group.Enable = true end
+        local dur = (duration > 0) and duration or 1
+        local ratio = remain / dur
+        if ratio < 0 then ratio = 0 end
+        if ratio > 1 then ratio = 1 end
+        if isvalid(fill) then
+            -- 회색 오버레이는 '경과분'(1-ratio)을 덮어 시계방향으로 차오르다 만료 시 아이콘을 가린다.
+            fill.FillAmount = 1 - ratio
+        end
+        if isvalid(text) then
+            text.Text = tostring(math.ceil(remain)) .. "s"
+        end
+    end
+
+    method void UpdateName(Entity player)
+        -- Mirrors the local player's nickname onto the portrait-cluster nameplate.
+        -- Nickname is a @Sync field, so it may be empty for the first frame(s) — only write when non-empty
+        -- and only when it changed, to avoid touching the TextComponent every frame.
+        if not isvalid(self.nameLabel) then return end
+        local pc = player.PlayerComponent
+        if pc == nil then return end
+        local nm = pc.Nickname
+        if nm == nil or nm == "" then return end
+        if nm ~= self.lastName then
+            self.lastName = nm
+            self.nameLabel.Text = nm
+        end
     end
 
     method void UpdateHpBar(Entity player)
@@ -46,21 +140,9 @@ script PlayerHudUI extends Logic
     end
 
     method void UpdateUltGauge(Entity player)
-        -- Mirrors the local player's synced ultimate gauge (0..100) onto the HUD gauge bar.
+        -- Mirrors the local player's synced ultimate gauge (0..100) onto the bottom-right cooldown icon.
         ---@type UltimateSkill
         local ult = player:GetComponent("script.UltimateSkill")
-
-        -- Once-per-second diagnostic: is the component found, is the synced Gauge moving, are the
-        -- bound UI components valid? (Temporary — remove once the gauge is confirmed working.)
-        self.dbgFrame += 1
-        if self.dbgFrame % 60 == 0 then
-            local g = -1
-            if ult ~= nil then g = ult.Gauge end
-            log("[PlayerHudUI] ult=" .. tostring(ult ~= nil) .. " Gauge=" .. tostring(g)
-                .. " ultFillValid=" .. tostring(isvalid(self.ultFill))
-                .. " ultLabelValid=" .. tostring(isvalid(self.ultLabel)))
-        end
-
         if ult == nil then return end
 
         local maxG = ult.MaxGauge
@@ -69,14 +151,18 @@ script PlayerHudUI extends Logic
         if ratio < 0 then ratio = 0 end
         if ratio > 1 then ratio = 1 end
 
-        if isvalid(self.ultFill) then
-            self.ultFill.FillAmount = ratio
+        -- Bottom-right cooldown icon: the gray radial covers the REMAINING charge (1 - ratio) and sweeps
+        -- away clockwise as the gauge fills; it clears entirely and the label shows "R" once ready.
+        local remain = 1 - ratio
+        if remain < 0 then remain = 0 end
+        if isvalid(self.ultCdFill) then
+            self.ultCdFill.FillAmount = remain
         end
-        if isvalid(self.ultLabel) then
+        if isvalid(self.ultCdText) then
             if ratio >= 1 then
-                self.ultLabel.Text = "ULT  R!"
+                self.ultCdText.Text = "R"
             else
-                self.ultLabel.Text = "ULT  " .. tostring(math.floor(ratio * 100 + 0.5)) .. "%"
+                self.ultCdText.Text = tostring(math.floor(ratio * 100 + 0.5)) .. "%"
             end
         end
     end

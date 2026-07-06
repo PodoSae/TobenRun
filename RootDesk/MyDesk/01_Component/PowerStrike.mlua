@@ -7,6 +7,23 @@ script PowerStrike extends SkillComponent
     property string PowerStatKey = "AttackPower"
     property number Damage = 100
 
+    -- 검기 발사 시 플레이어 아바타의 공격 애니메이션. ATTACK 상태로 전환해 스윙 모션을 재생하고, 오토러너의 이동
+    -- 복귀는 PlayerControllerComponent가 관리한다(점프→착지→달리기 복귀와 동일). AttackClipRUID를 지정하면 그
+    -- 커스텀 스윙 animationclip을, 비우면 내장 attack 모션(1H무기 스윙 / 무기 없으면 기본 포즈)을 쓴다.
+    @DisplayName("공격 애니메이션 재생")
+    property boolean PlayAttackAnimation = true
+    @DisplayName("공격 애니메이션 클립 RUID(선택)")
+    @Description("비우면 내장 attack 모션. 지정 시 ATTACK 상태에 이 animationclip을 매핑(JumpAnimSetup과 동일 방식)")
+    property string AttackClipRUID = ""
+    -- 공격 애니메이션 배율: 검기 발사 간격(유효 쿨다운)에 맞춰 스윙 속도를 스케일한다.
+    -- 실제 배율 = AttackAnimBaseRate × (Cooldown / 현재 유효쿨다운) → 공격속도가 빠를수록(쿨다운↓) 스윙도 빨라져 발사횟수와 싱크가 맞는다.
+    @DisplayName("공격 애니메이션 기본 배율")
+    @Description("기준 쿨다운(Cooldown)에서의 스윙 재생 배율. 공격속도가 빨라지면 이 값에 비례해 커진다")
+    @MinValue(0.3)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number AttackAnimBaseRate = 1.33
+
     -- Auto-fire gate: fire only when a monster is within DetectRange ahead of the player.
     @DisplayName("감지 거리")
     @Description("이 거리(월드 유닛) 안 전방에 몬스터가 있을 때만 검기 발사")
@@ -52,6 +69,66 @@ script PowerStrike extends SkillComponent
     -- 검기 관통 수 가산(정수) — FireBeam이 BasePierce + 이 값을 검기에 실어 그만큼 적을 관통.
     @HideFromInspector property number stagePierceBonus = 0
 
+    -- ── 슬로우검 / 도트검 (스테이지 한정, 서버 권위. ResetStageBuff가 초기화). 몬스터가 검기 명중 시 이 값들을 읽어 자기
+    --    이동속도 저하 / 도트를 스스로 적용한다(MonsterUnit.ApplyAttackerDebuffs / MushmomBoss.ApplyAttackerDot). ──
+    -- 슬로우검: 검기 명중 시 몬스터 이동속도에 곱하는 배율(1=감속 없음). 여러 개 획득 시 더 작아짐(=더 느림, SlowFloor 하한).
+    @HideFromInspector property number stageSlowMult = 1
+    @DisplayName("슬로우검 1개당 감속 배율")
+    @Description("획득 1개당 몬스터 이동속도에 곱하는 값(0.6 = 60%로 감속). 중첩 시 곱해져 더 느려짐")
+    @MinValue(0.1)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number SlowStrength = 0.6
+    @DisplayName("슬로우 최저 배율(하한)")
+    @MinValue(0.05)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number SlowFloor = 0.15
+    -- 도트검: 검기 명중 시 몬스터에 거는 초당 3틱 DoT의 '틱당' 데미지(획득마다 가산=중첩).
+    @HideFromInspector property number stageDotDamage = 0
+    @DisplayName("도트검 1개당 틱 데미지")
+    @Description("획득 1개당 추가되는 도트 틱 데미지(초당 3회 적용). 중첩 가능")
+    @MinValue(0)
+    @MaxValue(100)
+    @Delta(1)
+    property number DotPerStack = 8
+    @DisplayName("도트 지속시간(초)")
+    @Description("검기 명중 시 몬스터가 이 시간 동안 도트를 받는다(재명중 시 갱신)")
+    @MinValue(0.5)
+    @MaxValue(10)
+    @Delta(0.5)
+    property number DotDuration = 3.0
+
+    -- 슬로우검/도트검 버프 자체의 지속시간(스테이지 끝까지가 아니라 획득 후 N초). 이 시간 동안만 검기 명중에 감속/도트를
+    -- 부여한다. 재획득 시 지속 갱신. 만료 시각을 @Sync해 HUD 쿨타임 아이콘이 남은 시간을 계산한다.
+    @DisplayName("슬로우검 버프 지속(초)")
+    @MinValue(1)
+    @MaxValue(60)
+    @Delta(1)
+    property number SlowBuffDuration = 5.0
+    @DisplayName("도트검 버프 지속(초)")
+    @MinValue(1)
+    @MaxValue(60)
+    @Delta(1)
+    property number DotBuffDuration = 5.0
+    -- 버프 종료 시각(ServerElapsedSeconds 기준, 0=비활성). @Sync — 클라 HUD가 remain = end - ServerElapsedSeconds로 표시.
+    @HideFromInspector @Sync property number buffSlowEnd = 0
+    @HideFromInspector @Sync property number buffDotEnd = 0
+
+    -- 타수(제자리 다단히트) 아이템: 명중한 적이 stageExtraHits만큼 추가 타격을 받는다. 획득 후 N초 지속(재획득 시 갱신).
+    -- 만료 시각을 @Sync해 HUD 쿨타임 아이콘이 남은 시간을 계산한다.
+    @HideFromInspector property integer stageExtraHits = 0
+    @DisplayName("타수 아이템 1개당 추가 타격")
+    @MinValue(1)
+    @MaxValue(10)
+    property integer HitPerStack = 1
+    @DisplayName("타수 버프 지속(초)")
+    @MinValue(1)
+    @MaxValue(60)
+    @Delta(1)
+    property number HitBuffDuration = 5.0
+    @HideFromInspector @Sync property number buffHitEnd = 0
+
     @DisplayName("기본 관통 수")
     @Description("버프 없이 검기가 관통하는 적 수(1 = 첫 적에 소멸). 여기에 관통 버프가 가산된다")
     @MinValue(1)
@@ -64,6 +141,18 @@ script PowerStrike extends SkillComponent
         __base:OnBeginPlay()
 
         self.controller = self.Entity.PlayerControllerComponent
+
+        -- 커스텀 공격 클립을 쓰면 ATTACK 상태에 매핑(서버에서 SetActionSheet → @Sync로 클라 전파). 비우면 내장 attack.
+        if self.PlayAttackAnimation and self.AttackClipRUID ~= "" then
+            local asac = self.Entity.AvatarStateAnimationComponent
+            if isvalid(asac) then
+                asac:SetActionSheet("ATTACK", self.AttackClipRUID)
+            end
+        end
+        -- 초기 공격 애니메이션 배율 설정(이후 발사마다 쿨다운 변화 시 갱신).
+        if self.PlayAttackAnimation then
+            self:SyncAttackAnimRate()
+        end
 
         -- Object pool: every SwordBeam this skill ever spawns, reused instead of destroyed.
         self._T.beams = {}
@@ -87,6 +176,24 @@ script PowerStrike extends SkillComponent
                 self._T.ready = true
                 log("[PowerStrike] startup grace elapsed - ready to fire")
             end
+        end
+
+        -- 슬로우검/도트검 버프 만료: 지속시간이 지나면 감속/도트 부여 능력을 끈다(이미 걸린 몬스터 효과는 그대로 유지).
+        local now = _UtilLogic.ServerElapsedSeconds
+        if self.buffSlowEnd > 0 and now >= self.buffSlowEnd then
+            self.buffSlowEnd = 0
+            self.stageSlowMult = 1
+            log("[PowerStrike] slow sword buff expired")
+        end
+        if self.buffDotEnd > 0 and now >= self.buffDotEnd then
+            self.buffDotEnd = 0
+            self.stageDotDamage = 0
+            log("[PowerStrike] dot sword buff expired")
+        end
+        if self.buffHitEnd > 0 and now >= self.buffHitEnd then
+            self.buffHitEnd = 0
+            self.stageExtraHits = 0
+            log("[PowerStrike] hit buff expired")
         end
     end
 
@@ -135,6 +242,15 @@ script PowerStrike extends SkillComponent
         log("[PowerStrike] stage pierce bonus -> " .. tostring(self.stagePierceBonus))
     end
 
+    @ExecSpace("ServerOnly")
+    method void AddStageHit()
+        -- 타수(제자리 다단히트) 아이템: 명중한 적이 받는 추가 타격 수를 HitPerStack만큼 가산(중첩). 지속 N초(재획득 시 갱신).
+        self.stageExtraHits = self.stageExtraHits + self.HitPerStack
+        self.buffHitEnd = _UtilLogic.ServerElapsedSeconds + self.HitBuffDuration
+        log("[PowerStrike] stage extra hits -> " .. tostring(self.stageExtraHits)
+            .. " for " .. tostring(self.HitBuffDuration) .. "s")
+    end
+
     method number GetEffectiveCooldown()
         -- 부모(스탯 기반 쿨다운)에 스테이지 공격속도 버프를 얹는다: 배율이 클수록 쿨다운이 짧아진다.
         -- 부모 SkillComponent.GetEffectiveCooldown은 @ExecSpace 없음 → 오버라이드도 없이 시그니처 일치(LEA-3014 방지).
@@ -144,6 +260,25 @@ script PowerStrike extends SkillComponent
         return base / mult
     end
 
+    @ExecSpace("ServerOnly")
+    method void AddStageSlowSword()
+        -- 슬로우검 획득: 이후 검기 명중 시 몬스터를 감속시키는 배율을 강화(중첩, SlowFloor 하한). 지속 N초(재획득 시 갱신).
+        self.stageSlowMult = self.stageSlowMult * self.SlowStrength
+        if self.stageSlowMult < self.SlowFloor then self.stageSlowMult = self.SlowFloor end
+        self.buffSlowEnd = _UtilLogic.ServerElapsedSeconds + self.SlowBuffDuration
+        log("[PowerStrike] slow sword -> slowMult=" .. tostring(self.stageSlowMult)
+            .. " for " .. tostring(self.SlowBuffDuration) .. "s")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddStageDotSword()
+        -- 도트검 획득: 검기 명중 시 몬스터에 거는 틱당 도트 데미지를 가산(중첩). 지속 N초(재획득 시 갱신).
+        self.stageDotDamage = self.stageDotDamage + self.DotPerStack
+        self.buffDotEnd = _UtilLogic.ServerElapsedSeconds + self.DotBuffDuration
+        log("[PowerStrike] dot sword -> dotDmg=" .. tostring(self.stageDotDamage)
+            .. " for " .. tostring(self.DotBuffDuration) .. "s")
+    end
+
     @ExecSpace("Server")
     method void ResetStageBuff()
         -- 스테이지 시작/이탈 시 로그라이트 버프 전부 초기화(효과는 스테이지 내에서만 유지). RunGameHud(클라)에서
@@ -151,6 +286,12 @@ script PowerStrike extends SkillComponent
         self.stageAttackMult = 1
         self.stageAttackSpeedMult = 1
         self.stagePierceBonus = 0
+        self.stageSlowMult = 1
+        self.stageDotDamage = 0
+        self.buffSlowEnd = 0
+        self.buffDotEnd = 0
+        self.stageExtraHits = 0
+        self.buffHitEnd = 0
         log("[PowerStrike] stage buffs reset")
     end
 
@@ -170,7 +311,15 @@ script PowerStrike extends SkillComponent
         -- (which the runner never resets and a hit corrupts). Fallback +1 = run direction.
         local direction = self._T.aimDir or 1
 
-        self:FireBeam(direction, effectiveDamage)
+        -- 검기 1발 발사. 타수(제자리 다단히트) 아이템은 발사 수를 늘리지 않고, 명중한 적이 자기 쪽에서 stageExtraHits만큼
+        -- 추가 타격(짧은 버스트)을 받는다(MonsterUnit/MushmomBoss 처리) → 발사 파이프라인은 그대로 1발.
+        self:FireBeam(direction, effectiveDamage, 0)
+
+        -- 공격 애니메이션: 발사 간격(쿨다운)에 맞춰 ATTACK 배율을 갱신한 뒤 전 클라에서 스윙 재생. 이동 복귀는 컨트롤러가 처리.
+        if self.PlayAttackAnimation then
+            self:SyncAttackAnimRate()
+            self:PlayAttackAnim()
+        end
 
         -- 검기 스윙 사운드는 SwordBeam이 발사(Launch) 시 자체 동기화(@Sync launchSeq → OnSyncProperty)로 재생한다.
         -- 이렇게 해야 사운드가 검기 비주얼과 같은 복제 채널을 타서 싱크가 맞는다(별도 Multicast는 채널이 달라 어긋남).
@@ -184,10 +333,10 @@ script PowerStrike extends SkillComponent
     end
 
     @ExecSpace("ServerOnly")
-    method void FireBeam(number direction, number damage)
+    method void FireBeam(number direction, number damage, number lag)
         -- Acquires a pooled (or fresh) beam and launches it in the facing direction. The beam owns its
         -- own flight/hit config (Speed, MaxLifetime, hitbox, AttackInfo); PowerStrike supplies only the
-        -- spawn point, direction, and stat-scaled damage.
+        -- spawn point, direction, and stat-scaled damage. `lag`(월드유닛)만큼 뒤에서 출발시켜 다단히트를 순차로 만든다.
         local beam = self:AcquireBeam()
         if beam == nil then
             log("[PowerStrike] Could not acquire a beam")
@@ -202,7 +351,8 @@ script PowerStrike extends SkillComponent
         if pierce < 1 then pierce = 1 end
 
         local wp = self.Entity.TransformComponent.WorldPosition
-        local startPos = Vector3(wp.x + direction * self.BeamForwardOffset, wp.y + self.BeamVerticalOffset, wp.z)
+        -- 다단히트: lag만큼 진행 방향 반대(뒤)에서 출발 → 추가 검기가 적에 조금 늦게 닿아 순차 타격이 된다.
+        local startPos = Vector3(wp.x + direction * (self.BeamForwardOffset - lag), wp.y + self.BeamVerticalOffset, wp.z)
         beam:Launch(startPos, direction, damage, pierce)
     end
 
@@ -312,6 +462,39 @@ script PowerStrike extends SkillComponent
         -- and it never depends on the hit-corruptible LookDirectionX.
         self._T.aimDir = 1
         return true
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SyncAttackAnimRate()
+        -- ATTACK 상태의 애니메이션 배율을 현재 유효 쿨다운에 맞춰 설정한다: 배율 = AttackAnimBaseRate × (Cooldown / 유효쿨다운).
+        -- 공격속도가 빨라지면(쿨다운↓) 배율이 커져 스윙이 빨라지고 발사횟수와 싱크가 맞는다. StateToAvatarBodyActionSheet는
+        -- @Sync라 서버 설정이 전 클라에 전파. 배율이 안 바뀌면 재설정을 생략해 @Sync churn을 막는다(발사마다 호출되므로).
+        local asac = self.Entity.AvatarStateAnimationComponent
+        if not isvalid(asac) then return end
+        local cd = self:GetEffectiveCooldown()
+        if cd <= 0.01 then cd = 0.01 end
+        local baseCd = self.Cooldown
+        if baseCd <= 0 then baseCd = cd end
+        local rate = self.AttackAnimBaseRate * (baseCd / cd)
+        if rate < 0.3 then rate = 0.3 end
+        if rate > 6 then rate = 6 end
+        if self._T.lastAnimRate ~= nil and math.abs(self._T.lastAnimRate - rate) < 0.01 then return end
+        self._T.lastAnimRate = rate
+        -- ATTACK 매핑의 body-action 이름은 유지(커스텀 클립이면 그 RUID, 아니면 "attack")하고 PlayRate만 갱신.
+        local name = "attack"
+        if self.AttackClipRUID ~= "" then name = self.AttackClipRUID end
+        asac.StateToAvatarBodyActionSheet["ATTACK"] = AvatarBodyActionElement(name, rate)
+        log("[PowerStrike] attack anim rate=" .. string.format("%.2f", rate) .. " (cd=" .. string.format("%.2f", cd) .. ")")
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayAttackAnim()
+        -- 전 클라에서 플레이어 아바타를 ATTACK 상태로 전환해 공격(스윙) 모션을 재생한다. StateComponent:ChangeState는
+        -- 러너 스택(PlayerControllerComponent + StateComponent)에서 권장되는 방식이고, 컨트롤러가 이동 시 자동으로
+        -- MOVE로 복귀시킨다(점프→달리기 복귀와 동일). BodyActionSelector 직접 쓰기는 컨트롤러가 덮으므로 쓰지 않는다.
+        local st = self.Entity.StateComponent
+        if not isvalid(st) then return end
+        st:ChangeState("ATTACK")
     end
 
     @ExecSpace("Multicast")

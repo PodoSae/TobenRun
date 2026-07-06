@@ -24,6 +24,27 @@ script PlayerHealth extends Component
     @HideFromInspector property number stageRegenPerSec = 0     -- 초당 HP 재생량(가산 누적)
     @HideFromInspector property integer stageShieldCharges = 0  -- 남은 보호막 충전(피격 1회 완전 무효화)
 
+    -- ── 무적 아이템: 획득 시 InvincibleDuration초 동안 무적(1회성), 시간이 지나면 효과 소멸. 지속 아님. ResetStageHealthBuffs가 초기화 ──
+    @DisplayName("무적 지속(초)")
+    @Description("아이템을 먹으면 이 시간 동안 무적, 이후 자동 소멸(반복 없음). 재획득 시 지속 갱신")
+    @MinValue(0.5)
+    @MaxValue(30)
+    @Delta(0.5)
+    property number InvincibleDuration = 5.0
+    -- 무적 종료 시각(ServerElapsedSeconds 기준, 0=비활성). @Sync — 클라 HUD가 remain = end - ServerElapsedSeconds로 표시.
+    @HideFromInspector @Sync property number invincibleEnd = 0
+    @DisplayName("무적 오라 이펙트 RUID")
+    @Description("무적 창 동안 플레이어에 부착 루프. 방어막 오라(금빛 방패 엠블럼)와 다른 전용 이펙트(세로 빛기둥). 비우면 없음")
+    property string InvincibleAuraRUID = "4f2c4afa515d4419bcaf4da7e972bb9f"
+    @DisplayName("무적 오라 오프셋")
+    property Vector3 InvincibleAuraOffset = Vector3(0, 0.6, 0)
+    @DisplayName("무적 오라 크기 배율")
+    @MinValue(0.2)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number InvincibleAuraScale = 1.0
+    @HideFromInspector property integer invincibleAuraSerial = 0
+
     -- Hit feedback (effects played when the player takes damage). Inspector-tunable.
     -- 피격 카메라 흔들림 — 직관적 타격감을 위해 강하고 짧게(펀치감). 인스펙터에서 조절 가능.
     @DisplayName("카메라 흔들림 강도")
@@ -38,6 +59,18 @@ script PlayerHealth extends Component
     -- number already renders with in this project, so the manual _DamageSkinService:Play call is
     -- guaranteed a real, proven resource to render.
     property string HitSkinRUID = "6ba67548f43f48f29eb23dafd0766383"
+
+    -- 방어막(보호막)/무적으로 피격이 무효화될 때, 데미지 숫자 대신 플레이어 머리 위에 재생하는 애니메이션(animationclip).
+    @DisplayName("피격 무효화 머리 위 애니메이션 RUID")
+    @Description("방어막/무적으로 피해가 막힐 때 데미지 UI 대신 머리 위에 1회 재생")
+    property string BlockAnimRUID = "0418c8d6c6814db48d0bacda8e426ce4"
+    @DisplayName("피격 무효화 애니메이션 오프셋")
+    property Vector3 BlockAnimOffset = Vector3(0, 1.4, 0)
+    @DisplayName("피격 무효화 애니메이션 크기 배율")
+    @MinValue(0.2)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number BlockAnimScale = 1.0
 
     -- 보호막 오라: stageShieldCharges > 0인 동안 플레이어를 감싸 루프 재생되는 이펙트(animationclip). 보호막이
     -- 생기면(0→>0) 붙이고, 마지막 충전이 소진되거나 스테이지 리셋 시 제거한다.
@@ -71,6 +104,14 @@ script PlayerHealth extends Component
         local wp = self.Entity.TransformComponent.WorldPosition
         self.respawnX = wp.x
         self.respawnY = wp.y
+
+        -- 플레이어 피격 데미지 숫자는 PlayHitEffects(수동)로만 띄운다(방어막/무적에서 정상적으로 억제됨). DefaultPlayer 기본
+        -- 자동 데미지스킨(DamageSkinSpawnerComponent)은 HitComponent가 HitEvent를 받으면 TakeDamage/방어막과 무관하게
+        -- 숫자를 스폰하므로, 방어막·무적으로 막은 피격에도 숫자가 뜬다 → 이 자동 스킨을 꺼서 누수를 막는다.
+        -- Component.Enable은 @Sync라 서버에서 끄면 전 클라에 반영된다(보스 SetAutoDamageSkin과 동일 방식).
+        local dss = self.Entity.DamageSkinSpawnerComponent
+        if isvalid(dss) then dss.Enable = false end
+
         log("[PlayerHealth] OnBeginPlay HP=" .. tostring(self.CurrentHp) .. "/" .. tostring(self.MaxHp)
             .. " respawn=(" .. tostring(self.respawnX) .. "," .. tostring(self.respawnY) .. ")")
     end
@@ -80,6 +121,11 @@ script PlayerHealth extends Component
         -- Ticks down the post-hit invulnerability window.
         if self.invulnRemain > 0 then
             self.invulnRemain = self.invulnRemain - delta
+        end
+        -- 무적 아이템(1회성): 지속시간이 지나면 오라를 끄고 종료(반복 없음).
+        if self.invincibleEnd > 0 and _UtilLogic.ServerElapsedSeconds >= self.invincibleEnd then
+            self.invincibleEnd = 0
+            self:HideInvincibleAura()
         end
         -- 로그라이트 체력 재생: 스테이지 재생 버프가 있으면 매 프레임 회복(사망 아닐 때, MaxHp까지).
         if self.stageRegenPerSec > 0 and not self.dead and self.CurrentHp < self.MaxHp then
@@ -130,6 +176,14 @@ script PlayerHealth extends Component
         -- Server-side damage entry point. Ignored while dead, invulnerable, or for non-positive damage.
         if self.dead then return end
         if amount <= 0 then return end
+        -- 무적 아이템: 무적 창 동안 모든 피해 무효. 데미지 숫자 대신 머리 위 블록 애니메이션만 재생(invulnTime로 스팸 방지).
+        if self.invincibleEnd > 0 and _UtilLogic.ServerElapsedSeconds < self.invincibleEnd then
+            if self.invulnRemain <= 0 then
+                self:PlayBlockAnim()
+                self.invulnRemain = self.invulnTime
+            end
+            return
+        end
         if self.invulnRemain > 0 then return end
 
         -- 로그라이트 보호막: 충전이 있으면 이 피격을 완전 무효화하고 충전 1 소모(피해/경직 없음). invuln을 걸어 한 번의
@@ -137,7 +191,8 @@ script PlayerHealth extends Component
         if self.stageShieldCharges > 0 then
             self.stageShieldCharges = self.stageShieldCharges - 1
             self.invulnRemain = self.invulnTime
-            self:PlayShieldBlock()
+            -- 방어막이 피격을 막음: 데미지 숫자 대신 머리 위 블록 애니메이션 재생.
+            self:PlayBlockAnim()
             -- 마지막 충전이 소진되면 오라 제거.
             if self.stageShieldCharges <= 0 then
                 self:HideShieldAura()
@@ -266,6 +321,9 @@ script PlayerHealth extends Component
         end
         -- 스테이지 리셋 시 켜져 있던 보호막 오라도 제거.
         self:HideShieldAura()
+        -- 무적도 초기화(다음 스테이지로 이월 금지).
+        self.invincibleEnd = 0
+        self:HideInvincibleAura()
         log("[PlayerHealth] stage health buffs reset")
     end
 
@@ -286,6 +344,45 @@ script PlayerHealth extends Component
             _EffectService:RemoveEffect(self.shieldAuraSerial)
             self.shieldAuraSerial = 0
         end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void StartInvincible()
+        -- 무적 아이템 획득: InvincibleDuration초 동안 무적(1회성). 시간이 지나면 OnUpdate가 소멸시킨다(반복 없음).
+        -- 재획득 시 남은 시간을 지속으로 갱신.
+        self.invincibleEnd = _UtilLogic.ServerElapsedSeconds + self.InvincibleDuration
+        self:ShowInvincibleAura()
+        log("[PlayerHealth] invincible for " .. tostring(self.InvincibleDuration) .. "s")
+    end
+
+    @ExecSpace("Multicast")
+    method void ShowInvincibleAura()
+        -- 무적 창 동안 전 클라에서 플레이어를 감싸는 오라를 루프 재생. 이미 재생 중이면 무시.
+        if self.InvincibleAuraRUID == "" then return end
+        if self.invincibleAuraSerial ~= 0 then return end
+        self.invincibleAuraSerial = _EffectService:PlayEffectAttached(
+            self.InvincibleAuraRUID, self.Entity, self.InvincibleAuraOffset, 0,
+            Vector3(self.InvincibleAuraScale, self.InvincibleAuraScale, 1), true)
+    end
+
+    @ExecSpace("Multicast")
+    method void HideInvincibleAura()
+        -- 무적 창이 끝나면(또는 스테이지 리셋 시) 오라 제거.
+        if self.invincibleAuraSerial ~= 0 then
+            _EffectService:RemoveEffect(self.invincibleAuraSerial)
+            self.invincibleAuraSerial = 0
+        end
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayBlockAnim()
+        -- 방어막/무적으로 피해가 무효화됐을 때, 데미지 숫자 대신 플레이어 머리 위에 1회 재생하는 애니메이션(전 클라).
+        local e = self.Entity
+        if not isvalid(e) then return end
+        if self.BlockAnimRUID == "" then return end
+        _EffectService:PlayEffectAttached(
+            self.BlockAnimRUID, e, self.BlockAnimOffset, 0,
+            Vector3(self.BlockAnimScale, self.BlockAnimScale, 1), false)
     end
 
     @ExecSpace("Multicast")

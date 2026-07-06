@@ -28,6 +28,9 @@ script Obstacle extends Component
 
     property number aliveTime = 0
     property boolean consumed = false
+    -- One-shot damage guard: the obstacle deals contact damage exactly ONCE, then stays on the field
+    -- (it no longer despawns on hit). Each spawned obstacle is a fresh entity, so no reset is needed.
+    property boolean hitDone = false
 
     -- ── Ultimate knockback (launched fly-off) ──
     -- When the ultimate dash hits this obstacle it is LAUNCHED instead of destroyed: it flies off in the
@@ -74,8 +77,9 @@ script Obstacle extends Component
 
     @ExecSpace("ServerOnly")
     method void OnUpdate(number delta)
-        -- Rises from below to TargetY, checks player contact, and self-destructs on lifetime.
-        -- Once launched by the ultimate, the knockback fly-off takes over all movement.
+        -- Rises from below to TargetY and self-destructs on lifetime. Player contact deals damage ONCE but does
+        -- NOT remove the obstacle (it stays on the field after the hit). Once launched by the ultimate, the
+        -- knockback fly-off takes over all movement.
         if self.launched then
             self:UpdateLaunch(delta)
             return
@@ -103,7 +107,9 @@ script Obstacle extends Component
 
     @ExecSpace("ServerOnly")
     method void CheckHit()
-        -- Damages the first player inside the contact box, then consumes the obstacle.
+        -- Deals contact damage to the first overlapping player ONCE, then stops (hitDone guard). The obstacle
+        -- is NOT removed on hit — it remains on the field; only the lifetime timer or an ultimate launch despawn it.
+        if self.hitDone then return end
         local map = self.Entity.CurrentMap
         if map == nil then return end
         local mapComp = map.MapComponent
@@ -124,7 +130,7 @@ script Obstacle extends Component
                     if hp ~= nil then
                         hp:TakeDamage(self.Damage)
                     end
-                    self:Despawn()
+                    self.hitDone = true
                     return
                 end
             end

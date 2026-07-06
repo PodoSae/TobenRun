@@ -12,6 +12,32 @@ script MushmomBoss extends Component
     -- Stats resolved from the table on begin play (the .model defaults are only fallbacks).
     @Sync property number MaxHp = 500
     @Sync property number Hp = 500
+
+    -- ── 도트검 DoT(검기 명중 시 공격자 PowerStrike.stageDotDamage를 읽어 보스에 적용. 슬로우는 보스 제외 = 이동 연출 보호) ──
+    @HideFromInspector property number dotDps = 0        -- 틱당 도트 데미지
+    @HideFromInspector property number dotRemain = 0     -- 남은 도트 지속(초)
+    @HideFromInspector property number dotTickTimer = 0  -- 틱 누적 타이머
+    @HideFromInspector property any dotOwner = nil       -- 도트를 건 플레이어(ApplyExternalDamage attacker로 전달 → 사망 크레딧)
+    @DisplayName("도트 초당 틱 수")
+    property number DotTicksPerSec = 3
+
+    -- 타수(제자리 다단히트): 검기 명중 시 짧은 간격(BurstInterval)으로 명중 데미지를 burstHits번 더 가한다.
+    @HideFromInspector property integer burstHits = 0
+    @HideFromInspector property number burstDamage = 0
+    @HideFromInspector property number burstTimer = 0
+    @HideFromInspector property any burstOwner = nil
+    @DisplayName("다단히트 타격 간격(초)")
+    property number BurstInterval = 0.07
+    -- 타수 다단히트 데미지 숫자 표시(궁극기처럼 머리 위 crit로 띄우지 않고, 일반 검기 명중 숫자와 눈높이를 맞춰
+    -- 몸 근처에서 좌우로 살짝 흩뿌려 "다닥" 클러스터로 보이게 한다). 인스펙터에서 일반 명중 숫자와 정확히 맞출 수 있다.
+    @DisplayName("타수 숫자 높이(몸 기준)")
+    @Description("타수 다단히트 데미지 숫자가 뜨는 높이(월드유닛). 일반 명중 숫자와 눈높이를 맞추려면 조절")
+    property number BurstSkinOffsetY = 1.0
+    @DisplayName("타수 숫자 좌우 흩뿌림")
+    @Description("연속 타격 숫자가 겹치지 않게 좌우로 흩뿌리는 폭(0 = 제자리)")
+    property number BurstSkinSpreadX = 0.6
+    @DisplayName("타수 숫자 크기")
+    property number BurstSkinScale = 1.0
     property number ContactDamage = 20    -- 몸박: damage dealt to a player on contact
     property number MesoReward = 200       -- meso granted to the killer on death
 
@@ -390,6 +416,16 @@ script MushmomBoss extends Component
     @DisplayName("그로기 이미지")
     @Description("그로기 상태에서 재생되는 비틀거리는 동작 (hit1 클립)")
     property string GroggyRUID = "90fee9416184420a9796a679751d1ec5"
+    -- 그로기 동안 보스 머리 위에 루프 재생되는 이펙트(animationclip). 이전엔 내장 SpinField 파티클이었으나 전용 RUID로 교체.
+    @DisplayName("그로기 머리 위 이펙트 RUID")
+    property string GroggyVfxRUID = "b0bd80f44c1543438ddf8c2c31a0a7ce"
+    @DisplayName("그로기 머리 위 이펙트 오프셋")
+    property Vector3 GroggyVfxOffset = Vector3(0, 1.6, 0)
+    @DisplayName("그로기 머리 위 이펙트 크기 배율")
+    @MinValue(0.2)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number GroggyVfxScale = 1.5
 
     -- Server-only caches / guards.
     property any movement = nil
@@ -483,6 +519,10 @@ script MushmomBoss extends Component
     method void OnUpdate(number delta)
         -- Drives facing, the skill scheduler, 몸박 (contact) damage, and the body-slam charge / groggy states.
         if self.dead then return end
+
+        -- 도트검 도트 + 타수 다단히트: 보스 상태와 무관하게 매 프레임 틱. 등장 연출 중엔 아직 걸릴 수 없다.
+        self:DotTick(delta)
+        self:BurstTick(delta)
 
         -- 등장 낙하 연출 진행 중에는 스킬/추적/몸박 등 모든 로직을 정지하고 낙하만 처리.
         if self.entering then
@@ -1208,17 +1248,19 @@ script MushmomBoss extends Component
 
     @ExecSpace("Multicast")
     method void StartGroggyVfx()
-        -- Dizzy swirl above the boss head (client-side cue for the groggy window). Serial kept per client.
+        -- 그로기 동안 보스 머리 위에 루프 재생되는 이펙트(animationclip, GroggyVfxRUID). 클라별 serial 보관.
         if not isvalid(self.Entity) then return end
-        self._T.groggySerial = _ParticleService:PlayBasicParticleAttached(
-            BasicParticleType.SpinField, self.Entity, Vector3(0, 1.9, 0), 0, Vector3(0.8, 0.8, 0.8), true, {})
+        if self.GroggyVfxRUID == "" then return end
+        self._T.groggySerial = _EffectService:PlayEffectAttached(
+            self.GroggyVfxRUID, self.Entity, self.GroggyVfxOffset, 0,
+            Vector3(self.GroggyVfxScale, self.GroggyVfxScale, 1), true)
     end
 
     @ExecSpace("Multicast")
     method void StopGroggyVfx()
-        -- Removes the looping dizzy swirl started in StartGroggyVfx (per-client serial).
+        -- StartGroggyVfx로 시작한 루프 이펙트 제거(클라별 serial).
         if self._T.groggySerial ~= nil then
-            _ParticleService:RemoveParticle(self._T.groggySerial)
+            _EffectService:RemoveEffect(self._T.groggySerial)
             self._T.groggySerial = nil
         end
     end
@@ -1437,6 +1479,8 @@ script MushmomBoss extends Component
         end
         self.Hp = self.Hp - dmg
         log("[MushmomBoss] hit -" .. tostring(dmg) .. " -> hp=" .. tostring(self.Hp))
+        -- 도트검/타수: 이 검기를 쏜 플레이어의 PowerStrike 버프를 보스에 적용(도트 부여/갱신 + 제자리 다단히트).
+        self:ApplyAttackerDot(event.AttackerEntity, dmg)
         -- Boss-fight ultimate rule: every landed hit charges the attacker's gauge (문서: 3%).
         self:GrantUltGauge(event.AttackerEntity)
         if self.Hp <= 0 then
@@ -1481,11 +1525,13 @@ script MushmomBoss extends Component
     end
 
     @ExecSpace("ServerOnly")
-    method void ApplyExternalDamage(number amount, Entity attacker)
+    method void ApplyExternalDamage(number amount, Entity attacker, boolean burstSkin)
         -- Damage from a source that bypasses the HitEvent pipeline — the player's ultimate, which sweeps the
         -- boss with an overlap query instead of a HitBox attack. Decrements HP and triggers Die on lethal,
         -- mirroring HandleHitEvent (minus the gauge grant) so the boss dies through the proper death flow
         -- (연출 + 메소) instead of being deleted outright.
+        -- burstSkin=true → 타수 다단히트 추가타격: 데미지 숫자를 궁극기 crit(머리 위)이 아니라 일반 명중 눈높이
+        -- (PlayBurstSkin)로 "다닥" 표시한다. false/nil → 기존 궁극기·도트용 crit 숫자(PlayUltimateSkin).
         if self.dead then return end
         if amount <= 0 then return end
         -- While groggy the boss is a wide-open weak point — the ultimate benefits from the same damage
@@ -1496,13 +1542,75 @@ script MushmomBoss extends Component
         self.Hp = self.Hp - amount
         self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
         self:PlayHitFlash()
-        log("[MushmomBoss] ultimate dmg -" .. tostring(amount) .. " -> hp=" .. tostring(self.Hp))
-        -- Show a floating damage number: the ultimate bypasses the HitEvent pipeline, so the auto DamageSkin
+        log("[MushmomBoss] external dmg -" .. tostring(amount) .. " -> hp=" .. tostring(self.Hp))
+        -- Show a floating damage number: external damage bypasses the HitEvent pipeline, so the auto DamageSkin
         -- never fires for it — display one manually (client-space Play, same as the groggy crit number).
-        self:PlayUltimateSkin(math.floor(amount))
+        if burstSkin == true then
+            self:PlayBurstSkin(math.floor(amount))
+        else
+            self:PlayUltimateSkin(math.floor(amount))
+        end
         if self.Hp <= 0 then
             self.Hp = 0
             self:Die(attacker)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void ApplyAttackerDot(Entity attacker, number hitDamage)
+        -- 검기 명중 시, 그 검기를 쏜 플레이어의 PowerStrike 도트검/타수 버프를 보스에 적용. 슬로우는 보스 제외.
+        if not isvalid(attacker) then return end
+        ---@type SwordBeam
+        local beam = attacker:GetComponent("script.SwordBeam")
+        if beam == nil or not isvalid(beam.OwnerEntity) then return end
+        ---@type PowerStrike
+        local ps = beam.OwnerEntity:GetComponent("script.PowerStrike")
+        if ps == nil then return end
+        if ps.stageDotDamage > 0 then
+            if ps.stageDotDamage > self.dotDps then self.dotDps = ps.stageDotDamage end
+            self.dotRemain = ps.DotDuration
+            self.dotOwner = beam.OwnerEntity
+        end
+        -- 타수(제자리 다단히트): 이 명중 데미지를 stageExtraHits번 더 짧은 간격으로 가한다.
+        if ps.stageExtraHits > 0 and hitDamage > 0 then
+            self.burstHits = self.burstHits + ps.stageExtraHits
+            self.burstDamage = hitDamage
+            self.burstOwner = beam.OwnerEntity
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void BurstTick(number delta)
+        -- 타수 다단히트: 남은 추가 타격을 BurstInterval마다 ApplyExternalDamage로 1회씩 가한다(정상 사망 플로우/숫자 통과).
+        if self.dead then return end
+        if self.burstHits <= 0 or self.burstDamage <= 0 then return end
+        local interval = self.BurstInterval
+        if interval <= 0 then interval = 0.07 end
+        self.burstTimer = self.burstTimer + delta
+        while self.burstTimer >= interval and self.burstHits > 0 do
+            self.burstTimer = self.burstTimer - interval
+            if self.dead then return end
+            self.burstHits = self.burstHits - 1
+            self:ApplyExternalDamage(self.burstDamage, self.burstOwner, true)
+        end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DotTick(number delta)
+        -- 도트 데미지: 남은 지속 동안 초당 DotTicksPerSec회 dotDps 데미지를 ApplyExternalDamage로 넣는다(정상 사망 플로우
+        -- = 연출/메소 통과, 그로기 배율도 자동 적용). attacker=도트 소유 플레이어(궁극기와 동일한 전달 방식).
+        if self.dead then return end
+        if self.dotRemain <= 0 or self.dotDps <= 0 then return end
+        self.dotRemain = self.dotRemain - delta
+        local interval = 1.0 / self.DotTicksPerSec
+        self.dotTickTimer = self.dotTickTimer + delta
+        while self.dotTickTimer >= interval do
+            self.dotTickTimer = self.dotTickTimer - interval
+            if self.dead then return end
+            self:ApplyExternalDamage(self.dotDps, self.dotOwner, false)
+        end
+        if self.dotRemain <= 0 then
+            self.dotDps = 0
         end
     end
 
@@ -1614,6 +1722,28 @@ script MushmomBoss extends Component
             DamageSkinTweenType.Default, true,          -- crit style for the ultimate's impact
             Vector2(0, 1.8),                            -- above the boss head
             Vector2(1.4, 1.4), 1.0, 1.0, LitMode.Default)
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayBurstSkin(integer amount)
+        -- 타수(제자리 다단히트) 추가타격의 데미지 숫자. 궁극기(PlayUltimateSkin)처럼 머리 위 1.8 crit로 띄우면
+        -- 일반 검기 명중(자동 DamageSkin, 몸 근처·일반 스타일)과 위치·스타일이 어긋나 "위로 따로" 떠 보인다.
+        -- 그래서 몸 근처(BurstSkinOffsetY) 눈높이에 non-crit로, 연속 타격마다 좌우로 살짝 흩뿌려(BurstSkinSpreadX)
+        -- 겹치지 않게 "다닥" 클러스터로 읽히게 한다. 클라 렌더라 Multicast.
+        if not isvalid(self.Entity) then return end
+        if amount <= 0 then return end
+        -- 연속 타격 인덱스로 좌우 번갈아 흩뿌린다(같은 자리 겹침 방지). Math.random 없이 결정적으로.
+        local idx = (self._T.burstSkinIdx or 0) + 1
+        self._T.burstSkinIdx = idx
+        local side = 1
+        if idx % 2 == 0 then side = -1 end
+        local jx = side * self.BurstSkinSpreadX * (0.35 + 0.22 * (idx % 3))
+        local s = self.BurstSkinScale
+        _DamageSkinService:Play(
+            self.Entity, self.HitSkinRUID, 0, { amount },
+            DamageSkinTweenType.Default, false,         -- non-crit: 일반 검기 명중과 같은 스타일
+            Vector2(jx, self.BurstSkinOffsetY),         -- 몸 근처 눈높이(머리 위 crit이 아님)
+            Vector2(s, s), 1.0, 1.0, LitMode.Default)
     end
 
     @ExecSpace("Multicast")
