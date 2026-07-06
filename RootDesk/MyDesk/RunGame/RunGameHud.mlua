@@ -457,6 +457,10 @@ method void GoToStage(string stage, string mapName)
 	end
 	self.curStage = stage
 	self.pendingStart = true
+	-- Hide the click-burst effect during the run.
+	if _ClickBurstFx ~= nil then
+		_ClickBurstFx:SetActive(false)
+	end
 	if player.CurrentMapName == mapName then
 		-- Already on the shared run map: rebuild this stage's course in place (no map change → OnArriveMap won't auto-fire).
 		self.curMapName = mapName
@@ -508,6 +512,10 @@ method void StartGame()
 	self.isAlive = true
 	self:SetRunnerActive(true)
 	self:SetScore(0)
+	-- Hide the click-burst effect during the run.
+	if _ClickBurstFx ~= nil then
+		_ClickBurstFx:SetActive(false)
+	end
 	log("[RunGameHud] StartGame")
 end
 
@@ -836,6 +844,10 @@ method void ShowResult(string title, integer score, boolean isClear)
 	end
 	if isvalid(self.gameOverPanel) then
 		self.gameOverPanel.Enable = true
+	end
+	-- Result window is up → re-enable the click-burst effect.
+	if _ClickBurstFx ~= nil then
+		_ClickBurstFx:SetActive(true)
 	end
 	-- Animate the score counting up from 0 (연출).
 	self:StartScoreAnim(score)
