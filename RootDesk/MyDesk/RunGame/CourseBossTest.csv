@@ -1,4 +1,4 @@
-cmd,p1,p2,p3
+﻿cmd,p1,p2,p3
 Set,floorY,0,
 Set,length,320,
 Set,goal,300,

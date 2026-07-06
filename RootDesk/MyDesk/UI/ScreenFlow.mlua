@@ -6,6 +6,9 @@ property Entity lobbyRoot = "6d97a194-546c-4732-b0c9-b0f843872f61"
 property Entity startButton = "4cc83fed-af0a-48bc-a88a-2a3fa9747f9c"
 property Entity backButton = "1d6433fa-a4ea-41f6-a01b-fb36b2daf066"
 property Entity startGameButton = "86b0e64c-95b4-411a-94de-64f02121927d"
+-- Title "터치하여 시작" prompt text — its alpha pulses while the title screen is visible.
+property Entity titleHint = "a42897a4-904a-428e-ad8d-ba0bac85cdb8"
+property number hintPulseT = 0
 property any startHandler = nil
 property any backHandler = nil
 property any startGameHandler = nil
@@ -65,6 +68,26 @@ method void OnBeginPlay()
 		_PlayerSave:RequestMyData()
 	end
 	log("[ScreenFlow] OnBeginPlay: title shown")
+end
+
+@ExecSpace("ClientOnly")
+method void OnUpdate(number delta)
+	-- Pulse the title "터치하여 시작" prompt's alpha up and down while the title screen is visible.
+	if isvalid(self.titleHint) == false or self.titleHint.TextComponent == nil then
+		return
+	end
+	local tc = self.titleHint.TextComponent
+	local c = tc.FontColor
+	if isvalid(self.titleRoot) and self.titleRoot.Enable then
+		self.hintPulseT = self.hintPulseT + delta
+		-- Sine breathing between alpha 0.25 and 1.0 (period ~1.6s).
+		local a = 0.625 + 0.375 * math.sin(self.hintPulseT * 4.0)
+		tc.FontColor = Color(c.r, c.g, c.b, a)
+	elseif c.a ~= 1 then
+		-- Title hidden → restore full opacity and reset the phase.
+		tc.FontColor = Color(c.r, c.g, c.b, 1)
+		self.hintPulseT = 0
+	end
 end
 
 @ExecSpace("ClientOnly")

@@ -977,8 +977,8 @@
                 "y": 30.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": -300.0,
+                "y": 30.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -2126,7 +2126,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": 30.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -3273,8 +3273,8 @@
                 "y": 30.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": 300.0,
+                "y": 30.0,
                 "z": 0.0
               },
               "QuaternionRotation": {

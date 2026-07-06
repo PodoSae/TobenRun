@@ -1,0 +1,55 @@
+@Logic
+script ClickBurstFx extends Logic
+
+-- Burst particle entity in ClickFxGroup (top, non-input-blocking UI layer).
+property Entity burst = "d8edf829-e08c-4b32-8876-60160f3b23df"
+property any touchHandler = nil
+-- Gate: bursts play only while active. Turned off during a run, back on when the result window shows
+-- (RunGameHud calls SetActive). Default on so title / lobby / shop / result screens show the effect.
+property boolean active = true
+
+@ExecSpace("ClientOnly")
+method void OnBeginPlay()
+	-- Play a one-shot burst at every screen click / touch position (works on any screen).
+	self.touchHandler = _InputService:ConnectEvent(ScreenTouchEvent, self.OnScreenTouch)
+	log("[ClickBurstFx] wired; burst valid=" .. tostring(isvalid(self.burst)))
+end
+
+@ExecSpace("ClientOnly")
+method void OnScreenTouch(ScreenTouchEvent event)
+	-- Move the burst to the click's UI position and replay it.
+	if self.active == false then
+		return
+	end
+	if isvalid(self.burst) == false then
+		return
+	end
+	local uiPos = _UILogic:ScreenToUIPosition(event.TouchPoint)
+	if self.burst.UITransformComponent ~= nil then
+		self.burst.UITransformComponent.anchoredPosition = uiPos
+	end
+	local p = self.burst.UIBasicParticleComponent
+	if p ~= nil then
+		p:Stop()
+		p:Play()
+	end
+	log("[ClickBurstFx] burst at ui=(" .. tostring(uiPos.x) .. ", " .. tostring(uiPos.y) .. ")")
+end
+
+@ExecSpace("ClientOnly")
+method void SetActive(boolean on)
+	-- Enable/disable the click-burst effect (called by RunGameHud: off on run start, on at result window).
+	self.active = on
+	log("[ClickBurstFx] active=" .. tostring(on))
+end
+
+@ExecSpace("ClientOnly")
+method void OnEndPlay()
+	-- Release the input subscription.
+	if self.touchHandler ~= nil then
+		_InputService:DisconnectEvent(ScreenTouchEvent, self.touchHandler)
+		self.touchHandler = nil
+	end
+end
+
+end
