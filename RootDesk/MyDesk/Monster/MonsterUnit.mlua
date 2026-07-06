@@ -73,6 +73,32 @@ script MonsterUnit extends Component
     @DisplayName("피격 파티클 색")
     property Color HitParticleColor = Color(1, 1, 0.6, 1)
 
+    -- ── 피격 애니메이션(히트 플래시) ──
+    -- 스프라이트 몬스터는 상태-애니메이션 파이프라인이 없어 아바타식 ChangeState("HIT")를 못 쓴다. 대신 피격 순간
+    -- SpriteRendererComponent.Color를 잠깐 틴트했다 되돌리는 히트 플래시로 "맞았다" 리액션을 준다. Color는 서버가
+    -- 건드리지 않는 채널이라(Scale=facing과 달리) 클라 재생이 동기화와 충돌하지 않는다. HandleHitEvent → Multicast.
+    @DisplayName("피격 플래시 색")
+    @Description("피격 순간 몬스터 스프라이트에 곱해지는 틴트(되돌리기 전). 빨강 계열이 '맞았다'로 잘 읽힘")
+    property Color HitFlashColor = Color(1, 0.35, 0.35, 1)
+    @DisplayName("피격 플래시 시간(초)")
+    @MinValue(0.02)
+    @MaxValue(0.5)
+    @Delta(0.01)
+    property number HitFlashDuration = 0.09
+
+    -- ── 피격 애니메이션(스프라이트 hit 클립 스왑) ──
+    -- 몬스터 리소스 팩의 hit 애니메이션클립 RUID(MonsterTable.hitAnimRUID). 값이 있으면 피격 순간 SpriteRUID를 이 클립으로
+    -- 잠깐 바꿨다가 HitAnimDuration 뒤 기본(stand) 클립으로 복귀한다. SpriteRUID는 @Sync라 서버 스왑이 전 클라에 반영됨.
+    -- 비어 있으면 히트 플래시(색 틴트)로 폴백. (예: 스포아 hit1 = 1f539560199e40bb8bb2dbfe3a26cb89)
+    @HideFromInspector property string HitAnimRUID = ""
+    @DisplayName("피격 애니메이션 시간(초)")
+    @MinValue(0.05)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number HitAnimDuration = 0.2
+    -- 기본(stand) 스프라이트 RUID — LoadFromTable에서 저장, 피격 애니메이션 후 이 값으로 복귀한다.
+    @HideFromInspector property string baseSpriteRUID = ""
+
     @HideFromInspector property boolean movingRight = true
     @HideFromInspector property number spawnX = 0
 
@@ -127,7 +153,13 @@ script MonsterUnit extends Component
         if ruid ~= nil and ruid ~= "" then
             local sprite = self.Entity.SpriteRendererComponent
             if isvalid(sprite) then sprite.SpriteRUID = ruid end
+            -- Remember the base (stand) clip so the hit animation can restore to it.
+            self.baseSpriteRUID = ruid
         end
+
+        -- 피격 애니메이션클립(있으면). 비면 히트 플래시 폴백.
+        local hitRuid = row:GetItem("hitAnimRUID")
+        self.HitAnimRUID = (hitRuid ~= nil) and hitRuid or ""
 
         log("[MonsterUnit] Loaded '" .. tostring(self.MonsterId) .. "' hp=" .. tostring(self.MaxHp)
             .. " contact=" .. tostring(self.ContactDamage) .. " meso=" .. tostring(self.MesoReward)
@@ -156,6 +188,12 @@ script MonsterUnit extends Component
         self.Hp = self.Hp - event.TotalDamage
         -- 몬스터 전용 피격 타격 이펙트(전 클라). 캐릭터 피격(빨간 스파크)과 구분되는 노란 사방 스파크.
         self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
+        -- 피격 애니메이션: hit 클립이 있으면 스프라이트 스왑(정식), 없으면 히트 플래시로 폴백.
+        if self.HitAnimRUID ~= "" and self.baseSpriteRUID ~= "" then
+            self:PlayHitAnim()
+        else
+            self:PlayHitFlash()
+        end
         log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' hit -" .. tostring(event.TotalDamage)
             .. " -> hp=" .. tostring(self.Hp))
         if self.Hp <= 0 then
@@ -174,6 +212,51 @@ script MonsterUnit extends Component
             BasicParticleType.SparkRadialExplosion, self.Entity,
             Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z), 0,
             Vector3(s, s, s), false, { Color = self.HitParticleColor })
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayHitFlash()
+        -- 피격 애니메이션(히트 플래시): 스프라이트를 HitFlashColor로 잠깐 틴트했다가 원래 색으로 되돌린다. 전 클라 재생.
+        -- Color 채널은 서버가 안 건드리므로 클라에서 자유롭게 변경/복구 가능. 애니메이션클립/단일 스프라이트 모두 적용됨.
+        local sprite = self.Entity.SpriteRendererComponent
+        if not isvalid(sprite) then return end
+        -- 원래 색을 최초 1회 저장(피격 도중 또 맞아도 플래시 색을 원색으로 오인 저장하지 않도록 가드).
+        if self._T.flashing ~= true then
+            self._T.origColor = sprite.Color
+        end
+        self._T.flashing = true
+        sprite.Color = self.HitFlashColor
+        -- 진행 중이던 복구 타이머가 있으면 취소하고 다시 예약(연타 시 마지막 피격 기준으로 복구).
+        if self._T.flashTimerId ~= nil then
+            _TimerService:ClearTimer(self._T.flashTimerId)
+        end
+        self._T.flashTimerId = _TimerService:SetTimerOnce(function()
+            if isvalid(sprite) then
+                sprite.Color = self._T.origColor or Color(1, 1, 1, 1)
+            end
+            self._T.flashing = false
+            self._T.flashTimerId = nil
+        end, self.HitFlashDuration)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void PlayHitAnim()
+        -- 정식 피격 애니메이션: SpriteRUID를 hit 클립으로 스왑했다가 HitAnimDuration 뒤 기본(stand) 클립으로 복귀.
+        -- SpriteRUID가 @Sync라 서버에서 바꾸면 전 클라에 반영된다. 연타 시 복귀 타이머를 갱신해 마지막 피격 기준으로 복귀.
+        local sprite = self.Entity.SpriteRendererComponent
+        if not isvalid(sprite) then return end
+        sprite.SpriteRUID = self.HitAnimRUID
+        if self._T.hitAnimTimerId ~= nil then
+            _TimerService:ClearTimer(self._T.hitAnimTimerId)
+        end
+        self._T.hitAnimTimerId = _TimerService:SetTimerOnce(function()
+            self._T.hitAnimTimerId = nil
+            -- 죽는 중이면 복귀하지 않는다(곧 Destroy됨). 살아있으면 기본 클립으로 되돌린다.
+            if self.dead then return end
+            if isvalid(sprite) and self.baseSpriteRUID ~= "" then
+                sprite.SpriteRUID = self.baseSpriteRUID
+            end
+        end, self.HitAnimDuration)
     end
 
     @ExecSpace("ServerOnly")

@@ -398,6 +398,10 @@ method void OnArriveMap(Entity player)
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = false
 	end
+	-- 이전 스테이지의 경고 사운드가 루프 중이었다면 정지(연출 도중 맵 전환 등 예외 대비).
+	if _SoundManager ~= nil then
+		_SoundManager:StopBossWarning()
+	end
 	-- Reset the ultimate gauge so it starts empty each stage (no carry-over from the previous stage).
 	self:ResetUltimate()
 	-- Reset roguelite stage buffs (attack up, ...) so they don't carry into the next stage.
@@ -712,6 +716,10 @@ method void BeginBossIntro()
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = true
 	end
+	-- 경고 배너가 뜨는 동안 경고 사운드(사이렌)를 루프 재생. EndBossIntro에서 StopBossWarning으로 멈춘다.
+	if _SoundManager ~= nil then
+		_SoundManager:StartBossWarning()
+	end
 	-- Reset the warning-animation clock + frame trackers so each boss intro starts fresh.
 	self.warnT = 0
 	self.warnLastLit = -1
@@ -752,6 +760,10 @@ method void EndBossIntro()
 	self.bossIntroState = 2
 	if isvalid(self.bossIntroGroup) then
 		self.bossIntroGroup.Enable = false
+	end
+	-- 배너가 사라지면 루프 재생 중이던 경고 사운드를 정지.
+	if _SoundManager ~= nil then
+		_SoundManager:StopBossWarning()
 	end
 	if self.isAlive then
 		self:SetRunnerActive(true)

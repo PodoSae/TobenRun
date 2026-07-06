@@ -57,6 +57,10 @@ script Coin extends Component
             if _RunGameHud ~= nil then
                 _RunGameHud:AddCoin(self.Bonus)
             end
+            -- Pickup chime (client-side SFX via the central SoundManager).
+            if _SoundManager ~= nil then
+                _SoundManager:PlayCoin()
+            end
             -- Hide locally (server keeps the entity until the course is rebuilt / cleared).
             self.Entity.Enable = false
             log("[Coin] collected +" .. tostring(self.Bonus))
