@@ -431,6 +431,18 @@ method void BuildCourse(string stage, Entity map)
 			table.insert(cmds, r)
 		end
 	end
+	-- Stage background (Set,bg,<templateRUID>). BackgroundComponent lives on the map's "Background"
+	-- child entity and is @Sync, so applying it here (server) propagates to every client. Stages with
+	-- no Set,bg row keep whatever background the map already had.
+	if cfg.bgRuid ~= nil and cfg.bgRuid ~= "" and isvalid(map) then
+		local bgEnt = map:GetChildByName("Background", true)
+		if isvalid(bgEnt) and bgEnt.BackgroundComponent ~= nil then
+			bgEnt.BackgroundComponent:ChangeBackgroundByTemplateRUID(cfg.bgRuid)
+			log("[CourseGen] bg applied stage=" .. tostring(stage) .. " ruid=" .. tostring(cfg.bgRuid))
+		else
+			log("[CourseGen] bg skip stage=" .. tostring(stage) .. " (no Background entity/component)")
+		end
+	end
 	-- Boss course (Set,goal,boss): the boss is placed with a "Boss,<id>,<x>" row like a monster is placed
 	-- with "Spawn,normal,<x>". In arena mode we DON'T spawn it immediately at build time — we remember its
 	-- id and let OnUpdate spawn it (near the player) once the runner reaches the arena, then keep extending
@@ -574,6 +586,14 @@ method void ApplySet(table cfg, string key, string val)
 	if key == "tile" then
 		if val ~= nil and val ~= "" then
 			cfg.tileRuid = val
+		end
+		return
+	end
+	if key == "bg" then
+		-- Stage background: a Template-type background RUID (string). Applied to the map's
+		-- BackgroundComponent in BuildCourse. Handled before the tonumber gate below.
+		if val ~= nil and val ~= "" then
+			cfg.bgRuid = val
 		end
 		return
 	end

@@ -128,20 +128,18 @@ method void RefreshSavedUI()
 	if isvalid(stageGold) and stageGold.TextComponent ~= nil then
 		stageGold.TextComponent.Text = goldText
 	end
-	-- Stage unlock gating: a stage opens once the SUM of all stages best scores
-	-- reaches its StageUnlock threshold (1-1 = 0, always open). Locked stages show a
-	-- Lock overlay entity (dim + lock icon + required total) instead of being enterable.
-	local total = self:GetTotalBest()
+	-- Stage unlock gating: 1-1 is always open; every later stage opens once the PREVIOUS
+	-- stage has been cleared (goal reached). Locked stages show a Lock overlay whose label
+	-- names the stage that must be cleared first.
 	for _, stage in ipairs(self:StageList()) do
 		local btnPath = "/ui/StageSelectGroup/Stage_" .. string.gsub(stage, "-", "_")
-		local unlock = self:GetStageUnlock(stage)
-		local locked = total < unlock
+		local locked = (self:IsStageUnlocked(stage) == false)
 		local lockEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock")
 		if isvalid(lockEnt) then
 			lockEnt.Enable = locked
 			local reqEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock/Req")
 			if isvalid(reqEnt) and reqEnt.TextComponent ~= nil then
-				reqEnt.TextComponent.Text = "합계 " .. tostring(unlock)
+				reqEnt.TextComponent.Text = self:PrevStage(stage) .. " 클리어 필요"
 			end
 		end
 		local best = _PlayerSave:GetStageBest(stage)
@@ -411,67 +409,50 @@ method void OnBuyClick(string itemId)
 	log("[ScreenFlow] buy request " .. tostring(itemId))
 end
 
-method integer GetTotalBest()
-	-- Sum of every stage's best score — the basis for unlock gating.
-	if _PlayerSave == nil then
-		return 0
-	end
-	local total = 0
-	for _, stage in ipairs(self:StageList()) do
-		total = total + _PlayerSave:GetStageBest(stage)
-	end
-	return total
-end
-
 method table StageList()
-	-- The stages offered in the lobby. Must match the Stage_W_S buttons in LobbyGroup.ui.
+	-- The stages offered in the lobby. Must match the Stage_W_S buttons in StageSelectGroup.ui.
 	return { "1-1", "1-2", "1-3" }
 end
 
-method integer GetStageUnlock(string stage)
-	-- Required total-best-score to open this stage (StageUnlock dataset; 0 if missing).
-	local ds = _DataService:GetTable("StageUnlock")
-	if ds == nil then
-		return 0
+method string PrevStage(string stage)
+	-- The stage immediately before `stage` in StageList ("" = first stage or not found).
+	local prev = ""
+	for _, s in ipairs(self:StageList()) do
+		if s == stage then
+			return prev
+		end
+		prev = s
 	end
-	local row = ds:FindRow("stage", stage)
-	if row == nil then
-		return 0
-	end
-	local v = tonumber(row:GetItem("unlock"))
-	if v == nil then
-		return 0
-	end
-	return math.floor(v)
+	return ""
 end
 
 method boolean IsStageUnlocked(string stage)
-	-- A stage is open when the player's total best score meets its threshold.
-	return self:GetTotalBest() >= self:GetStageUnlock(stage)
+	-- Sequential unlock: the first stage is always open; every later stage opens once the
+	-- PREVIOUS stage has been cleared (goal reached, persisted server-side as c_<stage>).
+	local prev = self:PrevStage(stage)
+	if prev == "" then
+		return true
+	end
+	if _PlayerSave == nil then
+		return false
+	end
+	return _PlayerSave:IsStageCleared(prev)
 end
 
 @ExecSpace("ClientOnly")
 method void OnStageClick(string stage)
-	-- Stage button → look up the stage's map name in the StageMap dataset, then go there.
+	-- Stage button → enter the run. All stages share the RunStage map; per-stage visuals
+	-- (background, tiles, layout) come from the course data (Course<stage>), so there is no
+	-- stage→map dataset anymore.
 	if self:IsStageUnlocked(stage) == false then
-		local need = self:GetStageUnlock(stage)
+		local prev = self:PrevStage(stage)
 		if _UIToast ~= nil then
-			_UIToast:ShowMessage("최고점수 합계 " .. tostring(need) .. " 이상이면 열려요")
+			_UIToast:ShowMessage(prev .. " 스테이지를 먼저 클리어하세요")
 		end
-		log("[ScreenFlow] stage " .. tostring(stage) .. " locked (need " .. tostring(need) .. ")")
+		log("[ScreenFlow] stage " .. tostring(stage) .. " locked (needs clear of " .. tostring(prev) .. ")")
 		return
 	end
-	local ds = _DataService:GetTable("StageMap")
-	if ds == nil then
-		log("[ScreenFlow] StageMap dataset not found")
-		return
-	end
-	local row = ds:FindRow("stage", stage)
-	if row == nil then
-		log("[ScreenFlow] no StageMap row for stage " .. tostring(stage))
-		return
-	end
-	local mapName = row:GetItem("map")
+	local mapName = "RunStage"
 	if isvalid(self.stageSelectRoot) then
 		self.stageSelectRoot.Enable = false
 	end

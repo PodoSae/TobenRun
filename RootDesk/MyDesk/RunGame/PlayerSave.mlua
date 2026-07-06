@@ -110,6 +110,14 @@ method integer GetStageBest(string stage)
 	return math.floor(v)
 end
 
+method boolean IsStageCleared(string stage)
+	-- Client-side read of the persisted clear flag (goal reached at least once → c_<stage>=1).
+	if self.clientData == nil then
+		return false
+	end
+	return tonumber(self.clientData["c_" .. stage]) == 1
+end
+
 method integer GetItemLevel(string itemId)
 	-- Client-side read of an item's current level (0 = not bought yet).
 	if self.clientData == nil then
@@ -194,8 +202,20 @@ method void GrantStageReward(string stage, boolean isClear)
 	end
 	local data = self:LoadUser(userId)
 	local amount = self:LookupReward(stage, isClear)
+	local dirty = false
 	if amount > 0 then
 		data.gold = (data.gold or 0) + amount
+		dirty = true
+	end
+	-- Sequential unlock: mark this stage cleared (goal reached) so the next stage opens.
+	if isClear then
+		local ck = "c_" .. stage
+		if tonumber(data[ck]) ~= 1 then
+			data[ck] = 1
+			dirty = true
+		end
+	end
+	if dirty then
 		self:Persist(userId)
 	end
 	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
