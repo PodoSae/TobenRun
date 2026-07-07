@@ -171,6 +171,28 @@ method void RefreshSavedUI()
 	if isvalid(lobbyMeso) and lobbyMeso.TextComponent ~= nil then
 		lobbyMeso.TextComponent.Text = tostring(gold) .. " 메소"
 	end
+	-- 토벤코인 (used by equipment evolution) on lobby + equip screens.
+	local coin = 0
+	if _PlayerSave ~= nil then
+		coin = _PlayerSave:GetCoin()
+	end
+	local lobbyCoin = _EntityService:GetEntityByPath("/ui/LobbyGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(lobbyCoin) and lobbyCoin.TextComponent ~= nil then
+		lobbyCoin.TextComponent.Text = tostring(coin) .. " 토벤코인"
+	end
+	local eqMeso = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(eqMeso) and eqMeso.TextComponent ~= nil then
+		eqMeso.TextComponent.Text = tostring(gold) .. " 메소"
+	end
+	local eqCoin = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(eqCoin) and eqCoin.TextComponent ~= nil then
+		eqCoin.TextComponent.Text = tostring(coin) .. " 토벤코인"
+	end
+	-- If the equipment screen is open, re-sync it after any save change (enhance/evolve/currency).
+	local eqGroup = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(eqGroup) and eqGroup.Enable and _EquipScreen ~= nil then
+		_EquipScreen:RefreshFromSave()
+	end
 	-- Profile name → the local player's account nickname.
 	local lp = _UserService.LocalPlayer
 	if isvalid(lp) and lp.PlayerComponent ~= nil then
@@ -188,6 +210,19 @@ method void RefreshSavedUI()
 				-- The avatar is built a moment later; freeze it in a stand pose then (stops the default fly/idle bob).
 				_TimerService:SetTimer(self, self.ApplyProfilePose, 0.5, false)
 			end
+		end
+		-- Lobby center avatar → account base costume + the equipped 4-slot setup (mirrors the equip screen).
+		local centerAv = _EntityService:GetEntityByPath("/ui/LobbyGroup/CharacterDisplay/Avatar")
+		if isvalid(centerAv) and centerAv.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+			if centerAv.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+				centerAv.CostumeManagerComponent.DefaultEquipUserId = uid
+			end
+			if _EquipScreen ~= nil then
+				_EquipScreen:ApplyAppearanceTo("/ui/LobbyGroup/CharacterDisplay/Avatar")
+			end
+			-- Re-apply the equipped overrides + stand pose on a short delay so the DefaultEquipUserId
+			-- account clone (async) doesn't overwrite the equipped slots or leave the default fly bob.
+			_TimerService:SetTimer(self, self.RefreshLobbyAvatar, 0.6, false)
 		end
 	end
 	local shopGold = _EntityService:GetEntityByPath("/ui/ShopGroup/Gold")
@@ -233,9 +268,9 @@ method void RefreshSavedUI()
 end
 
 @ExecSpace("ClientOnly")
-method void ApplyProfilePose()
-	-- Freeze the profile avatar in a stand pose so it doesn't play the default fly/idle bob.
-	local av = _EntityService:GetEntityByPath("/ui/LobbyGroup/ProfileCard/Portrait/Avatar")
+method void StandAvatarAt(string path)
+	-- Freeze the avatar at `path` in a stand pose so it doesn't play the default fly/idle bob.
+	local av = _EntityService:GetEntityByPath(path)
 	if isvalid(av) == false or av.AvatarGUIRendererComponent == nil then
 		return
 	end
@@ -248,7 +283,74 @@ method void ApplyProfilePose()
 	ev.PartsActionName = "stand1"
 	ev.PlayType = SpriteAnimClipPlayType.ZigzagLoop
 	body:SendEvent(ev)
+end
+
+@ExecSpace("ClientOnly")
+method void ApplyProfilePose()
+	-- Lobby profile avatar → stand pose.
+	self:StandAvatarAt("/ui/LobbyGroup/ProfileCard/Portrait/Avatar")
 	log("[ScreenFlow] profile avatar -> stand1")
+end
+
+@ExecSpace("ClientOnly")
+method void StandEquipAvatars()
+	-- Equip screen's two avatars (head portrait + full-body) → stand pose.
+	self:StandAvatarAt("/ui/EquipGroup/ProfileCard/Portrait/Avatar")
+	self:StandAvatarAt("/ui/EquipGroup/CharPanel/CharAvatar")
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshLobbyAvatar()
+	-- Re-apply the equipped costume + stand pose to the lobby center avatar (deferred so the async
+	-- DefaultEquipUserId account clone doesn't overwrite the equipped-slot overrides / fly bob).
+	local path = "/ui/LobbyGroup/CharacterDisplay/Avatar"
+	if _EquipScreen ~= nil then
+		_EquipScreen:ApplyAppearanceTo(path)
+	end
+	self:StandAvatarAt(path)
+end
+
+@ExecSpace("ClientOnly")
+method void FillEquipScreen()
+	-- Populate the equipment screen's reused profile / currency / character from live player data.
+	local lp = _UserService.LocalPlayer
+	local uid = ""
+	local nick = ""
+	if isvalid(lp) and lp.PlayerComponent ~= nil then
+		uid = lp.PlayerComponent.UserId
+		nick = lp.PlayerComponent.Nickname
+	end
+	local nameEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/ProfileCard/Name")
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil and nick ~= nil and nick ~= "" then
+		nameEnt.TextComponent.Text = nick
+	end
+	-- Both avatars mirror the local player's costume (equipping will override slots later).
+	for _, p in ipairs({ "/ui/EquipGroup/ProfileCard/Portrait/Avatar", "/ui/EquipGroup/CharPanel/CharAvatar" }) do
+		local e = _EntityService:GetEntityByPath(p)
+		if isvalid(e) and e.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+			if e.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+				e.CostumeManagerComponent.DefaultEquipUserId = uid
+			end
+		end
+	end
+	_TimerService:SetTimer(self, self.StandEquipAvatars, 0.5, false)
+	-- Currency (meso from save; coin stays a placeholder).
+	local gold = 0
+	if _PlayerSave ~= nil then
+		gold = _PlayerSave:GetGold()
+	end
+	local m = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(m) and m.TextComponent ~= nil then
+		m.TextComponent.Text = tostring(gold) .. " 메소"
+	end
+	local coin = 0
+	if _PlayerSave ~= nil then
+		coin = _PlayerSave:GetCoin()
+	end
+	local cc = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(cc) and cc.TextComponent ~= nil then
+		cc.TextComponent.Text = tostring(coin) .. " 토벤코인"
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -495,6 +597,10 @@ method void OnEquipClick(ButtonClickEvent event)
 	if isvalid(equip) then
 		equip.Enable = true
 	end
+	self:FillEquipScreen()
+	if _EquipScreen ~= nil then
+		_EquipScreen:OnOpen()
+	end
 	log("[ScreenFlow] -> Equip")
 end
 
@@ -504,6 +610,9 @@ method void OnEquipBackClick(ButtonClickEvent event)
 	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
 	if isvalid(equip) then
 		equip.Enable = false
+	end
+	if _EquipScreen ~= nil then
+		_EquipScreen:ClosePopup()
 	end
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = true

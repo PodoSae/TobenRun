@@ -1,0 +1,13 @@
+id,name,slot,type,grade,ruid,atk,aspd,hp,def,growthPct,maxLevel,upgradeCost,upgradeCostInc,evolveCost
+starter_weapon,초보자의 검,weapon,sword,1,ffda73c2f0ca4a6ca82434436663a001,10,0.1,0,0,0.25,5,80,40,5
+w_broken,부러진 검,weapon,sword,2,26f4b8cab38042fd9faeeed5ab390814,22,0.12,0,0,0.25,5,200,100,15
+w_override,오버라이드 소드,weapon,sword,3,0b4ab1eb808d43268d37c6148b64bc29,40,0.15,0,0,0.25,5,400,200,0
+starter_glove,목장갑,glove,glove,1,2e58683f2f094f099a0813c36e278dd5,2,0,0,2,0.25,5,80,40,5
+g_wolf,늑대 장갑,glove,glove,2,c0ad751d42ca4d60974c1ac05013ccb3,6,0,0,4,0.25,5,200,100,15
+g_yui,유이의 장갑,glove,glove,3,fa668a01e0ab4f8f8132e15467aad34d,10,0.05,0,6,0.25,5,400,200,0
+starter_coat,하얀 탱크탑,coat,coat,1,ee7672943d544d299fe2f02b8604d8b4,0,0,60,5,0.25,5,80,40,5
+c_training,트레이닝 상의,coat,coat,2,811bad1f6d5f49f8a3d5aeac36ee6dc0,0,0,100,10,0.25,5,200,100,15
+c_green,초록 더블코트,coat,coat,3,8578eeb3a01f4a38accf4a4da7ae2c7f,0,0,160,18,0.25,5,400,200,0
+starter_pants,청반바지,pants,pants,1,568608feb9c24b2eae4ee77934a2569f,0,0,40,8,0.25,5,80,40,5
+p_ragged,누더기 바지,pants,pants,2,7c31d2d0e82146439f8264140da3c69e,0,0,70,14,0.25,5,200,100,15
+p_saegi,새기 팬츠,pants,pants,3,aeb43aedadd54cca9d40d7d53a11b83c,0,0,110,22,0.25,5,400,200,0

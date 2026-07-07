@@ -18,6 +18,21 @@ script RunGhost extends Component
 	@Sync property boolean Crouch = false
 	property number CrouchSquashY = 0.55
 
+	-- Equipped GAME item RUIDs, set by the spawner (RunSpeedEffect.SpawnGhostServer) so the ghost matches
+	-- the running player: DefaultEquipUserId clones the ACCOUNT coord, then these overlay the equipped
+	-- weapon + armor on top (with the same slot-conflict handling as the player, via
+	-- EquipScreen:ApplyRuidsToCostume). @Sync + re-applied in OnSyncProperty so they land even after the
+	-- async clone settles. Empty = that slot stays the cloned account item.
+	@Sync property string WeaponRuid = ""
+	@Sync property string GloveRuid = ""
+	@Sync property string CoatRuid = ""
+	@Sync property string PantsRuid = ""
+
+	-- The player this ghost was dropped by (set by the spawner). On THAT player's own client the ghost
+	-- mirrors the player's LIVE costume 1:1 (so any runtime coord change shows on the trail too); on other
+	-- clients it falls back to the account clone (DefaultEquipUserId) + synced game gear.
+	@Sync property string OwnerUserId = ""
+
 	property AvatarRendererComponent renderer = nil
 	property number life = 0
 	-- Base (unsquashed) scale captured once so ApplyPose can set an ABSOLUTE squashed scale
@@ -50,8 +65,74 @@ script RunGhost extends Component
 		-- Pose from the (possibly already-synced) Crouch flag. OnSyncProperty re-applies if Crouch
 		-- arrives after this runs, so a slide ghost never gets stuck in the running pose.
 		self:ApplyPose()
+		-- Match the running player's appearance (live mirror on the owner's client; account clone + synced
+		-- game gear on other clients).
+		self:ApplyLook()
 
 		-- log("[RunGhost] OnBeginPlay - renderer: " .. tostring(isvalid(self.renderer)))
+	end
+
+	@ExecSpace("ClientOnly")
+	method boolean IsOwnerClient()
+		-- True on the client of the player this ghost was dropped by.
+		if self.OwnerUserId == nil or self.OwnerUserId == "" then
+			return false
+		end
+		local lp = _UserService.LocalPlayer
+		if isvalid(lp) == false or lp.PlayerComponent == nil then
+			return false
+		end
+		return lp.PlayerComponent.UserId == self.OwnerUserId
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyLook()
+		-- On the OWNER's client, copy the player's LIVE costume 1:1 so the ghost matches EXACTLY — including
+		-- any runtime coord change that isn't saved to the account. On other clients, overlay the synced
+		-- game gear on the DefaultEquipUserId account clone.
+		if self:IsOwnerClient() then
+			self:MirrorLocalPlayer()
+		else
+			self:ApplyEquipped()
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void MirrorLocalPlayer()
+		-- Copy every avatar slot from the local player onto this ghost, so the ghost is a pixel-exact live
+		-- mirror (account coord + game gear + any runtime override). Custom*Equip overlays win over the
+		-- DefaultEquipUserId clone regardless of clone timing, so this is race-safe.
+		local cm = self.Entity.CostumeManagerComponent
+		local lp = _UserService.LocalPlayer
+		if isvalid(cm) == false or isvalid(lp) == false or lp.CostumeManagerComponent == nil then
+			return
+		end
+		local src = lp.CostumeManagerComponent
+		local cats = {
+			MapleAvatarItemCategory.Body, MapleAvatarItemCategory.Hair, MapleAvatarItemCategory.Face,
+			MapleAvatarItemCategory.Cap, MapleAvatarItemCategory.Cape, MapleAvatarItemCategory.Coat,
+			MapleAvatarItemCategory.Longcoat, MapleAvatarItemCategory.Pants, MapleAvatarItemCategory.Glove,
+			MapleAvatarItemCategory.Shoes, MapleAvatarItemCategory.OneHandedWeapon,
+			MapleAvatarItemCategory.TwoHandedWeapon, MapleAvatarItemCategory.SubWeapon,
+			MapleAvatarItemCategory.FaceAccessory, MapleAvatarItemCategory.EyeAccessory,
+			MapleAvatarItemCategory.EarAccessory, MapleAvatarItemCategory.Ear,
+		}
+		for _, cat in ipairs(cats) do
+			cm:SetEquip(cat, src:GetEquip(cat))
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void ApplyEquipped()
+		-- Overlay the equipped game gear onto the ghost (on top of the DefaultEquipUserId account clone),
+		-- reusing the player's exact slot-conflict rules (two-handed / longcoat clears) via the shared
+		-- EquipScreen:ApplyRuidsToCostume. revertEmptyToAccount=true → empty slots keep the cloned account
+		-- item. No-op until at least the weapon RUID has synced in.
+		local cm = self.Entity.CostumeManagerComponent
+		if isvalid(cm) == false or _EquipScreen == nil then
+			return
+		end
+		_EquipScreen:ApplyRuidsToCostume(cm, self.WeaponRuid, self.GloveRuid, self.CoatRuid, self.PantsRuid, true)
 	end
 
 	@ExecSpace("ClientOnly")
@@ -83,6 +164,11 @@ script RunGhost extends Component
 		-- from the default running pose to crouch without a lingering wrong pose.
 		if name == "Crouch" then
 			self:ApplyPose()
+		elseif name == "OwnerUserId" or name == "WeaponRuid" or name == "GloveRuid" or name == "CoatRuid" or name == "PantsRuid" then
+			-- Owner id / gear RUIDs may sync in after OnBeginPlay (or after the DefaultEquipUserId clone
+			-- lands) — re-apply the look so the ghost matches the running player (live mirror on the owner's
+			-- client, account clone + gear elsewhere).
+			self:ApplyLook()
 		end
 	end
 

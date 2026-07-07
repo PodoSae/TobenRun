@@ -74,8 +74,64 @@ method void RequestMyData()
 	if userId == nil or userId == "" then
 		return
 	end
+	self:EnsureStarterEquip(userId)
 	local data = self:LoadUser(userId)
 	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+end
+
+@ExecSpace("ServerOnly")
+method void EnsureStarterEquip(string userId)
+	-- First-ever login: grant + equip the starter set (so the character starts dressed like the mockup).
+	local data = self:LoadUser(userId)
+	if data["eq_weapon"] ~= nil then
+		return
+	end
+	data["eq_weapon"] = "starter_weapon"
+	data["eq_glove"] = "starter_glove"
+	data["eq_coat"] = "starter_coat"
+	data["eq_pants"] = "starter_pants"
+	-- Own the starter items at Lv.1 (own_<id> present = owned; value = enhancement level).
+	data["own_starter_weapon"] = 1
+	data["own_starter_glove"] = 1
+	data["own_starter_coat"] = 1
+	data["own_starter_pants"] = 1
+	-- Grant some 토벤코인 for testing evolution (real earn source wired later).
+	if data.coin == nil then
+		data.coin = 50
+	end
+	self:Persist(userId)
+	log("[PlayerSave] granted starter equip for " .. tostring(userId))
+end
+
+@ExecSpace("Server")
+method void ClearEquip()
+	-- Reset equipment (also lets the starter set re-grant on the next data request).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	data["eq_weapon"] = nil
+	data["eq_glove"] = nil
+	data["eq_coat"] = nil
+	data["eq_pants"] = nil
+	-- Also drop all owned equip items so the next login re-grants only the default starters.
+	local ds = _DataService:GetTable("EquipItem")
+	if ds ~= nil then
+		local n = ds:GetRowCount()
+		for i = 1, n do
+			local row = ds:GetRow(i)
+			if row ~= nil then
+				local id = row:GetItem("id")
+				if id ~= nil and id ~= "" then
+					data["own_" .. id] = nil
+				end
+			end
+		end
+	end
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	log("[PlayerSave] cleared equip for " .. tostring(userId))
 end
 
 @ExecSpace("Client")
@@ -187,6 +243,231 @@ method void SaveVolume(number bgm, number sfx)
 	end
 end
 
+@ExecSpace("Server")
+method void EquipGear(string slot, string itemId)
+	-- Equip/unequip a slot (itemId "" = unequip). Persist + resync to the owning client.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if slot == nil or slot == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local k = "eq_" .. slot
+	if data[k] ~= itemId then
+		data[k] = itemId
+		self:Persist(userId)
+		self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+		log("[PlayerSave] equip " .. slot .. " = " .. tostring(itemId))
+	end
+end
+
+method string GetEquipped(string slot)
+	-- Client read of the equipped item id for a slot ("" = none).
+	if self.clientData == nil then
+		return ""
+	end
+	local v = self.clientData["eq_" .. slot]
+	if v == nil then
+		return ""
+	end
+	return v
+end
+
+method integer GetItemLevelById(string itemId)
+	-- Client read of an equip item's enhancement level (0 = not owned).
+	if self.clientData == nil then
+		return 0
+	end
+	local v = self.clientData["own_" .. itemId]
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+method boolean IsOwned(string itemId)
+	-- Client read: does the player own this item.
+	if self.clientData == nil then
+		return false
+	end
+	return self.clientData["own_" .. itemId] ~= nil
+end
+
+method integer GetCoin()
+	-- Client read of the 토벤코인 balance.
+	if self.clientData == nil or self.clientData.coin == nil then
+		return 0
+	end
+	return math.floor(self.clientData.coin)
+end
+
+method string GetItemRuid(string itemId)
+	-- Shared (client & server): look up an EquipItem row's avatar RUID by id ("" if none).
+	-- Used to apply the equipped weapon onto the in-game character / ghost costume.
+	if itemId == nil or itemId == "" then
+		return ""
+	end
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		return ""
+	end
+	local row = ds:FindRow("id", itemId)
+	if row == nil then
+		return ""
+	end
+	local ruid = row:GetItem("ruid")
+	if ruid == nil then
+		return ""
+	end
+	return ruid
+end
+
+@ExecSpace("ServerOnly")
+method string GetEquippedWeaponRuidForUser(string userId)
+	-- Server read of a user's equipped weapon avatar RUID ("" if none) — for the ghost costume clone.
+	return self:GetEquippedRuidForUser(userId, "weapon")
+end
+
+@ExecSpace("ServerOnly")
+method string GetEquippedRuidForUser(string userId, string slot)
+	-- Server read of a user's equipped item avatar RUID for one slot ("weapon"/"glove"/"coat"/"pants";
+	-- "" if none) — used to sync the running ghost's full equipped look (RunSpeedEffect.SpawnGhostServer).
+	local data = self:LoadUser(userId)
+	if data == nil then
+		return ""
+	end
+	local id = data["eq_" .. slot]
+	if id == nil or id == "" then
+		return ""
+	end
+	return self:GetItemRuid(id)
+end
+
+@ExecSpace("ServerOnly")
+method table GetItemDef(string itemId)
+	-- Server read of one EquipItem row (for enhance/evolve validation & costs).
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		return nil
+	end
+	local row = ds:FindRow("id", itemId)
+	if row == nil then
+		return nil
+	end
+	return {
+		slot = row:GetItem("slot"),
+		itemType = row:GetItem("type"),
+		grade = tonumber(row:GetItem("grade")) or 1,
+		maxLevel = tonumber(row:GetItem("maxLevel")) or 5,
+		upgradeCost = tonumber(row:GetItem("upgradeCost")) or 0,
+		upgradeCostInc = tonumber(row:GetItem("upgradeCostInc")) or 0,
+		evolveCost = tonumber(row:GetItem("evolveCost")) or 0,
+	}
+end
+
+@ExecSpace("ServerOnly")
+method string FindEvolveTarget(string itemType, integer grade)
+	-- The item id of the same type at grade+1 ("" if none = final tier).
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		return ""
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			if row:GetItem("type") == itemType and (tonumber(row:GetItem("grade")) or 0) == grade + 1 then
+				return row:GetItem("id")
+			end
+		end
+	end
+	return ""
+end
+
+@ExecSpace("Client")
+method void EquipMsgClient(string msg)
+	-- Toast an enhance/evolve result on the owning client.
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage(msg)
+	end
+end
+
+@ExecSpace("Server")
+method void EnhanceGear(string itemId)
+	-- 강화: spend 메소(gold) to raise the item's level by 1 (up to maxLevel).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if data["own_" .. itemId] == nil then
+		return
+	end
+	local def = self:GetItemDef(itemId)
+	if def == nil then
+		return
+	end
+	local lv = math.floor(data["own_" .. itemId])
+	if lv >= def.maxLevel then
+		self:EquipMsgClient("이미 최대 강화입니다", userId)
+		return
+	end
+	local cost = def.upgradeCost + def.upgradeCostInc * (lv - 1)
+	if (data.gold or 0) < cost then
+		self:EquipMsgClient("메소가 부족합니다", userId)
+		return
+	end
+	data.gold = data.gold - cost
+	data["own_" .. itemId] = lv + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("강화 성공! +" .. tostring(lv + 1), userId)
+	log("[PlayerSave] enhance " .. itemId .. " -> Lv." .. tostring(lv + 1))
+end
+
+@ExecSpace("Server")
+method void EvolveGear(string itemId)
+	-- 진화: at maxLevel, spend 토벤코인 to become the next-grade same-type item at Lv.1.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if data["own_" .. itemId] == nil then
+		return
+	end
+	local def = self:GetItemDef(itemId)
+	if def == nil then
+		return
+	end
+	local lv = math.floor(data["own_" .. itemId])
+	if lv < def.maxLevel then
+		self:EquipMsgClient("최대 강화 후 진화할 수 있습니다", userId)
+		return
+	end
+	local nextId = self:FindEvolveTarget(def.itemType, def.grade)
+	if nextId == nil or nextId == "" then
+		self:EquipMsgClient("최종 단계입니다", userId)
+		return
+	end
+	if (data.coin or 0) < def.evolveCost then
+		self:EquipMsgClient("토벤코인이 부족합니다", userId)
+		return
+	end
+	data.coin = (data.coin or 0) - def.evolveCost
+	data["own_" .. itemId] = nil
+	data["own_" .. nextId] = 1
+	if data["eq_" .. def.slot] == itemId then
+		data["eq_" .. def.slot] = nextId
+	end
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("진화 성공!", userId)
+	log("[PlayerSave] evolve " .. itemId .. " -> " .. nextId)
+end
+
 method integer ShopItemCost(number price, number priceInc, number level)
 	-- Cost to buy the NEXT level (level is the current level). Shared by client display + server.
 	return math.floor(price + priceInc * level)
@@ -278,6 +559,22 @@ method void ShowRewardClient(integer amount)
 	if _RunGameHud ~= nil then
 		_RunGameHud:ShowReward(amount)
 	end
+end
+
+@ExecSpace("Server")
+method void DebugFillCurrency(integer gold, integer coin)
+	-- TEST-ONLY helper: set the caller's 메소(gold) + 토벤코인(coin) to the given amounts, persist,
+	-- and resync to the client (→ RefreshSavedUI updates the lobby/equip currency bars). Safe to remove.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	data.gold = gold
+	data.coin = coin
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	log("[PlayerSave] DEBUG fill currency gold=" .. tostring(gold) .. " coin=" .. tostring(coin))
 end
 
 @ExecSpace("Server")

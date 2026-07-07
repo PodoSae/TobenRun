@@ -1,0 +1,688 @@
+@Logic
+@ExecSpace("ClientOnly")
+script EquipScreen extends Logic
+
+-- Equipment screen controller (client UI) for ui/EquipGroup.ui.
+-- Inventory shows owned items; clicking an item (or a character slot) opens a popup where the
+-- player can 장착(equip)/해제 or 강화(enhance, 메소)/진화(evolve, 토벤코인). Equipped items are
+-- marked with a small corner badge + green cell tint; grade is shown (color-coded) per cell.
+-- Item templates come from the EquipItem DataSet; state is persisted via _PlayerSave.
+
+property any defs = nil        -- itemId -> def table
+property any defOrder = nil     -- itemId list in dataset order
+property any equipped = nil     -- slot -> itemId ("" = none)
+property any cellItems = nil    -- inventory cell index (0..15) -> itemId
+property string curTab = "all"
+property string selected = ""    -- item shown in the popup
+property any slotHds = nil
+property any cellHds = nil
+property any tabHds = nil
+property any equipBtnHd = nil
+property any actBtnHd = nil
+property any closeBtnHd = nil
+
+method table SlotList()
+	-- Equip slots: save-key slot / slot-button path / default label.
+	return {
+		{ slot = "weapon", btn = "/ui/EquipGroup/CharPanel/Slot_Weapon", label = "무기" },
+		{ slot = "glove", btn = "/ui/EquipGroup/CharPanel/Slot_Glove", label = "장갑" },
+		{ slot = "coat", btn = "/ui/EquipGroup/CharPanel/Slot_Coat", label = "상의" },
+		{ slot = "pants", btn = "/ui/EquipGroup/CharPanel/Slot_Pants", label = "하의" },
+	}
+end
+
+method any CatForSlot(string slot)
+	-- Slot -> avatar costume category for CostumeManagerComponent:SetEquip.
+	if slot == "weapon" then return MapleAvatarItemCategory.OneHandedWeapon end
+	if slot == "glove" then return MapleAvatarItemCategory.Glove end
+	if slot == "coat" then return MapleAvatarItemCategory.Coat end
+	if slot == "pants" then return MapleAvatarItemCategory.Pants end
+	return MapleAvatarItemCategory.Invalid
+end
+
+method any GradeColor(integer grade)
+	-- Color-code the grade so it reads at a glance.
+	if grade >= 3 then
+		return Color(0.78, 0.61, 1.0, 1)
+	end
+	if grade == 2 then
+		return Color(0.44, 0.71, 1.0, 1)
+	end
+	return Color(0.80, 0.85, 0.92, 1)
+end
+
+method void CacheDefs()
+	-- Read the EquipItem DataSet into an id-keyed def table + ordered id list.
+	self.defs = {}
+	self.defOrder = {}
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		log_warning("[EquipScreen] EquipItem dataset not found")
+		return
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local id = row:GetItem("id")
+			if id ~= nil and id ~= "" then
+				self.defs[id] = {
+					name = row:GetItem("name"),
+					slot = row:GetItem("slot"),
+					itemType = row:GetItem("type"),
+					ruid = row:GetItem("ruid"),
+					atk = tonumber(row:GetItem("atk")) or 0,
+					aspd = tonumber(row:GetItem("aspd")) or 0,
+					hp = tonumber(row:GetItem("hp")) or 0,
+					def = tonumber(row:GetItem("def")) or 0,
+					growthPct = tonumber(row:GetItem("growthPct")) or 0,
+					maxLevel = tonumber(row:GetItem("maxLevel")) or 5,
+					grade = tonumber(row:GetItem("grade")) or 1,
+					upgradeCost = tonumber(row:GetItem("upgradeCost")) or 0,
+					upgradeCostInc = tonumber(row:GetItem("upgradeCostInc")) or 0,
+					evolveCost = tonumber(row:GetItem("evolveCost")) or 0,
+				}
+				table.insert(self.defOrder, id)
+			end
+		end
+	end
+end
+
+method void OnBeginPlay()
+	-- Cache defs and wire slot / inventory-cell / tab / popup buttons.
+	self:CacheDefs()
+	self.equipped = {}
+	self.cellItems = {}
+	self.slotHds = {}
+	self.cellHds = {}
+	self.tabHds = {}
+
+	for _, s in ipairs(self:SlotList()) do
+		local ent = _EntityService:GetEntityByPath(s.btn)
+		if isvalid(ent) then
+			local capSlot = s.slot
+			local h = ent:ConnectEvent(ButtonClickEvent, function() self:OnSlotClick(capSlot) end)
+			table.insert(self.slotHds, { ent = ent, hd = h })
+		end
+	end
+
+	for i = 0, 15 do
+		local ent = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/Cell_" .. tostring(i))
+		if isvalid(ent) then
+			local capIdx = i
+			local h = ent:ConnectEvent(ButtonClickEvent, function() self:OnCellClick(capIdx) end)
+			table.insert(self.cellHds, { ent = ent, hd = h })
+		end
+	end
+
+	local tabSlots = { "all", "weapon", "glove", "coat", "pants" }
+	for i = 0, 4 do
+		local ent = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/Tab_" .. tostring(i))
+		if isvalid(ent) then
+			local capTab = tabSlots[i + 1]
+			local h = ent:ConnectEvent(ButtonClickEvent, function() self:OnTabClick(capTab) end)
+			table.insert(self.tabHds, { ent = ent, hd = h })
+		end
+	end
+
+	local eqBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/EquipBtn")
+	if isvalid(eqBtn) then
+		self.equipBtnHd = eqBtn:ConnectEvent(ButtonClickEvent, self.OnPopupEquip)
+	end
+	local actBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/ActBtn")
+	if isvalid(actBtn) then
+		self.actBtnHd = actBtn:ConnectEvent(ButtonClickEvent, self.OnPopupAct)
+	end
+	local closeBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/CloseBtn")
+	if isvalid(closeBtn) then
+		self.closeBtnHd = closeBtn:ConnectEvent(ButtonClickEvent, self.OnPopupClose)
+	end
+
+	self:ClosePopup()
+	log("[EquipScreen] wired (items=" .. tostring(#self.defOrder) .. ")")
+end
+
+method void OnOpen()
+	-- Equipment screen opened: sync equipped from save, close any popup, refresh everything.
+	self.equipped = {}
+	for _, s in ipairs(self:SlotList()) do
+		local id = ""
+		if _PlayerSave ~= nil then
+			id = _PlayerSave:GetEquipped(s.slot)
+		end
+		self.equipped[s.slot] = id
+	end
+	self.curTab = "all"
+	self.selected = ""
+	self:ClosePopup()
+	self:RefreshInventory()
+	self:RefreshTabs()
+	self:RefreshSlots()
+	self:RefreshStats()
+	self:ApplyAppearance()
+	_TimerService:SetTimer(self, self.ApplyAppearance, 0.6, false)
+	log("[EquipScreen] OnOpen")
+end
+
+method integer ItemLevel(string id)
+	-- Enhancement level of an item (1 if owned but unset; 0 = not owned).
+	if _PlayerSave ~= nil then
+		local lv = _PlayerSave:GetItemLevelById(id)
+		if lv >= 1 then
+			return lv
+		end
+	end
+	return 1
+end
+
+method void RefreshInventory()
+	-- Fill inventory cells with the player's OWNED items matching the current tab.
+	self.cellItems = {}
+	local idx = 0
+	for _, id in ipairs(self.defOrder) do
+		local d = self.defs[id]
+		local owned = (_PlayerSave ~= nil and _PlayerSave:IsOwned(id))
+		if d ~= nil and owned and (self.curTab == "all" or d.slot == self.curTab) then
+			if idx <= 15 then
+				self.cellItems[idx] = id
+				self:FillCell(idx, id, d)
+				idx = idx + 1
+			end
+		end
+	end
+	for i = idx, 15 do
+		self:ClearCell(i)
+	end
+end
+
+method void FillCell(integer idx, string id, table d)
+	-- One owned item cell: icon + name + grade(color)·Lv + equipped marker.
+	local cell = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/Cell_" .. tostring(idx))
+	if isvalid(cell) == false then
+		return
+	end
+	local icon = cell:GetChildByName("Icon", false)
+	if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
+		icon.SpriteGUIRendererComponent.ImageRUID = DataRef("thumbnail://" .. d.ruid)
+		icon.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+	end
+	local nameEnt = cell:GetChildByName("Name", false)
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+		nameEnt.TextComponent.Text = d.name
+	end
+	local lvEnt = cell:GetChildByName("Lv", false)
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		lvEnt.TextComponent.Text = tostring(d.grade) .. "성 Lv." .. tostring(self:ItemLevel(id))
+		lvEnt.TextComponent.FontColor = self:GradeColor(d.grade)
+	end
+	local isEq = (self.equipped[d.slot] == id and id ~= "")
+	self:SetCellEquipped(cell, isEq)
+end
+
+method void SetCellEquipped(any cell, boolean isEq)
+	-- Small corner "장착" tag + green cell tint when equipped (does not cover the grade/name).
+	if isvalid(cell) == false then
+		return
+	end
+	local badge = cell:GetChildByName("Equipped", false)
+	if isvalid(badge) then
+		badge.Enable = isEq
+	end
+	local badgeBg = cell:GetChildByName("EquippedBg", false)
+	if isvalid(badgeBg) then
+		badgeBg.Enable = isEq
+	end
+	if cell.SpriteGUIRendererComponent ~= nil then
+		if isEq then
+			cell.SpriteGUIRendererComponent.Color = Color(0.16, 0.32, 0.22, 1)
+		else
+			cell.SpriteGUIRendererComponent.Color = Color(0.13, 0.17, 0.27, 1)
+		end
+	end
+end
+
+method void ClearCell(integer idx)
+	-- Empty inventory cell.
+	local cell = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/Cell_" .. tostring(idx))
+	if isvalid(cell) == false then
+		return
+	end
+	local icon = cell:GetChildByName("Icon", false)
+	if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
+		icon.SpriteGUIRendererComponent.ImageRUID = DataRef("")
+		icon.SpriteGUIRendererComponent.Color = Color(0.36, 0.42, 0.53, 1)
+	end
+	local nameEnt = cell:GetChildByName("Name", false)
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+		nameEnt.TextComponent.Text = "-"
+	end
+	local lvEnt = cell:GetChildByName("Lv", false)
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		lvEnt.TextComponent.Text = ""
+	end
+	self:SetCellEquipped(cell, false)
+end
+
+method void RefreshSlots()
+	-- Character-panel slots: equipped item icon/name (or empty-slot label).
+	for _, s in ipairs(self:SlotList()) do
+		local ent = _EntityService:GetEntityByPath(s.btn)
+		if isvalid(ent) then
+			local icon = ent:GetChildByName("Icon", false)
+			local lbl = ent:GetChildByName("Label", false)
+			local id = self.equipped[s.slot]
+			if id ~= nil and id ~= "" and self.defs[id] ~= nil then
+				local d = self.defs[id]
+				if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
+					icon.SpriteGUIRendererComponent.ImageRUID = DataRef("thumbnail://" .. d.ruid)
+					icon.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+				end
+				if isvalid(lbl) and lbl.TextComponent ~= nil then
+					lbl.TextComponent.Text = d.name
+				end
+			else
+				if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
+					icon.SpriteGUIRendererComponent.ImageRUID = DataRef("")
+					icon.SpriteGUIRendererComponent.Color = Color(0.4, 0.45, 0.55, 1)
+				end
+				if isvalid(lbl) and lbl.TextComponent ~= nil then
+					lbl.TextComponent.Text = s.label
+				end
+			end
+		end
+	end
+end
+
+method string IdToRuid(string id)
+	-- Map an equip-item id to its avatar RUID via the cached defs ("" if none/unknown).
+	if id ~= nil and id ~= "" and self.defs[id] ~= nil then
+		return self.defs[id].ruid
+	end
+	return ""
+end
+
+method void ApplyRuidsToCostume(any cm, string weapon, string glove, string coat, string pants, boolean revertEmptyToAccount)
+	-- Overlay the equipped GAME items (weapon + 3 armor slots) onto a costume, on top of the account
+	-- base, WITH slot-occupancy conflict handling. This is the single source of truth used by the
+	-- in-game character, lobby avatar, equip-screen preview, and the running ghost — so all four match.
+	--
+	-- Empty ruid handling depends on the costume kind:
+	--   revertEmptyToAccount = true  -> the costume is a DefaultEquipUserId account CLONE (equip preview /
+	--     lobby / ghost). Clearing a slot ("") reverts it to the cloned account item, so unequipping works.
+	--   revertEmptyToAccount = false -> the ACTUAL account avatar (the in-game player). Leave empty slots
+	--     untouched (SetEquip "" there would strip the account item to bare instead of restoring it).
+	if isvalid(cm) == false then
+		return
+	end
+	-- Weapon (one-handed). A two-handed weapon (목검) occupies the one-handed slot → clear TwoHanded+Sub.
+	if weapon ~= nil and weapon ~= "" then
+		cm:SetEquip(MapleAvatarItemCategory.OneHandedWeapon, weapon)
+		cm:SetEquip(MapleAvatarItemCategory.TwoHandedWeapon, "")
+		cm:SetEquip(MapleAvatarItemCategory.SubWeapon, "")
+	elseif revertEmptyToAccount then
+		cm:SetEquip(MapleAvatarItemCategory.OneHandedWeapon, "")
+	end
+	-- Glove.
+	if glove ~= nil and glove ~= "" then
+		cm:SetEquip(MapleAvatarItemCategory.Glove, glove)
+	elseif revertEmptyToAccount then
+		cm:SetEquip(MapleAvatarItemCategory.Glove, "")
+	end
+	-- Coat.
+	if coat ~= nil and coat ~= "" then
+		cm:SetEquip(MapleAvatarItemCategory.Coat, coat)
+	elseif revertEmptyToAccount then
+		cm:SetEquip(MapleAvatarItemCategory.Coat, "")
+	end
+	-- Pants.
+	if pants ~= nil and pants ~= "" then
+		cm:SetEquip(MapleAvatarItemCategory.Pants, pants)
+	elseif revertEmptyToAccount then
+		cm:SetEquip(MapleAvatarItemCategory.Pants, "")
+	end
+	-- Longcoat (한벌옷/overall) occupies BOTH the coat + pants slots. If we placed a separate game coat
+	-- or pants, clear the account longcoat so it can't render over (overlap) the game armor.
+	if (coat ~= nil and coat ~= "") or (pants ~= nil and pants ~= "") then
+		cm:SetEquip(MapleAvatarItemCategory.Longcoat, "")
+	end
+end
+
+method void ApplyEquippedFromSaveTo(any cm, boolean revertEmptyToAccount)
+	-- Read the LOCAL player's saved equipped set and overlay it onto `cm`.
+	if _PlayerSave == nil or isvalid(cm) == false then
+		return
+	end
+	self:ApplyRuidsToCostume(cm,
+		self:IdToRuid(_PlayerSave:GetEquipped("weapon")),
+		self:IdToRuid(_PlayerSave:GetEquipped("glove")),
+		self:IdToRuid(_PlayerSave:GetEquipped("coat")),
+		self:IdToRuid(_PlayerSave:GetEquipped("pants")),
+		revertEmptyToAccount)
+end
+
+method void ApplyAppearance()
+	-- Equip-screen preview avatar (an account clone): overlay the in-screen equipped set (self.equipped).
+	local av = _EntityService:GetEntityByPath("/ui/EquipGroup/CharPanel/CharAvatar")
+	if isvalid(av) == false or av.CostumeManagerComponent == nil then
+		return
+	end
+	self:ApplyRuidsToCostume(av.CostumeManagerComponent,
+		self:IdToRuid(self.equipped["weapon"]),
+		self:IdToRuid(self.equipped["glove"]),
+		self:IdToRuid(self.equipped["coat"]),
+		self:IdToRuid(self.equipped["pants"]),
+		true)
+end
+
+@ExecSpace("ClientOnly")
+method void ApplyAppearanceTo(string path)
+	-- Apply the saved equipped set onto ANY avatar at `path` (an account clone: lobby center avatar,
+	-- equip profile). Reads _PlayerSave directly so callers don't need the equip screen open.
+	local av = _EntityService:GetEntityByPath(path)
+	if isvalid(av) == false or av.CostumeManagerComponent == nil then
+		return
+	end
+	self:ApplyEquippedFromSaveTo(av.CostumeManagerComponent, true)
+end
+
+method string Fmt(number v)
+	-- Integer when whole, else one decimal.
+	if v == math.floor(v) then
+		return tostring(math.floor(v))
+	end
+	return string.format("%.1f", v)
+end
+
+method string StatSummary(table d, number mult)
+	-- Short nonzero-stat summary at the given multiplier.
+	local parts = {}
+	if d.atk > 0 then
+		table.insert(parts, "공격력 " .. self:Fmt(d.atk * mult))
+	end
+	if d.aspd > 0 then
+		table.insert(parts, "공속 " .. self:Fmt(d.aspd * mult))
+	end
+	if d.hp > 0 then
+		table.insert(parts, "체력 " .. self:Fmt(d.hp * mult))
+	end
+	if d.def > 0 then
+		table.insert(parts, "방어력 " .. self:Fmt(d.def * mult))
+	end
+	if #parts == 0 then
+		return "-"
+	end
+	return table.concat(parts, "  ")
+end
+
+method void RefreshStats()
+	-- Aggregate equipped items' level-scaled stats into the 총 스탯 bar.
+	local atk = 0
+	local aspd = 0
+	local hp = 0
+	local def = 0
+	for _, s in ipairs(self:SlotList()) do
+		local id = self.equipped[s.slot]
+		if id ~= nil and id ~= "" and self.defs[id] ~= nil then
+			local d = self.defs[id]
+			local lv = self:ItemLevel(id)
+			local mult = 1 + d.growthPct * (lv - 1)
+			atk = atk + d.atk * mult
+			aspd = aspd + d.aspd * mult
+			hp = hp + d.hp * mult
+			def = def + d.def * mult
+		end
+	end
+	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Values", "공격력 " .. self:Fmt(atk) .. "    공속 " .. self:Fmt(aspd) .. "    체력 " .. self:Fmt(hp) .. "    방어력 " .. self:Fmt(def))
+end
+
+method void RefreshTabs()
+	-- Highlight the active category tab.
+	local tabSlots = { "all", "weapon", "glove", "coat", "pants" }
+	for i = 0, 4 do
+		local ent = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/Tab_" .. tostring(i))
+		if isvalid(ent) and ent.SpriteGUIRendererComponent ~= nil then
+			if tabSlots[i + 1] == self.curTab then
+				ent.SpriteGUIRendererComponent.Color = Color(0.85, 0.7, 0.4, 1)
+			else
+				ent.SpriteGUIRendererComponent.Color = Color(0.16, 0.21, 0.33, 1)
+			end
+		end
+	end
+end
+
+method void SetText(string path, string txt)
+	-- Set a text entity's Text (no-op if missing).
+	local e = _EntityService:GetEntityByPath(path)
+	if isvalid(e) and e.TextComponent ~= nil then
+		e.TextComponent.Text = txt
+	end
+end
+
+method void SetBtnColor(any ent, number r, number g, number bl)
+	-- Set a button's background color.
+	if isvalid(ent) and ent.SpriteGUIRendererComponent ~= nil then
+		ent.SpriteGUIRendererComponent.Color = Color(r, g, bl, 1)
+	end
+end
+
+method string NextGrade(string itemType, integer grade)
+	-- Item id of the same type at grade+1 ("" = final / none).
+	for _, id in ipairs(self.defOrder) do
+		local d = self.defs[id]
+		if d ~= nil and d.itemType == itemType and d.grade == grade + 1 then
+			return id
+		end
+	end
+	return ""
+end
+
+method void OpenPopup(string id)
+	-- Show the item popup for the given item.
+	if id == nil or id == "" or self.defs[id] == nil then
+		return
+	end
+	self.selected = id
+	local pop = _EntityService:GetEntityByPath("/ui/EquipPopupGroup")
+	if isvalid(pop) then
+		pop.Enable = true
+	end
+	self:RefreshPopup()
+end
+
+method void ClosePopup()
+	-- Hide the item popup.
+	local pop = _EntityService:GetEntityByPath("/ui/EquipPopupGroup")
+	if isvalid(pop) then
+		pop.Enable = false
+	end
+end
+
+method void RefreshPopup()
+	-- Fill the popup with the selected item + configure the 장착/강화·진화 buttons.
+	local id = self.selected
+	if id == nil or id == "" or self.defs[id] == nil then
+		return
+	end
+	local d = self.defs[id]
+	local lv = self:ItemLevel(id)
+	local mult = 1 + d.growthPct * (lv - 1)
+	local icon = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/Icon")
+	if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
+		icon.SpriteGUIRendererComponent.ImageRUID = DataRef("thumbnail://" .. d.ruid)
+	end
+	self:SetText("/ui/EquipPopupGroup/Panel/Name", d.name)
+	self:SetText("/ui/EquipPopupGroup/Panel/GradeLv", tostring(d.grade) .. "성    Lv." .. tostring(lv) .. "/" .. tostring(d.maxLevel))
+	self:SetText("/ui/EquipPopupGroup/Panel/Stats", self:StatSummary(d, mult))
+	-- equip button state
+	local isEq = (self.equipped[d.slot] == id and id ~= "")
+	local eqBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/EquipBtn")
+	if isEq then
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착 해제")
+		self:SetBtnColor(eqBtn, 0.42, 0.42, 0.48)
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "장착중")
+	else
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착")
+		self:SetBtnColor(eqBtn, 0.2, 0.5, 0.85)
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "")
+	end
+	-- action button (강화 / 진화 / 최종)
+	local actBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/ActBtn")
+	if isvalid(actBtn) then
+		actBtn.Enable = true
+	end
+	if lv < d.maxLevel then
+		local cost = d.upgradeCost + d.upgradeCostInc * (lv - 1)
+		self:SetText("/ui/EquipPopupGroup/Panel/ActBtn", "강화")
+		self:SetBtnColor(actBtn, 0.3, 0.62, 0.38)
+		self:SetText("/ui/EquipPopupGroup/Panel/ActCost", "메소 " .. tostring(cost))
+	else
+		local nextId = self:NextGrade(d.itemType, d.grade)
+		if nextId == "" then
+			self:SetText("/ui/EquipPopupGroup/Panel/ActBtn", "최종")
+			self:SetBtnColor(actBtn, 0.4, 0.4, 0.45)
+			self:SetText("/ui/EquipPopupGroup/Panel/ActCost", "최고 등급")
+		else
+			self:SetText("/ui/EquipPopupGroup/Panel/ActBtn", "진화")
+			self:SetBtnColor(actBtn, 0.55, 0.4, 0.8)
+			self:SetText("/ui/EquipPopupGroup/Panel/ActCost", "토벤코인 " .. tostring(d.evolveCost))
+		end
+	end
+end
+
+method void OnCellClick(integer idx)
+	-- Inventory item clicked -> open its popup.
+	local id = self.cellItems[idx]
+	if id == nil then
+		return
+	end
+	self:OpenPopup(id)
+end
+
+method void OnSlotClick(string slot)
+	-- Character-panel slot clicked -> open the equipped item's popup.
+	local id = self.equipped[slot]
+	if id == nil or id == "" then
+		return
+	end
+	self:OpenPopup(id)
+end
+
+method void OnTabClick(string tab)
+	-- Category tab clicked -> filter the inventory.
+	self.curTab = tab
+	self:RefreshInventory()
+	self:RefreshTabs()
+end
+
+method void OnPopupEquip()
+	-- Popup 장착/해제 button.
+	local id = self.selected
+	if id == nil or id == "" or self.defs[id] == nil then
+		return
+	end
+	if _PlayerSave == nil then
+		return
+	end
+	local d = self.defs[id]
+	if self.equipped[d.slot] == id then
+		self.equipped[d.slot] = ""
+		_PlayerSave:EquipGear(d.slot, "")
+	else
+		self.equipped[d.slot] = id
+		_PlayerSave:EquipGear(d.slot, id)
+	end
+	self:RefreshSlots()
+	self:RefreshInventory()
+	self:ApplyAppearance()
+	self:RefreshStats()
+	self:RefreshPopup()
+end
+
+method void OnPopupAct()
+	-- Popup 강화(메소, <max) / 진화(토벤코인, ==max) button.
+	local id = self.selected
+	if id == nil or id == "" or self.defs[id] == nil then
+		return
+	end
+	if _PlayerSave == nil then
+		return
+	end
+	local d = self.defs[id]
+	local lv = self:ItemLevel(id)
+	if lv < d.maxLevel then
+		_PlayerSave:EnhanceGear(id)
+	else
+		local nextId = self:NextGrade(d.itemType, d.grade)
+		if nextId ~= "" then
+			_PlayerSave:EvolveGear(id)
+		end
+	end
+	-- result syncs -> ScreenFlow.RefreshSavedUI -> RefreshFromSave (popup stays open + updates).
+end
+
+method void OnPopupClose()
+	-- Close the popup.
+	self:ClosePopup()
+end
+
+method void RefreshFromSave()
+	-- Re-sync equipped + levels from the save (after enhance/evolve/currency) and refresh the screen.
+	for _, s in ipairs(self:SlotList()) do
+		local id = ""
+		if _PlayerSave ~= nil then
+			id = _PlayerSave:GetEquipped(s.slot)
+		end
+		self.equipped[s.slot] = id
+	end
+	-- Follow the selection through an evolution (consumed item -> its slot's evolved item).
+	if self.selected ~= nil and self.selected ~= "" and _PlayerSave ~= nil and _PlayerSave:IsOwned(self.selected) == false then
+		local d = self.defs[self.selected]
+		if d ~= nil then
+			self.selected = self.equipped[d.slot]
+		end
+	end
+	self:RefreshInventory()
+	self:RefreshTabs()
+	self:RefreshSlots()
+	self:RefreshStats()
+	local pop = _EntityService:GetEntityByPath("/ui/EquipPopupGroup")
+	if isvalid(pop) and pop.Enable then
+		self:RefreshPopup()
+	end
+	self:ApplyAppearance()
+end
+
+method void DisconnectList(any list)
+	-- Release a stored list of { ent, hd } click subscriptions.
+	if list == nil then
+		return
+	end
+	for _, rec in ipairs(list) do
+		if isvalid(rec.ent) and rec.hd ~= nil then
+			rec.ent:DisconnectEvent(ButtonClickEvent, rec.hd)
+		end
+	end
+end
+
+method void DisconnectOne(string path, any hd)
+	-- Release a single button subscription by path.
+	if hd == nil then
+		return
+	end
+	local ent = _EntityService:GetEntityByPath(path)
+	if isvalid(ent) then
+		ent:DisconnectEvent(ButtonClickEvent, hd)
+	end
+end
+
+method void OnEndPlay()
+	-- Release all click subscriptions.
+	self:DisconnectList(self.slotHds)
+	self:DisconnectList(self.cellHds)
+	self:DisconnectList(self.tabHds)
+	self:DisconnectOne("/ui/EquipPopupGroup/Panel/EquipBtn", self.equipBtnHd)
+	self:DisconnectOne("/ui/EquipPopupGroup/Panel/ActBtn", self.actBtnHd)
+	self:DisconnectOne("/ui/EquipPopupGroup/Panel/CloseBtn", self.closeBtnHd)
+end
+
+end
