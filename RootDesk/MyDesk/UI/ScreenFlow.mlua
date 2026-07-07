@@ -17,7 +17,14 @@ property any startGameHandler = nil
 property any stageHandlers = nil
 property any stageSelectOpenHandler = nil
 property any stageSelectBackHandler = nil
-property any shopOpenHandler = nil
+property any equipHandler = nil
+property any equipBackHandler = nil
+property any blessHandler = nil
+property any blessBackHandler = nil
+property any settingsHandler = nil
+property any settingsCloseHandler = nil
+property any bgmSliderHandler = nil
+property any sfxSliderHandler = nil
 property any shopBackHandler = nil
 property any shopCells = nil
 -- Running gauge fill-animation timer ids (cleared on rebuild / end play).
@@ -56,27 +63,71 @@ method void OnBeginPlay()
 			table.insert(self.stageHandlers, { ent = btn, hd = h })
 		end
 	end
-	-- Lobby -> StageSelect entry button, and StageSelect -> Lobby back button.
-	local stageBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StageBtn")
-	if isvalid(stageBtn) then
-		self.stageSelectOpenHandler = stageBtn:ConnectEvent(ButtonClickEvent, self.OnStageSelectOpenClick)
+	-- "모험 시작!" button opens the StageSelect screen (game start -> pick a stage).
+	local startBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StartBtn")
+	if isvalid(startBtn) then
+		self.stageSelectOpenHandler = startBtn:ConnectEvent(ButtonClickEvent, self.OnStageSelectOpenClick)
 	end
 	local stageBack = _EntityService:GetEntityByPath("/ui/StageSelectGroup/BackBtn")
 	if isvalid(stageBack) then
 		self.stageSelectBackHandler = stageBack:ConnectEvent(ButtonClickEvent, self.OnStageSelectBackClick)
 	end
-	-- Shop screen: hidden at start; wire its open / back / buy buttons.
+	-- Shop screen kept hidden (no longer opened from the lobby; the shop button became 장비).
 	local shop = _EntityService:GetEntityByPath("/ui/ShopGroup")
 	if isvalid(shop) then
 		shop.Enable = false
 	end
-	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
-	if isvalid(shopBtn) then
-		self.shopOpenHandler = shopBtn:ConnectEvent(ButtonClickEvent, self.OnShopOpenClick)
-	end
 	local shopBack = _EntityService:GetEntityByPath("/ui/ShopGroup/BackBtn")
 	if isvalid(shopBack) then
 		self.shopBackHandler = shopBack:ConnectEvent(ButtonClickEvent, self.OnShopBackClick)
+	end
+	-- Equipment screen (temporary empty screen): hidden at start; wire its back button.
+	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(equip) then
+		equip.Enable = false
+	end
+	local equipBack = _EntityService:GetEntityByPath("/ui/EquipGroup/BackBtn")
+	if isvalid(equipBack) then
+		self.equipBackHandler = equipBack:ConnectEvent(ButtonClickEvent, self.OnEquipBackClick)
+	end
+	-- Blessing screen (temporary empty screen): hidden at start; wire its back button.
+	local bless = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(bless) then
+		bless.Enable = false
+	end
+	local blessBack = _EntityService:GetEntityByPath("/ui/BlessGroup/BackBtn")
+	if isvalid(blessBack) then
+		self.blessBackHandler = blessBack:ConnectEvent(ButtonClickEvent, self.OnBlessBackClick)
+	end
+	-- Lobby menu buttons: 장비 / 모험가의 축복 open their screens; 설정 is a placeholder.
+	local equipBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/EquipBtn")
+	if isvalid(equipBtn) then
+		self.equipHandler = equipBtn:ConnectEvent(ButtonClickEvent, self.OnEquipClick)
+	end
+	local blessBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn")
+	if isvalid(blessBtn) then
+		self.blessHandler = blessBtn:ConnectEvent(ButtonClickEvent, self.OnBlessClick)
+	end
+	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
+	if isvalid(settingsBtn) then
+		self.settingsHandler = settingsBtn:ConnectEvent(ButtonClickEvent, self.OnSettingsClick)
+	end
+	-- Settings popup: overlay hidden at start; wire close button + the two volume sliders.
+	local settings = _EntityService:GetEntityByPath("/ui/SettingsGroup")
+	if isvalid(settings) then
+		settings.Enable = false
+	end
+	local settingsClose = _EntityService:GetEntityByPath("/ui/SettingsGroup/CloseBtn")
+	if isvalid(settingsClose) then
+		self.settingsCloseHandler = settingsClose:ConnectEvent(ButtonClickEvent, self.OnSettingsCloseClick)
+	end
+	local bgmSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/BgmSlider")
+	if isvalid(bgmSlider) then
+		self.bgmSliderHandler = bgmSlider:ConnectEvent(SliderValueChangedEvent, self.OnBgmVolumeChanged)
+	end
+	local sfxSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/SfxSlider")
+	if isvalid(sfxSlider) then
+		self.sfxSliderHandler = sfxSlider:ConnectEvent(SliderValueChangedEvent, self.OnSfxVolumeChanged)
 	end
 	-- Build the dynamic shop list (one cloned card per ShopItem dataset row).
 	self:BuildShopList()
@@ -116,9 +167,28 @@ method void RefreshSavedUI()
 	-- Gold balance on lobby + shop.
 	local gold = _PlayerSave:GetGold()
 	local goldText = "골드 " .. tostring(gold)
-	local lobbyGold = _EntityService:GetEntityByPath("/ui/LobbyGroup/Gold")
-	if isvalid(lobbyGold) and lobbyGold.TextComponent ~= nil then
-		lobbyGold.TextComponent.Text = goldText
+	local lobbyMeso = _EntityService:GetEntityByPath("/ui/LobbyGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(lobbyMeso) and lobbyMeso.TextComponent ~= nil then
+		lobbyMeso.TextComponent.Text = tostring(gold) .. " 메소"
+	end
+	-- Profile name → the local player's account nickname.
+	local lp = _UserService.LocalPlayer
+	if isvalid(lp) and lp.PlayerComponent ~= nil then
+		local nick = lp.PlayerComponent.Nickname
+		local nameEnt = _EntityService:GetEntityByPath("/ui/LobbyGroup/ProfileCard/Name")
+		if isvalid(nameEnt) and nameEnt.TextComponent ~= nil and nick ~= nil and nick ~= "" then
+			nameEnt.TextComponent.Text = nick
+		end
+		-- Profile image → the local player's own avatar (clone the user's equipped costume).
+		local uid = lp.PlayerComponent.UserId
+		local portrait = _EntityService:GetEntityByPath("/ui/LobbyGroup/ProfileCard/Portrait/Avatar")
+		if isvalid(portrait) and portrait.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+			if portrait.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+				portrait.CostumeManagerComponent.DefaultEquipUserId = uid
+				-- The avatar is built a moment later; freeze it in a stand pose then (stops the default fly/idle bob).
+				_TimerService:SetTimer(self, self.ApplyProfilePose, 0.5, false)
+			end
+		end
 	end
 	local shopGold = _EntityService:GetEntityByPath("/ui/ShopGroup/Gold")
 	if isvalid(shopGold) and shopGold.TextComponent ~= nil then
@@ -152,9 +222,33 @@ method void RefreshSavedUI()
 			end
 		end
 	end
+	-- Apply the saved sound volumes to the SoundManager (restores the user's setting on login).
+	if _SoundManager ~= nil then
+		_SoundManager:SetBgmVolume(_PlayerSave:GetBgmVolume())
+		_SoundManager:SetSfxVolume(_PlayerSave:GetSfxVolume())
+	end
 	-- Refresh the dynamic shop list (levels / prices / buy state).
 	self:RefreshShopCells()
 	log("[ScreenFlow] RefreshSavedUI")
+end
+
+@ExecSpace("ClientOnly")
+method void ApplyProfilePose()
+	-- Freeze the profile avatar in a stand pose so it doesn't play the default fly/idle bob.
+	local av = _EntityService:GetEntityByPath("/ui/LobbyGroup/ProfileCard/Portrait/Avatar")
+	if isvalid(av) == false or av.AvatarGUIRendererComponent == nil then
+		return
+	end
+	local body = av.AvatarGUIRendererComponent:GetBodyEntity()
+	if isvalid(body) == false then
+		return
+	end
+	local ev = ActionStateChangedEvent()
+	ev.CoreActionName = "stand1"
+	ev.PartsActionName = "stand1"
+	ev.PlayType = SpriteAnimClipPlayType.ZigzagLoop
+	body:SendEvent(ev)
+	log("[ScreenFlow] profile avatar -> stand1")
 end
 
 @ExecSpace("ClientOnly")
@@ -392,6 +486,129 @@ method void OnShopBackClick(ButtonClickEvent event)
 end
 
 @ExecSpace("ClientOnly")
+method void OnEquipClick(ButtonClickEvent event)
+	-- Lobby -> Equipment screen (temporary empty screen).
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(equip) then
+		equip.Enable = true
+	end
+	log("[ScreenFlow] -> Equip")
+end
+
+@ExecSpace("ClientOnly")
+method void OnEquipBackClick(ButtonClickEvent event)
+	-- Equipment -> Lobby.
+	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(equip) then
+		equip.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	log("[ScreenFlow] Equip -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessClick(ButtonClickEvent event)
+	-- Lobby -> Blessing screen (temporary empty screen).
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	local bless = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(bless) then
+		bless.Enable = true
+	end
+	log("[ScreenFlow] -> Blessing")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessBackClick(ButtonClickEvent event)
+	-- Blessing -> Lobby.
+	local bless = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(bless) then
+		bless.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	log("[ScreenFlow] Blessing -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnSettingsClick(ButtonClickEvent event)
+	-- Open the settings popup ON TOP of the current screen (lobby stays visible behind the dimmer).
+	local settings = _EntityService:GetEntityByPath("/ui/SettingsGroup")
+	if isvalid(settings) == false then
+		return
+	end
+	-- Sync the sliders to the current volumes before showing.
+	local bgm = 1.0
+	local sfx = 1.0
+	if _SoundManager ~= nil then
+		bgm = _SoundManager.bgmVolume
+		sfx = _SoundManager.sfxVolume
+	end
+	self:SetSliderValue("/ui/SettingsGroup/Panel/BgmSlider", bgm)
+	self:SetSliderValue("/ui/SettingsGroup/Panel/SfxSlider", sfx)
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/BgmValue", bgm)
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/SfxValue", sfx)
+	settings.Enable = true
+	log("[ScreenFlow] Settings open (bgm=" .. tostring(bgm) .. " sfx=" .. tostring(sfx) .. ")")
+end
+
+@ExecSpace("ClientOnly")
+method void OnSettingsCloseClick(ButtonClickEvent event)
+	-- Close the settings popup and persist the chosen volumes (one save per close, dirty-checked).
+	local settings = _EntityService:GetEntityByPath("/ui/SettingsGroup")
+	if isvalid(settings) then
+		settings.Enable = false
+	end
+	if _PlayerSave ~= nil and _SoundManager ~= nil then
+		_PlayerSave:SaveVolume(_SoundManager.bgmVolume, _SoundManager.sfxVolume)
+	end
+	log("[ScreenFlow] Settings close")
+end
+
+@ExecSpace("ClientOnly")
+method void SetSliderValue(string path, number v)
+	-- Set a slider's value without triggering audible surprises (used to sync UI to stored volume).
+	local ent = _EntityService:GetEntityByPath(path)
+	if isvalid(ent) and ent.SliderComponent ~= nil then
+		ent.SliderComponent.Value = v
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void SetVolumeLabel(string path, number v)
+	-- Show a volume as an integer percentage (e.g. 0.8 -> "80%").
+	local ent = _EntityService:GetEntityByPath(path)
+	if isvalid(ent) and ent.TextComponent ~= nil then
+		ent.TextComponent.Text = tostring(math.floor(v * 100 + 0.5)) .. "%"
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnBgmVolumeChanged(SliderValueChangedEvent event)
+	-- BGM slider moved -> apply live and update the % label.
+	if _SoundManager ~= nil then
+		_SoundManager:SetBgmVolume(event.Value)
+	end
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/BgmValue", event.Value)
+end
+
+@ExecSpace("ClientOnly")
+method void OnSfxVolumeChanged(SliderValueChangedEvent event)
+	-- SFX slider moved -> store the new SFX volume and update the % label.
+	if _SoundManager ~= nil then
+		_SoundManager:SetSfxVolume(event.Value)
+	end
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/SfxValue", event.Value)
+end
+
+@ExecSpace("ClientOnly")
 method void OnBuyClick(string itemId)
 	-- Request purchase: the server checks gold/level, deducts, persists, then pushes the result
 	-- (toast via BuyResultClient + data resync via ReceiveMyData → RefreshSavedUI).
@@ -575,9 +792,9 @@ method void OnEndPlay()
 		end
 		self.stageHandlers = nil
 	end
-	local stageBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StageBtn")
-	if isvalid(stageBtn) and self.stageSelectOpenHandler ~= nil then
-		stageBtn:DisconnectEvent(ButtonClickEvent, self.stageSelectOpenHandler)
+	local startBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StartBtn")
+	if isvalid(startBtn) and self.stageSelectOpenHandler ~= nil then
+		startBtn:DisconnectEvent(ButtonClickEvent, self.stageSelectOpenHandler)
 		self.stageSelectOpenHandler = nil
 	end
 	local stageBack = _EntityService:GetEntityByPath("/ui/StageSelectGroup/BackBtn")
@@ -585,10 +802,45 @@ method void OnEndPlay()
 		stageBack:DisconnectEvent(ButtonClickEvent, self.stageSelectBackHandler)
 		self.stageSelectBackHandler = nil
 	end
-	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
-	if isvalid(shopBtn) and self.shopOpenHandler ~= nil then
-		shopBtn:DisconnectEvent(ButtonClickEvent, self.shopOpenHandler)
-		self.shopOpenHandler = nil
+	local equipBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/EquipBtn")
+	if isvalid(equipBtn) and self.equipHandler ~= nil then
+		equipBtn:DisconnectEvent(ButtonClickEvent, self.equipHandler)
+		self.equipHandler = nil
+	end
+	local equipBack = _EntityService:GetEntityByPath("/ui/EquipGroup/BackBtn")
+	if isvalid(equipBack) and self.equipBackHandler ~= nil then
+		equipBack:DisconnectEvent(ButtonClickEvent, self.equipBackHandler)
+		self.equipBackHandler = nil
+	end
+	local blessBack = _EntityService:GetEntityByPath("/ui/BlessGroup/BackBtn")
+	if isvalid(blessBack) and self.blessBackHandler ~= nil then
+		blessBack:DisconnectEvent(ButtonClickEvent, self.blessBackHandler)
+		self.blessBackHandler = nil
+	end
+	local blessBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn")
+	if isvalid(blessBtn) and self.blessHandler ~= nil then
+		blessBtn:DisconnectEvent(ButtonClickEvent, self.blessHandler)
+		self.blessHandler = nil
+	end
+	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
+	if isvalid(settingsBtn) and self.settingsHandler ~= nil then
+		settingsBtn:DisconnectEvent(ButtonClickEvent, self.settingsHandler)
+		self.settingsHandler = nil
+	end
+	local settingsClose = _EntityService:GetEntityByPath("/ui/SettingsGroup/CloseBtn")
+	if isvalid(settingsClose) and self.settingsCloseHandler ~= nil then
+		settingsClose:DisconnectEvent(ButtonClickEvent, self.settingsCloseHandler)
+		self.settingsCloseHandler = nil
+	end
+	local bgmSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/BgmSlider")
+	if isvalid(bgmSlider) and self.bgmSliderHandler ~= nil then
+		bgmSlider:DisconnectEvent(SliderValueChangedEvent, self.bgmSliderHandler)
+		self.bgmSliderHandler = nil
+	end
+	local sfxSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/SfxSlider")
+	if isvalid(sfxSlider) and self.sfxSliderHandler ~= nil then
+		sfxSlider:DisconnectEvent(SliderValueChangedEvent, self.sfxSliderHandler)
+		self.sfxSliderHandler = nil
 	end
 	local shopBack = _EntityService:GetEntityByPath("/ui/ShopGroup/BackBtn")
 	if isvalid(shopBack) and self.shopBackHandler ~= nil then

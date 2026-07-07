@@ -138,6 +138,55 @@ method integer GetGold()
 	return math.floor(self.clientData.gold)
 end
 
+method number GetBgmVolume()
+	-- Client-side read of the saved BGM volume (default 1.0 when never set).
+	if self.clientData == nil then
+		return 1.0
+	end
+	local v = self.clientData["vol_bgm"]
+	if v == nil then
+		return 1.0
+	end
+	return v
+end
+
+method number GetSfxVolume()
+	-- Client-side read of the saved SFX volume (default 1.0 when never set).
+	if self.clientData == nil then
+		return 1.0
+	end
+	local v = self.clientData["vol_sfx"]
+	if v == nil then
+		return 1.0
+	end
+	return v
+end
+
+@ExecSpace("Server")
+method void SaveVolume(number bgm, number sfx)
+	-- Settings popup closed → persist the two volumes (event-driven, dirty-checked).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local dirty = false
+	if data["vol_bgm"] ~= bgm then
+		data["vol_bgm"] = bgm
+		dirty = true
+	end
+	if data["vol_sfx"] ~= sfx then
+		data["vol_sfx"] = sfx
+		dirty = true
+	end
+	if dirty then
+		self:Persist(userId)
+		-- Keep the owning client's cache in step so a later reopen reads the saved value.
+		self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+		log("[PlayerSave] volume saved bgm=" .. tostring(bgm) .. " sfx=" .. tostring(sfx))
+	end
+end
+
 method integer ShopItemCost(number price, number priceInc, number level)
 	-- Cost to buy the NEXT level (level is the current level). Shared by client display + server.
 	return math.floor(price + priceInc * level)

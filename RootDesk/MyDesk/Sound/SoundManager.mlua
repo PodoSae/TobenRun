@@ -8,6 +8,9 @@ script SoundManager extends Logic
 	-- Master multiplier applied to every PlaySound call (0..1+).
 	property number masterVolume = 1.0
 
+	-- SFX volume (0..1), adjustable from the Settings popup. Scales every one-shot/loop SFX.
+	property number sfxVolume = 1.0
+
 	-- Flash jump (double jump) SFX — a sharp dash/whoosh that reads as "bursting forward".
 	-- RUID is centralized here so it can be swapped without touching the skill code.
 	property string flashJumpSoundRUID = "e7edafdf05c843e0aadbe703ba74b31f"
@@ -65,9 +68,20 @@ script SoundManager extends Logic
 	end
 
 	method void PlaySound(string ruid, number volume)
-		-- Central entry point: plays a one-shot SFX on the local client, scaled by masterVolume.
+		-- Central entry point: plays a one-shot SFX on the local client, scaled by sfxVolume.
 		if ruid == "" then return end
-		_SoundService:PlaySound(ruid, volume * self.masterVolume)
+		_SoundService:PlaySound(ruid, volume * self.sfxVolume)
+	end
+
+	method void SetBgmVolume(number v)
+		-- Settings popup -> BGM volume. Stores it (so the next PlayBGM uses it) and applies live.
+		self.bgmVolume = v
+		_SoundService:SetBGMVolume(v)
+	end
+
+	method void SetSfxVolume(number v)
+		-- Settings popup -> SFX volume. Applies to every subsequent PlaySound / loop SFX.
+		self.sfxVolume = v
 	end
 
 	method void PlayFlashJump()
@@ -88,7 +102,7 @@ script SoundManager extends Logic
 	method void StartBossWarning()
 		-- Boss-intro warning alarm — LOOPS for the whole warning banner duration. Call StopBossWarning to end it.
 		if self.bossWarningSoundRUID == "" then return end
-		_SoundService:PlayLoopSound(self.bossWarningSoundRUID, self.masterVolume)
+		_SoundService:PlayLoopSound(self.bossWarningSoundRUID, self.sfxVolume)
 	end
 
 	method void StopBossWarning()
