@@ -1,4 +1,4 @@
-id,name,slot,type,grade,ruid,atk,aspd,hp,def,growthPct,maxLevel,upgradeCost,upgradeCostInc,evolveCost
+﻿id,name,slot,type,grade,ruid,atk,aspd,hp,def,growthPct,maxLevel,upgradeCost,upgradeCostInc,evolveCost
 starter_weapon,초보자의 검,weapon,sword,1,ffda73c2f0ca4a6ca82434436663a001,10,0.1,0,0,0.25,5,80,40,5
 w_broken,부러진 검,weapon,sword,2,26f4b8cab38042fd9faeeed5ab390814,22,0.12,0,0,0.25,5,200,100,15
 w_override,오버라이드 소드,weapon,sword,3,0b4ab1eb808d43268d37c6148b64bc29,40,0.15,0,0,0.25,5,400,200,0

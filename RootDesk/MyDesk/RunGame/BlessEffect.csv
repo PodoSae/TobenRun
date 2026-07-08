@@ -1,0 +1,7 @@
+﻿id,name,type,maxLevel,lv1,lv2,lv3,lv4,lv5
+pierce,무기관통,pierce,5,1,2,3,4,5
+crit,급소 일격,crit,5,5,10,15,20,25
+hitcount,타격수 강화,hitCount,5,1,2,3,4,5
+swift,신속 공격,atkSpeed,5,5,10,15,20,25
+regen,체력 재생,hpRegen,5,50,100,150,200,250
+iframe,피격시 무적시간 증가,iframe,5,0.1,0.2,0.3,0.4,0.5

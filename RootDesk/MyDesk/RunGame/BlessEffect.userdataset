@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "userdataset://cb0d0ba8-abba-4965-a8da-b007114b0a52",
+  "EntryKey": "userdataset://f3668d00-184e-4137-b3b6-29d59fe57669",
   "ContentType": "x-mod/userdataset",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "name": "EquipItem",
-      "id": "cb0d0ba8-abba-4965-a8da-b007114b0a52",
+      "name": "BlessEffect",
+      "id": "f3668d00-184e-4137-b3b6-29d59fe57669",
       "serveronly": false,
       "syncDataSetWebUrl": "",
       "dynamicloading": 0

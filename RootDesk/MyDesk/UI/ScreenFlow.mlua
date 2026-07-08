@@ -21,6 +21,8 @@ property any equipHandler = nil
 property any equipBackHandler = nil
 property any blessHandler = nil
 property any blessBackHandler = nil
+property any blessUpHandler = nil
+property any blessEffHandlers = nil
 property any settingsHandler = nil
 property any settingsCloseHandler = nil
 property any bgmSliderHandler = nil
@@ -29,6 +31,16 @@ property any shopBackHandler = nil
 property any shopCells = nil
 -- Running gauge fill-animation timer ids (cleared on rebuild / end play).
 property any gaugeTimers = nil
+-- 축복 button icon idle animation (3 layers): aura (static, glow pulse) + wings (flap) + sword (float).
+property any blessWings = nil
+property any blessSword = nil
+property any blessAura = nil
+property number blessT = 0
+property number swBaseX = 0
+property number swBaseY = 0
+property number wgBaseSX = 1
+property number wgBaseSY = 1
+property boolean blessInit = false
 
 @ExecSpace("ClientOnly")
 method void OnBeginPlay()
@@ -108,6 +120,34 @@ method void OnBeginPlay()
 	if isvalid(blessBtn) then
 		self.blessHandler = blessBtn:ConnectEvent(ButtonClickEvent, self.OnBlessClick)
 	end
+	-- 축복 레벨업 button (inside the blessing page).
+	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/LevelUpBtn")
+	if isvalid(blessUp) then
+		self.blessUpHandler = blessUp:ConnectEvent(ButtonClickEvent, self.OnBlessLevelUpClick)
+	end
+	-- 축복 효과 강화 buttons (one per BlessEffect row) — closure captures the effect id.
+	self.blessEffHandlers = {}
+	local beds = _DataService:GetTable("BlessEffect")
+	if beds ~= nil then
+		for i = 1, beds:GetRowCount() do
+			local row = beds:GetRow(i)
+			if row ~= nil then
+				local eid = row:GetItem("id")
+				if eid ~= nil and eid ~= "" then
+					local effBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/EffBtn_" .. eid)
+					if isvalid(effBtn) then
+						local capturedId = eid
+						local eh = effBtn:ConnectEvent(ButtonClickEvent, function() self:OnBlessEffectUpClick(capturedId) end)
+						table.insert(self.blessEffHandlers, { ent = effBtn, hd = eh })
+					end
+				end
+			end
+		end
+	end
+	-- Cache the 축복 icon's 3 animation layers (aura / wings / sword) for the idle animation.
+	self.blessAura = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon")
+	self.blessWings = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/Wings")
+	self.blessSword = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/Sword")
 	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
 	if isvalid(settingsBtn) then
 		self.settingsHandler = settingsBtn:ConnectEvent(ButtonClickEvent, self.OnSettingsClick)
@@ -140,6 +180,8 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnUpdate(number delta)
+	-- 축복 icon idle animation (runs regardless of the title-hint early-return below).
+	self:AnimateBlessIcon(delta)
 	-- Pulse the title "터치하여 시작" prompt's alpha up and down while the title screen is visible.
 	if isvalid(self.titleHint) == false or self.titleHint.TextComponent == nil then
 		return
@@ -159,6 +201,45 @@ method void OnUpdate(number delta)
 end
 
 @ExecSpace("ClientOnly")
+method void AnimateBlessIcon(number delta)
+	-- Idle 축복 emblem animation (3 independent layers), only while the lobby is visible:
+	--   wings  → quick horizontal-scale flap (with a small vertical counter-beat)
+	--   sword  → slow vertical float (bob up/down)
+	--   aura   → gentle glow pulse via alpha
+	-- Base transforms are captured once on the first tick.
+	if isvalid(self.lobbyRoot) == false or self.lobbyRoot.Enable == false then
+		return
+	end
+	self.blessT = self.blessT + delta
+	if self.blessInit == false then
+		if isvalid(self.blessWings) and self.blessWings.UITransformComponent ~= nil then
+			local sc = self.blessWings.UITransformComponent.UIScale
+			self.wgBaseSX = sc.x
+			self.wgBaseSY = sc.y
+		end
+		if isvalid(self.blessSword) and self.blessSword.UITransformComponent ~= nil then
+			local ap = self.blessSword.UITransformComponent.anchoredPosition
+			self.swBaseX = ap.x
+			self.swBaseY = ap.y
+		end
+		self.blessInit = true
+	end
+	if isvalid(self.blessWings) and self.blessWings.UITransformComponent ~= nil then
+		local flap = math.sin(self.blessT * 6.5)
+		self.blessWings.UITransformComponent.UIScale = Vector3(self.wgBaseSX * (1.0 + 0.12 * flap), self.wgBaseSY * (1.0 - 0.06 * flap), 1)
+	end
+	if isvalid(self.blessSword) and self.blessSword.UITransformComponent ~= nil then
+		local bob = 6.0 * math.sin(self.blessT * 2.4)
+		self.blessSword.UITransformComponent.anchoredPosition = Vector2(self.swBaseX, self.swBaseY + bob)
+	end
+	if isvalid(self.blessAura) and self.blessAura.SpriteGUIRendererComponent ~= nil then
+		local c = self.blessAura.SpriteGUIRendererComponent.Color
+		local a = 0.78 + 0.22 * math.sin(self.blessT * 2.0)
+		self.blessAura.SpriteGUIRendererComponent.Color = Color(c.r, c.g, c.b, a)
+	end
+end
+
+@ExecSpace("ClientOnly")
 method void RefreshSavedUI()
 	-- Apply the cached account data to the lobby (stage best scores) and shop (owned marks).
 	if _PlayerSave == nil then
@@ -169,7 +250,8 @@ method void RefreshSavedUI()
 	local goldText = "골드 " .. tostring(gold)
 	local lobbyMeso = _EntityService:GetEntityByPath("/ui/LobbyGroup/CurrencyBar/MesoPill/Text")
 	if isvalid(lobbyMeso) and lobbyMeso.TextComponent ~= nil then
-		lobbyMeso.TextComponent.Text = tostring(gold) .. " 메소"
+		-- Number only (the pill icon already indicates 메소); abbreviated so big values fit the box.
+		lobbyMeso.TextComponent.Text = self:AbbreviateNumber(gold)
 	end
 	-- 토벤코인 (used by equipment evolution) on lobby + equip screens.
 	local coin = 0
@@ -178,20 +260,34 @@ method void RefreshSavedUI()
 	end
 	local lobbyCoin = _EntityService:GetEntityByPath("/ui/LobbyGroup/CurrencyBar/CoinPill/Text")
 	if isvalid(lobbyCoin) and lobbyCoin.TextComponent ~= nil then
-		lobbyCoin.TextComponent.Text = tostring(coin) .. " 토벤코인"
+		-- Number only (the pill icon already indicates 토벤코인); abbreviated so big values fit the box.
+		lobbyCoin.TextComponent.Text = self:AbbreviateNumber(coin)
 	end
 	local eqMeso = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
 	if isvalid(eqMeso) and eqMeso.TextComponent ~= nil then
-		eqMeso.TextComponent.Text = tostring(gold) .. " 메소"
+		eqMeso.TextComponent.Text = self:AbbreviateNumber(gold)
 	end
 	local eqCoin = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
 	if isvalid(eqCoin) and eqCoin.TextComponent ~= nil then
-		eqCoin.TextComponent.Text = tostring(coin) .. " 토벤코인"
+		eqCoin.TextComponent.Text = self:AbbreviateNumber(coin)
 	end
 	-- If the equipment screen is open, re-sync it after any save change (enhance/evolve/currency).
 	local eqGroup = _EntityService:GetEntityByPath("/ui/EquipGroup")
 	if isvalid(eqGroup) and eqGroup.Enable and _EquipScreen ~= nil then
 		_EquipScreen:RefreshFromSave()
+	end
+	-- If the blessing screen is open, re-sync its currency + level/cost after any save change.
+	local blGroup = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(blGroup) and blGroup.Enable then
+		local blMeso = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/MesoPill/Text")
+		if isvalid(blMeso) and blMeso.TextComponent ~= nil then
+			blMeso.TextComponent.Text = self:AbbreviateNumber(gold)
+		end
+		local blCoin = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/CoinPill/Text")
+		if isvalid(blCoin) and blCoin.TextComponent ~= nil then
+			blCoin.TextComponent.Text = self:AbbreviateNumber(coin)
+		end
+		self:RefreshBlessUI()
 	end
 	-- Profile name → the local player's account nickname.
 	local lp = _UserService.LocalPlayer
@@ -341,7 +437,7 @@ method void FillEquipScreen()
 	end
 	local m = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
 	if isvalid(m) and m.TextComponent ~= nil then
-		m.TextComponent.Text = tostring(gold) .. " 메소"
+		m.TextComponent.Text = self:AbbreviateNumber(gold)
 	end
 	local coin = 0
 	if _PlayerSave ~= nil then
@@ -349,7 +445,7 @@ method void FillEquipScreen()
 	end
 	local cc = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
 	if isvalid(cc) and cc.TextComponent ~= nil then
-		cc.TextComponent.Text = tostring(coin) .. " 토벤코인"
+		cc.TextComponent.Text = self:AbbreviateNumber(coin)
 	end
 end
 
@@ -622,7 +718,7 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnBlessClick(ButtonClickEvent event)
-	-- Lobby -> Blessing screen (temporary empty screen).
+	-- Lobby -> Blessing screen (reuses the lobby profile + currency, like the equip screen).
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = false
 	end
@@ -630,7 +726,133 @@ method void OnBlessClick(ButtonClickEvent event)
 	if isvalid(bless) then
 		bless.Enable = true
 	end
+	self:FillBlessScreen()
 	log("[ScreenFlow] -> Blessing")
+end
+
+@ExecSpace("ClientOnly")
+method void FillBlessScreen()
+	-- Populate the 축복 screen's reused profile (avatar + nickname) + currency from live player data.
+	local lp = _UserService.LocalPlayer
+	local uid = ""
+	local nick = ""
+	if isvalid(lp) and lp.PlayerComponent ~= nil then
+		uid = lp.PlayerComponent.UserId
+		nick = lp.PlayerComponent.Nickname
+	end
+	local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/ProfileCard/Name")
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil and nick ~= nil and nick ~= "" then
+		nameEnt.TextComponent.Text = nick
+	end
+	local av = _EntityService:GetEntityByPath("/ui/BlessGroup/ProfileCard/Portrait/Avatar")
+	if isvalid(av) and av.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+		if av.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+			av.CostumeManagerComponent.DefaultEquipUserId = uid
+			-- Freeze the async-built avatar in a stand pose a moment later (mirrors the lobby/equip portrait).
+			_TimerService:SetTimer(self, self.StandBlessAvatar, 0.5, false)
+		end
+	end
+	-- Currency (number-only + abbreviated, same as lobby/equip).
+	local gold = 0
+	local coin = 0
+	if _PlayerSave ~= nil then
+		gold = _PlayerSave:GetGold()
+		coin = _PlayerSave:GetCoin()
+	end
+	local m = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(m) and m.TextComponent ~= nil then
+		m.TextComponent.Text = self:AbbreviateNumber(gold)
+	end
+	local c = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(c) and c.TextComponent ~= nil then
+		c.TextComponent.Text = self:AbbreviateNumber(coin)
+	end
+	self:RefreshBlessUI()
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshBlessUI()
+	-- Update the whole 축복 page from save: level, next 토벤코인 cost, points, and each effect row.
+	if _PlayerSave == nil then
+		return
+	end
+	local level = _PlayerSave:GetBlessLevel()
+	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/LevelText")
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		lvEnt.TextComponent.Text = "축복 레벨 " .. tostring(level)
+	end
+	local costEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/CostText")
+	if isvalid(costEnt) and costEnt.TextComponent ~= nil then
+		costEnt.TextComponent.Text = tostring(_PlayerSave:BlessLevelUpCost(level)) .. " 토벤코인"
+	end
+	local free = _PlayerSave:GetBlessFreePoints()
+	local total = _PlayerSave:GetBlessTotalPoints()
+	local ptEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/PointsText")
+	if isvalid(ptEnt) and ptEnt.TextComponent ~= nil then
+		ptEnt.TextComponent.Text = "보유 포인트 : " .. tostring(free) .. " / " .. tostring(total)
+	end
+	-- Each effect row: "이름 Lv.N" + a 강화 button showing point cost (or MAX / greyed when unaffordable).
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds == nil then
+		return
+	end
+	for i = 1, eds:GetRowCount() do
+		local row = eds:GetRow(i)
+		if row ~= nil then
+			local id = row:GetItem("id")
+			if id ~= nil and id ~= "" then
+				local maxLv = tonumber(row:GetItem("maxLevel")) or 5
+				local elv = _PlayerSave:GetEffectLevel(id)
+				local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/EffName_" .. id)
+				if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+					nameEnt.TextComponent.Text = tostring(row:GetItem("name")) .. "  Lv." .. tostring(elv)
+				end
+				local btnEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/EffBtn_" .. id)
+				if isvalid(btnEnt) and btnEnt.TextComponent ~= nil then
+					if elv >= maxLv then
+						btnEnt.TextComponent.Text = "MAX"
+						if btnEnt.SpriteGUIRendererComponent ~= nil then
+							btnEnt.SpriteGUIRendererComponent.Color = Color(0.45, 0.45, 0.45, 1)
+						end
+					else
+						local c = _PlayerSave:EffectUpgradeCost(elv)
+						btnEnt.TextComponent.Text = "강화 (" .. tostring(c) .. "P)"
+						if btnEnt.SpriteGUIRendererComponent ~= nil then
+							if free >= c then
+								btnEnt.SpriteGUIRendererComponent.Color = Color(0.95, 0.78, 0.2, 1)
+							else
+								btnEnt.SpriteGUIRendererComponent.Color = Color(0.55, 0.47, 0.3, 1)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessLevelUpClick(ButtonClickEvent event)
+	-- Request a 축복 레벨업; server checks/spends 토벤코인 then resyncs (-> RefreshSavedUI -> RefreshBlessUI).
+	if _PlayerSave ~= nil then
+		_PlayerSave:LevelUpBless()
+	end
+	log("[ScreenFlow] bless level-up requested")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessEffectUpClick(string effectId)
+	-- Request a 축복 효과 강화; server checks/spends 포인트 then resyncs (-> RefreshBlessUI).
+	if _PlayerSave ~= nil then
+		_PlayerSave:LevelUpEffect(effectId)
+	end
+	log("[ScreenFlow] bless effect up requested: " .. tostring(effectId))
+end
+
+@ExecSpace("ClientOnly")
+method void StandBlessAvatar()
+	-- 축복 profile avatar -> stand pose.
+	self:StandAvatarAt("/ui/BlessGroup/ProfileCard/Portrait/Avatar")
 end
 
 @ExecSpace("ClientOnly")
@@ -750,6 +972,40 @@ method string PrevStage(string stage)
 		prev = s
 	end
 	return ""
+end
+
+method string AbbreviateNumber(number value)
+	-- Compact currency formatting so long balances stay inside the pill:
+	--   950 -> "950", 12300 -> "12.3K", 4500000 -> "4.5M", 1200000000 -> "1.2B", 3.4e12 -> "3.4T".
+	-- Under 1000 the raw integer is shown; above that it is scaled by 1000s with one decimal
+	-- (a trailing ".0" is dropped, e.g. 2000000 -> "2M" not "2.0M").
+	local n = math.floor(value + 0.5)
+	if n < 0 then
+		return "-" .. self:AbbreviateNumber(-n)
+	end
+	if n < 1000 then
+		return tostring(n)
+	end
+	local units = { "K", "M", "B", "T" }
+	local unitIndex = 1
+	local scaled = n / 1000
+	while scaled >= 1000 and unitIndex < #units do
+		scaled = scaled / 1000
+		unitIndex = unitIndex + 1
+	end
+	-- Round to one decimal; if rounding carries to 1000 (e.g. 999999), promote to the next unit.
+	local rounded = math.floor(scaled * 10 + 0.5) / 10
+	if rounded >= 1000 and unitIndex < #units then
+		rounded = rounded / 1000
+		unitIndex = unitIndex + 1
+	end
+	local text = ""
+	if rounded == math.floor(rounded) then
+		text = tostring(math.floor(rounded))
+	else
+		text = string.format("%.1f", rounded)
+	end
+	return text .. units[unitIndex]
 end
 
 method boolean IsStageUnlocked(string stage)
@@ -930,6 +1186,19 @@ method void OnEndPlay()
 	if isvalid(blessBtn) and self.blessHandler ~= nil then
 		blessBtn:DisconnectEvent(ButtonClickEvent, self.blessHandler)
 		self.blessHandler = nil
+	end
+	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/LevelUpBtn")
+	if isvalid(blessUp) and self.blessUpHandler ~= nil then
+		blessUp:DisconnectEvent(ButtonClickEvent, self.blessUpHandler)
+		self.blessUpHandler = nil
+	end
+	if self.blessEffHandlers ~= nil then
+		for _, rec in ipairs(self.blessEffHandlers) do
+			if isvalid(rec.ent) and rec.hd ~= nil then
+				rec.ent:DisconnectEvent(ButtonClickEvent, rec.hd)
+			end
+		end
+		self.blessEffHandlers = nil
 	end
 	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
 	if isvalid(settingsBtn) and self.settingsHandler ~= nil then
