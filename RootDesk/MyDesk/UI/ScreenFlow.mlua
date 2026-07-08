@@ -22,7 +22,14 @@ property any equipBackHandler = nil
 property any blessHandler = nil
 property any blessBackHandler = nil
 property any blessUpHandler = nil
-property any blessEffHandlers = nil
+property any blessRowHandlers = nil
+property any blessResetHandler = nil
+property any blessAllHandler = nil
+property any blessLockHandler = nil
+property any blessUpgradeHandler = nil
+property any blessCloseHandler = nil
+-- Currently selected 축복 효과 id ("" = none → right detail panel content hidden).
+property string blessSelected = ""
 property any settingsHandler = nil
 property any settingsCloseHandler = nil
 property any bgmSliderHandler = nil
@@ -121,12 +128,12 @@ method void OnBeginPlay()
 		self.blessHandler = blessBtn:ConnectEvent(ButtonClickEvent, self.OnBlessClick)
 	end
 	-- 축복 레벨업 button (inside the blessing page).
-	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/LevelUpBtn")
+	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
 	if isvalid(blessUp) then
 		self.blessUpHandler = blessUp:ConnectEvent(ButtonClickEvent, self.OnBlessLevelUpClick)
 	end
-	-- 축복 효과 강화 buttons (one per BlessEffect row) — closure captures the effect id.
-	self.blessEffHandlers = {}
+	-- 축복 효과 행(Row_<id>) — 클릭 시 그 효과를 선택하고 우측 상세(강화) 패널을 연다. closure captures the id.
+	self.blessRowHandlers = {}
 	local beds = _DataService:GetTable("BlessEffect")
 	if beds ~= nil then
 		for i = 1, beds:GetRowCount() do
@@ -134,15 +141,37 @@ method void OnBeginPlay()
 			if row ~= nil then
 				local eid = row:GetItem("id")
 				if eid ~= nil and eid ~= "" then
-					local effBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/EffBtn_" .. eid)
-					if isvalid(effBtn) then
+					local rowBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. eid)
+					if isvalid(rowBtn) then
 						local capturedId = eid
-						local eh = effBtn:ConnectEvent(ButtonClickEvent, function() self:OnBlessEffectUpClick(capturedId) end)
-						table.insert(self.blessEffHandlers, { ent = effBtn, hd = eh })
+						local rh = rowBtn:ConnectEvent(ButtonClickEvent, function() self:OnBlessRowClick(capturedId) end)
+						table.insert(self.blessRowHandlers, { ent = rowBtn, hd = rh })
 					end
 				end
 			end
 		end
+	end
+	-- 축복 효과 초기화 button (inside the blessing page) — resets all effect levels to 0 (level kept).
+	local blessReset = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/ResetBtn")
+	if isvalid(blessReset) then
+		self.blessResetHandler = blessReset:ConnectEvent(ButtonClickEvent, self.OnBlessResetClick)
+	end
+	-- 좌측 카테고리 탭 (ALL만 동작, 잠금은 자리표시자) + 우측 상세 패널의 강화/닫기 버튼.
+	local allTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
+	if isvalid(allTab) then
+		self.blessAllHandler = allTab:ConnectEvent(ButtonClickEvent, self.OnBlessAllTabClick)
+	end
+	local lockTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
+	if isvalid(lockTab) then
+		self.blessLockHandler = lockTab:ConnectEvent(ButtonClickEvent, self.OnBlessLockTabClick)
+	end
+	local upgradeBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
+	if isvalid(upgradeBtn) then
+		self.blessUpgradeHandler = upgradeBtn:ConnectEvent(ButtonClickEvent, self.OnBlessUpgradeClick)
+	end
+	local closeBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/CloseBtn")
+	if isvalid(closeBtn) then
+		self.blessCloseHandler = closeBtn:ConnectEvent(ButtonClickEvent, self.OnBlessDetailClose)
 	end
 	-- Cache the 축복 icon's 3 animation layers (aura / wings / sword) for the idle animation.
 	self.blessAura = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon")
@@ -732,27 +761,8 @@ end
 
 @ExecSpace("ClientOnly")
 method void FillBlessScreen()
-	-- Populate the 축복 screen's reused profile (avatar + nickname) + currency from live player data.
-	local lp = _UserService.LocalPlayer
-	local uid = ""
-	local nick = ""
-	if isvalid(lp) and lp.PlayerComponent ~= nil then
-		uid = lp.PlayerComponent.UserId
-		nick = lp.PlayerComponent.Nickname
-	end
-	local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/ProfileCard/Name")
-	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil and nick ~= nil and nick ~= "" then
-		nameEnt.TextComponent.Text = nick
-	end
-	local av = _EntityService:GetEntityByPath("/ui/BlessGroup/ProfileCard/Portrait/Avatar")
-	if isvalid(av) and av.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
-		if av.CostumeManagerComponent.DefaultEquipUserId ~= uid then
-			av.CostumeManagerComponent.DefaultEquipUserId = uid
-			-- Freeze the async-built avatar in a stand pose a moment later (mirrors the lobby/equip portrait).
-			_TimerService:SetTimer(self, self.StandBlessAvatar, 0.5, false)
-		end
-	end
-	-- Currency (number-only + abbreviated, same as lobby/equip).
+	-- Populate the 축복 screen's currency, clear any prior selection (right detail starts hidden),
+	-- then refresh the level / points / effect list. (No profile avatar on this screen anymore.)
 	local gold = 0
 	local coin = 0
 	if _PlayerSave ~= nil then
@@ -767,68 +777,257 @@ method void FillBlessScreen()
 	if isvalid(c) and c.TextComponent ~= nil then
 		c.TextComponent.Text = self:AbbreviateNumber(coin)
 	end
+	self:ClearBlessSelection()
 	self:RefreshBlessUI()
+end
+
+method string BlessEffectDesc(string effectId)
+	-- Static Korean flavor text per effect (the BlessEffect DataSet has no description column).
+	if effectId == "pierce" then
+		return "투사체가 적을 더 많이 관통합니다."
+	elseif effectId == "crit" then
+		return "치명타 확률이 증가합니다."
+	elseif effectId == "hitcount" then
+		return "공격의 타격 횟수가 증가합니다."
+	elseif effectId == "swift" then
+		return "공격 속도가 빨라집니다."
+	elseif effectId == "regen" then
+		return "시간마다 체력을 회복합니다."
+	elseif effectId == "iframe" then
+		return "피격 시 무적 시간이 늘어납니다."
+	end
+	return ""
+end
+
+method string BlessEffectUnit(string effectId)
+	-- Value suffix shown in the detail panel per effect.
+	if effectId == "pierce" then
+		return "회 관통"
+	elseif effectId == "crit" then
+		return "%"
+	elseif effectId == "hitcount" then
+		return "타"
+	elseif effectId == "swift" then
+		return "%"
+	elseif effectId == "regen" then
+		return " HP"
+	elseif effectId == "iframe" then
+		return "초"
+	end
+	return ""
+end
+
+method any BlessEffectColor(string effectId)
+	-- Icon color per effect (mirrors the swatches placed in BlessGroup.ui).
+	if effectId == "pierce" then
+		return Color(0.90, 0.30, 0.30, 1)
+	elseif effectId == "crit" then
+		return Color(0.96, 0.62, 0.22, 1)
+	elseif effectId == "hitcount" then
+		return Color(0.34, 0.60, 0.95, 1)
+	elseif effectId == "swift" then
+		return Color(0.34, 0.75, 0.45, 1)
+	elseif effectId == "regen" then
+		return Color(0.92, 0.50, 0.66, 1)
+	elseif effectId == "iframe" then
+		return Color(0.60, 0.45, 0.85, 1)
+	end
+	return Color(0.9, 0.3, 0.3, 1)
 end
 
 @ExecSpace("ClientOnly")
 method void RefreshBlessUI()
-	-- Update the whole 축복 page from save: level, next 토벤코인 cost, points, and each effect row.
+	-- Update the 축복 page from save: level header, level-up cost, top point pill, and each effect row
+	-- (name / description / level pill / selection highlight). Refreshes the detail panel if one is open.
 	if _PlayerSave == nil then
 		return
 	end
 	local level = _PlayerSave:GetBlessLevel()
-	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/LevelText")
+	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelText")
 	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
 		lvEnt.TextComponent.Text = "축복 레벨 " .. tostring(level)
 	end
-	local costEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/CostText")
-	if isvalid(costEnt) and costEnt.TextComponent ~= nil then
-		costEnt.TextComponent.Text = tostring(_PlayerSave:BlessLevelUpCost(level)) .. " 토벤코인"
+	-- Level-up row (replaces the excluded XP bar): show the next 토벤코인 cost.
+	local upEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
+	if isvalid(upEnt) and upEnt.TextComponent ~= nil then
+		upEnt.TextComponent.Text = "레벨업   ·   다음 레벨 " .. tostring(_PlayerSave:BlessLevelUpCost(level)) .. " 토벤코인"
 	end
+	-- Free 축복 포인트 → top "P" pill.
 	local free = _PlayerSave:GetBlessFreePoints()
-	local total = _PlayerSave:GetBlessTotalPoints()
-	local ptEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/PointsText")
+	local ptEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/PointPill/Text")
 	if isvalid(ptEnt) and ptEnt.TextComponent ~= nil then
-		ptEnt.TextComponent.Text = "보유 포인트 : " .. tostring(free) .. " / " .. tostring(total)
+		ptEnt.TextComponent.Text = tostring(free)
 	end
-	-- Each effect row: "이름 Lv.N" + a 강화 button showing point cost (or MAX / greyed when unaffordable).
+	-- Effect rows.
 	local eds = _DataService:GetTable("BlessEffect")
-	if eds == nil then
-		return
-	end
-	for i = 1, eds:GetRowCount() do
-		local row = eds:GetRow(i)
-		if row ~= nil then
-			local id = row:GetItem("id")
-			if id ~= nil and id ~= "" then
-				local maxLv = tonumber(row:GetItem("maxLevel")) or 5
-				local elv = _PlayerSave:GetEffectLevel(id)
-				local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/EffName_" .. id)
-				if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
-					nameEnt.TextComponent.Text = tostring(row:GetItem("name")) .. "  Lv." .. tostring(elv)
-				end
-				local btnEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/EffBtn_" .. id)
-				if isvalid(btnEnt) and btnEnt.TextComponent ~= nil then
-					if elv >= maxLv then
-						btnEnt.TextComponent.Text = "MAX"
-						if btnEnt.SpriteGUIRendererComponent ~= nil then
-							btnEnt.SpriteGUIRendererComponent.Color = Color(0.45, 0.45, 0.45, 1)
-						end
-					else
-						local c = _PlayerSave:EffectUpgradeCost(elv)
-						btnEnt.TextComponent.Text = "강화 (" .. tostring(c) .. "P)"
-						if btnEnt.SpriteGUIRendererComponent ~= nil then
-							if free >= c then
-								btnEnt.SpriteGUIRendererComponent.Color = Color(0.95, 0.78, 0.2, 1)
-							else
-								btnEnt.SpriteGUIRendererComponent.Color = Color(0.55, 0.47, 0.3, 1)
-							end
+	if eds ~= nil then
+		for i = 1, eds:GetRowCount() do
+			local row = eds:GetRow(i)
+			if row ~= nil then
+				local id = row:GetItem("id")
+				if id ~= nil and id ~= "" then
+					local elv = _PlayerSave:GetEffectLevel(id)
+					local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Name")
+					if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+						nameEnt.TextComponent.Text = tostring(row:GetItem("name"))
+					end
+					local descEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Desc")
+					if isvalid(descEnt) and descEnt.TextComponent ~= nil then
+						descEnt.TextComponent.Text = self:BlessEffectDesc(id)
+					end
+					local lvTxt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/LvPill/Txt")
+					if isvalid(lvTxt) and lvTxt.TextComponent ~= nil then
+						lvTxt.TextComponent.Text = "Lv." .. tostring(elv)
+					end
+					-- Selection highlight (selected row bright, others tan).
+					local rowEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id)
+					if isvalid(rowEnt) and rowEnt.SpriteGUIRendererComponent ~= nil then
+						if id == self.blessSelected then
+							rowEnt.SpriteGUIRendererComponent.Color = Color(0.99, 0.93, 0.72, 1)
+						else
+							rowEnt.SpriteGUIRendererComponent.Color = Color(0.86, 0.79, 0.64, 1)
 						end
 					end
 				end
 			end
 		end
 	end
+	if self.blessSelected ~= nil and self.blessSelected ~= "" then
+		self:RefreshBlessDetail()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshBlessDetail()
+	-- Fill the right detail panel for the currently selected effect (name / icon / level / value / cost).
+	if _PlayerSave == nil or self.blessSelected == nil or self.blessSelected == "" then
+		return
+	end
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds == nil then
+		return
+	end
+	local row = eds:FindRow("id", self.blessSelected)
+	if row == nil then
+		return
+	end
+	local id = self.blessSelected
+	local maxLv = tonumber(row:GetItem("maxLevel")) or 5
+	local elv = _PlayerSave:GetEffectLevel(id)
+	local unit = self:BlessEffectUnit(id)
+	local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetName")
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+		nameEnt.TextComponent.Text = tostring(row:GetItem("name"))
+	end
+	local descEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetDesc")
+	if isvalid(descEnt) and descEnt.TextComponent ~= nil then
+		descEnt.TextComponent.Text = self:BlessEffectDesc(id)
+	end
+	local iconEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetIcon")
+	if isvalid(iconEnt) and iconEnt.SpriteGUIRendererComponent ~= nil then
+		iconEnt.SpriteGUIRendererComponent.Color = self:BlessEffectColor(id)
+	end
+	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetLv")
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		if elv >= maxLv then
+			lvEnt.TextComponent.Text = "Lv." .. tostring(elv) .. " (최대)"
+		else
+			lvEnt.TextComponent.Text = "Lv." .. tostring(elv) .. " › Lv." .. tostring(elv + 1)
+		end
+	end
+	local valEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetValue")
+	if isvalid(valEnt) and valEnt.TextComponent ~= nil then
+		local curVal = "0"
+		if elv >= 1 then
+			curVal = tostring(row:GetItem("lv" .. tostring(elv)))
+		end
+		if elv >= maxLv then
+			valEnt.TextComponent.Text = "효과량 : " .. curVal .. unit .. " (최대)"
+		else
+			local nextVal = tostring(row:GetItem("lv" .. tostring(elv + 1)))
+			valEnt.TextComponent.Text = "효과량 : " .. curVal .. unit .. " › " .. nextVal .. unit
+		end
+	end
+	local upBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
+	if isvalid(upBtn) and upBtn.TextComponent ~= nil then
+		if elv >= maxLv then
+			upBtn.TextComponent.Text = "최대 레벨"
+			if upBtn.SpriteGUIRendererComponent ~= nil then
+				upBtn.SpriteGUIRendererComponent.Color = Color(0.55, 0.55, 0.55, 1)
+			end
+		else
+			local cost = _PlayerSave:EffectUpgradeCost(elv)
+			upBtn.TextComponent.Text = "강화 (" .. tostring(cost) .. " P)"
+			if upBtn.SpriteGUIRendererComponent ~= nil then
+				if _PlayerSave:GetBlessFreePoints() >= cost then
+					upBtn.SpriteGUIRendererComponent.Color = Color(0.96, 0.79, 0.24, 1)
+				else
+					upBtn.SpriteGUIRendererComponent.Color = Color(0.55, 0.47, 0.3, 1)
+				end
+			end
+		end
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void ClearBlessSelection()
+	-- Deselect: hide the right detail content (back-board stays), show the "select an effect" hint.
+	self.blessSelected = ""
+	local detail = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail")
+	if isvalid(detail) then
+		detail.Enable = false
+	end
+	local hint = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/EmptyHint")
+	if isvalid(hint) then
+		hint.Enable = true
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessRowClick(string effectId)
+	-- Select an effect row → reveal the right detail (강화) content and populate it.
+	self.blessSelected = effectId
+	local detail = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail")
+	if isvalid(detail) then
+		detail.Enable = true
+	end
+	local hint = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/EmptyHint")
+	if isvalid(hint) then
+		hint.Enable = false
+	end
+	self:RefreshBlessUI()
+	log("[ScreenFlow] bless effect selected: " .. tostring(effectId))
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessDetailClose(ButtonClickEvent event)
+	-- Close the detail content (deselect); the back-board panel remains visible.
+	self:ClearBlessSelection()
+	self:RefreshBlessUI()
+	log("[ScreenFlow] bless detail closed")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessAllTabClick(ButtonClickEvent event)
+	-- ALL tab: show every effect (already all shown) — just keep it visually selected.
+	local allTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
+	if isvalid(allTab) and allTab.SpriteGUIRendererComponent ~= nil then
+		allTab.SpriteGUIRendererComponent.Color = Color(0.99, 0.93, 0.72, 1)
+	end
+	local lockTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
+	if isvalid(lockTab) and lockTab.SpriteGUIRendererComponent ~= nil then
+		lockTab.SpriteGUIRendererComponent.Color = Color(0.42, 0.36, 0.30, 1)
+	end
+	log("[ScreenFlow] bless tab: ALL")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessLockTabClick(ButtonClickEvent event)
+	-- Lock tab is a placeholder for now (no lock/unlock data yet).
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage("잠금된 카테고리입니다")
+	end
+	log("[ScreenFlow] bless tab: Lock (placeholder)")
 end
 
 @ExecSpace("ClientOnly")
@@ -841,18 +1040,22 @@ method void OnBlessLevelUpClick(ButtonClickEvent event)
 end
 
 @ExecSpace("ClientOnly")
-method void OnBlessEffectUpClick(string effectId)
-	-- Request a 축복 효과 강화; server checks/spends 포인트 then resyncs (-> RefreshBlessUI).
-	if _PlayerSave ~= nil then
-		_PlayerSave:LevelUpEffect(effectId)
+method void OnBlessUpgradeClick(ButtonClickEvent event)
+	-- Request a 축복 효과 강화 for the selected effect; server checks/spends 포인트 then resyncs.
+	if _PlayerSave ~= nil and self.blessSelected ~= nil and self.blessSelected ~= "" then
+		_PlayerSave:LevelUpEffect(self.blessSelected)
 	end
-	log("[ScreenFlow] bless effect up requested: " .. tostring(effectId))
+	log("[ScreenFlow] bless effect up requested: " .. tostring(self.blessSelected))
 end
 
 @ExecSpace("ClientOnly")
-method void StandBlessAvatar()
-	-- 축복 profile avatar -> stand pose.
-	self:StandAvatarAt("/ui/BlessGroup/ProfileCard/Portrait/Avatar")
+method void OnBlessResetClick(ButtonClickEvent event)
+	-- Request a 축복 효과 초기화; server zeroes every effect level (bless level kept) then resyncs
+	-- (-> RefreshSavedUI -> RefreshBlessUI). Points return automatically since they're level-derived.
+	if _PlayerSave ~= nil then
+		_PlayerSave:ResetBless()
+	end
+	log("[ScreenFlow] bless effect reset requested")
 end
 
 @ExecSpace("ClientOnly")
@@ -1187,18 +1390,43 @@ method void OnEndPlay()
 		blessBtn:DisconnectEvent(ButtonClickEvent, self.blessHandler)
 		self.blessHandler = nil
 	end
-	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/Panel/LevelUpBtn")
+	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
 	if isvalid(blessUp) and self.blessUpHandler ~= nil then
 		blessUp:DisconnectEvent(ButtonClickEvent, self.blessUpHandler)
 		self.blessUpHandler = nil
 	end
-	if self.blessEffHandlers ~= nil then
-		for _, rec in ipairs(self.blessEffHandlers) do
+	if self.blessRowHandlers ~= nil then
+		for _, rec in ipairs(self.blessRowHandlers) do
 			if isvalid(rec.ent) and rec.hd ~= nil then
 				rec.ent:DisconnectEvent(ButtonClickEvent, rec.hd)
 			end
 		end
-		self.blessEffHandlers = nil
+		self.blessRowHandlers = nil
+	end
+	local blessReset = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/ResetBtn")
+	if isvalid(blessReset) and self.blessResetHandler ~= nil then
+		blessReset:DisconnectEvent(ButtonClickEvent, self.blessResetHandler)
+		self.blessResetHandler = nil
+	end
+	local blessAll = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
+	if isvalid(blessAll) and self.blessAllHandler ~= nil then
+		blessAll:DisconnectEvent(ButtonClickEvent, self.blessAllHandler)
+		self.blessAllHandler = nil
+	end
+	local blessLock = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
+	if isvalid(blessLock) and self.blessLockHandler ~= nil then
+		blessLock:DisconnectEvent(ButtonClickEvent, self.blessLockHandler)
+		self.blessLockHandler = nil
+	end
+	local blessUpgrade = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
+	if isvalid(blessUpgrade) and self.blessUpgradeHandler ~= nil then
+		blessUpgrade:DisconnectEvent(ButtonClickEvent, self.blessUpgradeHandler)
+		self.blessUpgradeHandler = nil
+	end
+	local blessClose = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/CloseBtn")
+	if isvalid(blessClose) and self.blessCloseHandler ~= nil then
+		blessClose:DisconnectEvent(ButtonClickEvent, self.blessCloseHandler)
+		self.blessCloseHandler = nil
 	end
 	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
 	if isvalid(settingsBtn) and self.settingsHandler ~= nil then

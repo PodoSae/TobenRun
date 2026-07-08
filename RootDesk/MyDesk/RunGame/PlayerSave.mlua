@@ -715,13 +715,15 @@ end
 
 @ExecSpace("Server")
 method void ResetBless()
-	-- 축복 초기화: 축복레벨 1, 모든 효과 레벨 0 (포인트는 레벨 기반이라 함께 리셋됨). 토벤코인은 건드리지 않음.
+	-- 축복 효과 초기화: 축복 레벨은 그대로 두고, 모든 효과 레벨(be_<id>)만 0으로 되돌린다.
+	-- 축복 포인트는 레벨에서 파생(free = maxPoint(level) - spent)되므로, 효과가 0이 되면
+	-- 쓴 포인트(spent)가 0이 되어 보유 포인트가 레벨에 맞게 전부 자동으로 되돌아온다. 토벤코인은 건드리지 않음.
 	local userId = senderUserId
 	if userId == nil or userId == "" then
 		return
 	end
 	local data = self:LoadUser(userId)
-	data.bless_lv = 1
+	local changed = false
 	local eds = _DataService:GetTable("BlessEffect")
 	if eds ~= nil then
 		for i = 1, eds:GetRowCount() do
@@ -729,15 +731,23 @@ method void ResetBless()
 			if row ~= nil then
 				local eid = row:GetItem("id")
 				if eid ~= nil and eid ~= "" then
+					if math.floor(data["be_" .. eid] or 0) ~= 0 then
+						changed = true
+					end
 					data["be_" .. eid] = 0
 				end
 			end
 		end
 	end
+	if changed == false then
+		self:EquipMsgClient("초기화할 축복 효과가 없습니다", userId)
+		log("[PlayerSave] bless reset skipped (no effect levels set)")
+		return
+	end
 	self:Persist(userId)
 	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
-	self:EquipMsgClient("축복이 초기화되었습니다", userId)
-	log("[PlayerSave] bless reset (level=1, all effects=0)")
+	self:EquipMsgClient("축복 효과가 초기화되었습니다", userId)
+	log("[PlayerSave] bless reset (level kept=" .. tostring(math.floor(data.bless_lv or 1)) .. ", all effects=0)")
 end
 
 method integer ShopItemCost(number price, number priceInc, number level)
