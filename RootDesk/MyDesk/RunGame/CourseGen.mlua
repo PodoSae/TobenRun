@@ -382,6 +382,14 @@ method void ResetStageBuffsOnMap(Entity map)
 			if hp ~= nil then
 				hp:ResetStageHealthBuffs()
 			end
+			-- 축복(계정 영구) 재적용: 스테이지 리셋 직후 이 플레이어의 축복 효과 6종을 캐릭터 컴포넌트에 (재)주입한다.
+			-- 스테이지 버프와 달리 리셋 대상이 아니므로, 리셋 이후에 넘겨줘야 이번 판 시작부터 효과가 살아있다.
+			local plc = user.PlayerComponent
+			if plc ~= nil then
+				_PlayerSave:ApplyBlessToPlayer(user, plc.UserId)
+				_PlayerSave:ApplyTobenToPlayer(user, plc.UserId)
+				_PlayerSave:ApplyWeaponToPlayer(user, plc.UserId)
+			end
 		end
 	end
 end

@@ -1702,7 +1702,7 @@
                 "y": 0.0
               },
               "Position": {
-                "x": 0.0,
+                "x": -320.0,
                 "y": 0.0,
                 "z": 0.0
               },
@@ -1847,8 +1847,8 @@
                 "y": 2.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": -82.0,
+                "y": 2.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -1992,8 +1992,8 @@
                 "y": 4.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": 28.0,
+                "y": 4.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -2194,8 +2194,8 @@
                 "y": 470.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": -470.0,
+                "y": 470.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -2335,7 +2335,7 @@
       {
         "id": "11efb86e-6b9a-4f82-931e-b44667386c93",
         "path": "/ui/BlessGroup/LeftRail",
-        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.TextComponent",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.TextComponent",
         "jsonString": {
           "name": "LeftRail",
           "path": "/ui/BlessGroup/LeftRail",
@@ -2396,8 +2396,8 @@
                 "y": 120.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": -800.0,
+                "y": 120.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -2471,6 +2471,51 @@
               "OutlineWidth": 3.0,
               "RaycastTarget": true,
               "Type": 0,
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.ButtonComponent",
+              "Colors": {
+                "NormalColor": {
+                  "r": 1.0,
+                  "g": 1.0,
+                  "b": 1.0,
+                  "a": 1.0
+                },
+                "HighlightedColor": {
+                  "r": 0.9607843,
+                  "g": 0.9607843,
+                  "b": 0.9607843,
+                  "a": 1.0
+                },
+                "PressedColor": {
+                  "r": 0.784313738,
+                  "g": 0.784313738,
+                  "b": 0.784313738,
+                  "a": 1.0
+                },
+                "SelectedColor": {
+                  "r": 0.9607843,
+                  "g": 0.9607843,
+                  "b": 0.9607843,
+                  "a": 1.0
+                },
+                "DisabledColor": {
+                  "r": 0.784313738,
+                  "g": 0.784313738,
+                  "b": 0.784313738,
+                  "a": 0.5019608
+                },
+                "ColorMultiplier": 1.0,
+                "FadeDuration": 0.1
+              },
+              "ImageRUIDs": {
+                "HighlightedSprite": null,
+                "PressedSprite": null,
+                "SelectedSprite": null,
+                "DisabledSprite": null
+              },
+              "OverrideSorting": false,
               "Enable": true
             },
             {
@@ -2599,7 +2644,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": 110.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -2851,7 +2896,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": -60.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -3102,8 +3147,8 @@
                 "y": -30.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": 700.0,
+                "y": -30.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -3594,8 +3639,8 @@
                 "y": 330.0
               },
               "Position": {
-                "x": 0.0,
-                "y": 0.0,
+                "x": 210.0,
+                "y": 330.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -3847,7 +3892,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": 300.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -4049,7 +4094,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": 165.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -4194,7 +4239,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": 40.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -4396,7 +4441,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": -40.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -4598,7 +4643,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": -110.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
@@ -4800,7 +4845,7 @@
               },
               "Position": {
                 "x": 0.0,
-                "y": 0.0,
+                "y": -290.0,
                 "z": 0.0
               },
               "QuaternionRotation": {

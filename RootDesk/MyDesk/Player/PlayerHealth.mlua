@@ -24,6 +24,55 @@ script PlayerHealth extends Component
     @HideFromInspector property number stageRegenPerSec = 0     -- 초당 HP 재생량(가산 누적)
     @HideFromInspector property integer stageShieldCharges = 0  -- 남은 보호막 충전(피격 1회 완전 무효화)
 
+    -- 토벤 스탯(계정 영구, 장비창에서 강화). 스테이지 시작 전 PlayerSave:ApplyTobenToPlayer가 SetTobenStats로 주입.
+    -- 체력 = 최대체력 가산(baseMaxHp에 더해짐), 방어력 = ApplyDefense에서 추가 경감. 스테이지 버프와 독립(리셋 시 유지).
+    @HideFromInspector property number tobenMaxHpBonus = 0
+    @HideFromInspector property number tobenDefBonus = 0
+
+    -- 장착 무기(장비)의 스탯(계정 영구, Weapon 데이터셋의 현재 등급 행). 스테이지 시작 전 PlayerSave:ApplyWeaponToPlayer가
+    -- SetWeaponStats로 주입. 체력 = 최대체력 가산(baseMaxHp에 더해짐), 방어력 = ApplyDefense에서 추가 경감. 스테이지 버프와 독립.
+    @HideFromInspector property number weaponMaxHpBonus = 0
+    @HideFromInspector property number weaponDefBonus = 0
+
+    @ExecSpace("ServerOnly")
+    method void SetTobenStats(number maxHpAdd, number defAdd)
+        -- 토벤 체력/방어력을 저장하고 최대체력을 baseMaxHp + 토벤체력 + 무기체력 + 스테이지체력으로 재계산. 늘어난 만큼 즉시 회복.
+        local oldBonus = self.tobenMaxHpBonus
+        self.tobenMaxHpBonus = maxHpAdd or 0
+        self.tobenDefBonus = defAdd or 0
+        if self.baseMaxHp > 0 then
+            self.MaxHp = self.baseMaxHp + self.tobenMaxHpBonus + self.weaponMaxHpBonus + self.stageMaxHpBonus
+        end
+        local delta = self.tobenMaxHpBonus - oldBonus
+        if delta > 0 then
+            self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + delta)
+        elseif self.CurrentHp > self.MaxHp then
+            self.CurrentHp = self.MaxHp
+        end
+        log("[PlayerHealth] toben stats maxHp+" .. tostring(self.tobenMaxHpBonus)
+            .. " def+" .. tostring(self.tobenDefBonus) .. " -> MaxHp=" .. tostring(self.MaxHp))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetWeaponStats(number maxHpAdd, number defAdd)
+        -- 장착 무기 체력/방어력을 저장하고 최대체력을 baseMaxHp + 토벤체력 + 무기체력 + 스테이지체력으로 재계산. 늘어난 만큼 즉시 회복.
+        -- 미장착이면 0/0으로 호출돼 무보정. 스테이지 리셋 대상 아님(토벤과 동일하게 유지).
+        local oldBonus = self.weaponMaxHpBonus
+        self.weaponMaxHpBonus = maxHpAdd or 0
+        self.weaponDefBonus = defAdd or 0
+        if self.baseMaxHp > 0 then
+            self.MaxHp = self.baseMaxHp + self.tobenMaxHpBonus + self.weaponMaxHpBonus + self.stageMaxHpBonus
+        end
+        local delta = self.weaponMaxHpBonus - oldBonus
+        if delta > 0 then
+            self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + delta)
+        elseif self.CurrentHp > self.MaxHp then
+            self.CurrentHp = self.MaxHp
+        end
+        log("[PlayerHealth] weapon stats maxHp+" .. tostring(self.weaponMaxHpBonus)
+            .. " def+" .. tostring(self.weaponDefBonus) .. " -> MaxHp=" .. tostring(self.MaxHp))
+    end
+
     -- Hit feedback (effects played when the player takes damage). Inspector-tunable.
     -- 피격 카메라 흔들림 — 직관적 타격감을 위해 강하고 짧게(펀치감). 인스펙터에서 조절 가능.
     @DisplayName("카메라 흔들림 강도")
@@ -57,6 +106,10 @@ script PlayerHealth extends Component
     @HideFromInspector @Sync property string StageBuffDebug = ""
     @HideFromInspector property number dbgComposeTimer = 0
 
+    -- 축복(계정 영구) 컴포넌트 캐시. 런타임에 부착되므로 OnBeginPlay가 아니라 사용 시점에 지연 조회/캐싱한다.
+    @HideFromInspector property any blessRegen = nil
+    @HideFromInspector property any blessIframe = nil
+
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
         -- Initializes HP to full and records the spawn point used for respawn-on-death.
@@ -84,6 +137,16 @@ script PlayerHealth extends Component
         -- 로그라이트 체력 재생: 스테이지 재생 버프가 있으면 매 프레임 회복(사망 아닐 때, MaxHp까지).
         if self.stageRegenPerSec > 0 and not self.dead and self.CurrentHp < self.MaxHp then
             self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + self.stageRegenPerSec * delta)
+        end
+        -- 축복[체력 재생]: 런타임 부착된 BlessRegen을 매 프레임 구동(간격마다 회복). 컴포넌트가 스스로 타이밍을
+        -- 관리하고, 여기서는 delta와 자신(PlayerHealth)만 넘겨준다. 미부착/미보유면 아무 일도 하지 않는다.
+        if self.blessRegen == nil then
+            self.blessRegen = self.Entity:GetComponent("script.BlessRegen")
+        end
+        if self.blessRegen ~= nil then
+            ---@type BlessRegen
+            local br = self.blessRegen
+            br:Tick(delta, self)
         end
         -- 디버그 문자열 갱신(0.25s마다). BossTestMap에서 RunGameHud가 이 @Sync 값을 좌상단에 표시한다.
         self.dbgComposeTimer = self.dbgComposeTimer + delta
@@ -136,7 +199,7 @@ script PlayerHealth extends Component
         -- 피격이 충전 1개만 소모하도록 한다(다프레임 접촉 방지).
         if self.stageShieldCharges > 0 then
             self.stageShieldCharges = self.stageShieldCharges - 1
-            self.invulnRemain = self.invulnTime
+            self.invulnRemain = self.invulnTime + self:GetBlessIframeBonus()
             self:PlayShieldBlock()
             -- 마지막 충전이 소진되면 오라 제거.
             if self.stageShieldCharges <= 0 then
@@ -146,7 +209,7 @@ script PlayerHealth extends Component
             return
         end
 
-        self.invulnRemain = self.invulnTime
+        self.invulnRemain = self.invulnTime + self:GetBlessIframeBonus()
         -- A2 방어력: 최종 피해 = 받은 피해 − 방어력(최소 1). 모든 피해 경로가 여기로 모이므로 균일 적용 (기획 §4.2).
         amount = self:ApplyDefense(amount)
         self.CurrentHp = self.CurrentHp - amount
@@ -173,24 +236,21 @@ script PlayerHealth extends Component
         -- 방어력 경감: 최종 피해 = raw − Defense(최소 1 보장). Defense는 StatTable의 스탯(기획 §4.2 기본 10).
         -- 밸런스: 현재는 flat 차감이라 소형 몬스터 피해가 크게 줄 수 있음 — StatTable의 base로 튜닝하거나
         -- 필요 시 퍼센트 경감으로 교체 가능.
+        -- 방어력 = StatTable Defense(정의돼 있을 때) + 토벤 방어력(계정 영구). 토벤 방어력은 StatManager 유무와
+        -- 무관하게 항상 적용된다.
+        local statDef = 0
         ---@type PlayerStatManager
         local sm = self.Entity:GetComponent("script.PlayerStatManager")
-        if sm == nil then
-            log_warning("[PlayerHealth] Defense: PlayerStatManager 없음 → 경감 미적용 raw=" .. tostring(raw))
-            return raw
+        if sm ~= nil and sm:HasStat("Defense") then
+            statDef = sm:GetStatValue("Defense")
         end
-        -- HasStat으로 "정의됨"을 명확히 구분: GetStatValue는 미정의 시 1.0을 반환하므로, 데이터셋에 Defense
-        -- 행이 아직 로드되지 않았으면(리프레시 필요) 여기서 원값을 그대로 반환해 잘못된 −1 경감을 막는다.
-        if not sm:HasStat("Defense") then
-            log_warning("[PlayerHealth] Defense: StatTable에 Defense 미로드(데이터셋 refresh 필요) → 경감 미적용 raw=" .. tostring(raw))
-            return raw
-        end
-        local def = sm:GetStatValue("Defense")
+        local def = statDef + self.tobenDefBonus + self.weaponDefBonus
         if def <= 0 then return raw end
         local final = raw - def
         if final < 1 then final = 1 end
         log("[PlayerHealth] Defense 적용 raw=" .. tostring(raw) .. " def=" .. tostring(def)
-            .. " -> final=" .. tostring(final))
+            .. " (stat=" .. tostring(statDef) .. "+toben=" .. tostring(self.tobenDefBonus)
+            .. "+weapon=" .. tostring(self.weaponDefBonus) .. ") -> final=" .. tostring(final))
         return final
     end
 
@@ -208,6 +268,29 @@ script PlayerHealth extends Component
         if plc ~= nil then
             pc:ApplyStunClient(dur, plc.UserId)
         end
+    end
+
+    @ExecSpace("ServerOnly")
+    method number GetBlessIframeBonus()
+        -- 축복[피격 무적시간 증가] 추가 무적(초). 런타임 부착된 BlessIframe을 지연 조회/캐싱해서 읽는다.
+        -- 미부착/미보유면 0을 반환하므로 무적 시간이 기본값(invulnTime) 그대로 유지된다.
+        if self.blessIframe == nil then
+            self.blessIframe = self.Entity:GetComponent("script.BlessIframe")
+        end
+        ---@type BlessIframe
+        local bi = self.blessIframe
+        if bi == nil then return 0 end
+        return bi:GetBonusInvuln()
+    end
+
+    @ExecSpace("ServerOnly")
+    method void HealFromBless(number amount)
+        -- 축복[체력 재생] 적용 지점(BlessRegen.Tick이 간격마다 호출). 사망 시 무시, 최대치 상한. 조용히 회복
+        -- (매 간격 로그 스팸 방지). 스테이지 재생 버프(stageRegenPerSec)와 독립적으로 누적된다.
+        if self.dead then return end
+        if amount <= 0 then return end
+        if self.CurrentHp >= self.MaxHp then return end
+        self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + amount)
     end
 
     @ExecSpace("ServerOnly")
@@ -233,7 +316,7 @@ script PlayerHealth extends Component
         -- 로그라이트 아이템: 이번 스테이지 최대체력을 가산하고, 늘어난 만큼 즉시 회복해 바로 쓸 수 있게 한다.
         if amount <= 0 then return end
         self.stageMaxHpBonus = self.stageMaxHpBonus + amount
-        self.MaxHp = self.baseMaxHp + self.stageMaxHpBonus
+        self.MaxHp = self.baseMaxHp + self.tobenMaxHpBonus + self.weaponMaxHpBonus + self.stageMaxHpBonus
         self.CurrentHp = self.CurrentHp + amount
         log("[PlayerHealth] stage maxHP +" .. tostring(amount) .. " -> " .. tostring(self.MaxHp))
     end
@@ -259,7 +342,8 @@ script PlayerHealth extends Component
         self.stageShieldCharges = 0
         self.stageMaxHpBonus = 0
         if self.baseMaxHp > 0 then
-            self.MaxHp = self.baseMaxHp
+            -- 토벤/무기 최대체력(계정 영구)은 유지하고 스테이지 가산만 제거.
+            self.MaxHp = self.baseMaxHp + self.tobenMaxHpBonus + self.weaponMaxHpBonus
             if self.CurrentHp > self.MaxHp then
                 self.CurrentHp = self.MaxHp
             end

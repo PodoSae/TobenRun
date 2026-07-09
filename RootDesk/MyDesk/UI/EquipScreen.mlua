@@ -8,8 +8,10 @@ script EquipScreen extends Logic
 -- marked with a small corner badge + green cell tint; grade is shown (color-coded) per cell.
 -- Item templates come from the EquipItem DataSet; state is persisted via _PlayerSave.
 
-property any defs = nil        -- itemId -> def table
+property any defs = nil        -- itemId -> def table (armor from EquipItem + weapons from Weapon)
 property any defOrder = nil     -- itemId list in dataset order
+property any weaponGrades = nil -- weaponId -> { [grade] = { name,ruid,desc,atk,aspd,hp,def,ultCount,autoDmg } }
+property any weaponOrder = nil  -- weaponId list (Weapon dataset order)
 property any equipped = nil     -- slot -> itemId ("" = none)
 property any cellItems = nil    -- inventory cell index (0..15) -> itemId
 property string curTab = "all"
@@ -21,13 +23,15 @@ property any equipBtnHd = nil
 property any actBtnHd = nil
 property any closeBtnHd = nil
 
+-- 토벤 스탯 패널(좌측) 버튼 핸들러.
+property any tobenLvHd = nil
+property any tobenResetHd = nil
+property any tobenStatHds = nil
+
 method table SlotList()
-	-- Equip slots: save-key slot / slot-button path / default label.
+	-- 장비는 무기 1칸만. (방어구 3칸은 제거 — 외형은 배경 세이브로만 유지)
 	return {
 		{ slot = "weapon", btn = "/ui/EquipGroup/CharPanel/Slot_Weapon", label = "무기" },
-		{ slot = "glove", btn = "/ui/EquipGroup/CharPanel/Slot_Glove", label = "장갑" },
-		{ slot = "coat", btn = "/ui/EquipGroup/CharPanel/Slot_Coat", label = "상의" },
-		{ slot = "pants", btn = "/ui/EquipGroup/CharPanel/Slot_Pants", label = "하의" },
 	}
 end
 
@@ -40,15 +44,32 @@ method any CatForSlot(string slot)
 	return MapleAvatarItemCategory.Invalid
 end
 
+method string GradeName(integer grade)
+	-- 등급 티어 이름: 1 노말 / 2 레어 / 3 에픽 / 4 유니크 / 5 레전더리.
+	if grade <= 1 then
+		return "노말"
+	elseif grade == 2 then
+		return "레어"
+	elseif grade == 3 then
+		return "에픽"
+	elseif grade == 4 then
+		return "유니크"
+	end
+	return "레전더리"
+end
+
 method any GradeColor(integer grade)
-	-- Color-code the grade so it reads at a glance.
-	if grade >= 3 then
-		return Color(0.78, 0.61, 1.0, 1)
+	-- 등급 티어 색(한눈에 읽히도록): 노말 흰 / 레어 파랑 / 에픽 보라 / 유니크 금 / 레전더리 초록.
+	if grade >= 5 then
+		return Color(0.55, 0.9, 0.5, 1)
+	elseif grade == 4 then
+		return Color(1.0, 0.82, 0.3, 1)
+	elseif grade == 3 then
+		return Color(0.75, 0.52, 1.0, 1)
+	elseif grade == 2 then
+		return Color(0.4, 0.66, 1.0, 1)
 	end
-	if grade == 2 then
-		return Color(0.44, 0.71, 1.0, 1)
-	end
-	return Color(0.80, 0.85, 0.92, 1)
+	return Color(0.85, 0.87, 0.92, 1)
 end
 
 method void CacheDefs()
@@ -88,9 +109,72 @@ method void CacheDefs()
 	end
 end
 
+method void CacheWeapons()
+	-- Weapon 데이터셋 로드: 무기별 등급 테이블(weaponGrades) + 현재 등급 def를 self.defs에 등록.
+	-- self.defs에 넣어야 IdToRuid(외형)/RefreshSlots/RefreshInventory/팝업이 기존 코드 그대로 무기를 다룬다.
+	self.weaponGrades = {}
+	self.weaponOrder = {}
+	local ds = _DataService:GetTable("Weapon")
+	if ds == nil then
+		log_warning("[EquipScreen] Weapon dataset not found")
+		return
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local id = row:GetItem("id")
+			local grade = math.floor(tonumber(row:GetItem("grade")) or 1)
+			if id ~= nil and id ~= "" then
+				if self.weaponGrades[id] == nil then
+					self.weaponGrades[id] = {}
+					table.insert(self.weaponOrder, id)
+				end
+				self.weaponGrades[id][grade] = {
+					name = row:GetItem("name"),
+					ruid = row:GetItem("ruid"),
+					desc = row:GetItem("desc"),
+					atk = tonumber(row:GetItem("atk")) or 0,
+					aspd = tonumber(row:GetItem("aspd")) or 0,
+					hp = tonumber(row:GetItem("hp")) or 0,
+					def = tonumber(row:GetItem("def")) or 0,
+					ultCount = math.floor(tonumber(row:GetItem("ultCount")) or 0),
+					autoDmg = tonumber(row:GetItem("autoDmg")) or 0,
+					armorRuid = row:GetItem("armorRuid") or "",
+					gloveRuid = row:GetItem("gloveRuid") or "",
+					capRuid = row:GetItem("capRuid") or "",
+					shoesRuid = row:GetItem("shoesRuid") or "",
+				}
+			end
+		end
+	end
+	-- 각 무기의 현재 등급(지금은 1) def를 self.defs에 등록.
+	for _, id in ipairs(self.weaponOrder) do
+		local g = 1
+		if _PlayerSave ~= nil then
+			g = _PlayerSave:GetWeaponGrade(id)
+		end
+		local gd = self.weaponGrades[id][g]
+		if gd == nil then
+			gd = self.weaponGrades[id][1]
+		end
+		if gd ~= nil then
+			self.defs[id] = {
+				name = gd.name, slot = "weapon", itemType = "weapon", ruid = gd.ruid,
+				atk = gd.atk, aspd = gd.aspd, hp = gd.hp, def = gd.def,
+				growthPct = 0, maxLevel = 1, grade = g,
+				upgradeCost = 0, upgradeCostInc = 0, evolveCost = 0,
+				isWeapon = true, desc = gd.desc, ultCount = gd.ultCount, autoDmg = gd.autoDmg,
+				armorRuid = gd.armorRuid, gloveRuid = gd.gloveRuid, capRuid = gd.capRuid, shoesRuid = gd.shoesRuid,
+			}
+		end
+	end
+end
+
 method void OnBeginPlay()
 	-- Cache defs and wire slot / inventory-cell / tab / popup buttons.
 	self:CacheDefs()
+	self:CacheWeapons()
 	self.equipped = {}
 	self.cellItems = {}
 	self.slotHds = {}
@@ -138,6 +222,25 @@ method void OnBeginPlay()
 		self.closeBtnHd = closeBtn:ConnectEvent(ButtonClickEvent, self.OnPopupClose)
 	end
 
+	-- 토벤 스탯 패널(좌측) 버튼 연결: 레벨업 / 초기화 / 4개 스탯 강화.
+	self.tobenStatHds = {}
+	local tobenLvBtn = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/LevelUpBtn")
+	if isvalid(tobenLvBtn) then
+		self.tobenLvHd = tobenLvBtn:ConnectEvent(ButtonClickEvent, self.OnTobenLevelUp)
+	end
+	local tobenResetBtn = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/ResetBtn")
+	if isvalid(tobenResetBtn) then
+		self.tobenResetHd = tobenResetBtn:ConnectEvent(ButtonClickEvent, self.OnTobenReset)
+	end
+	for _, s in ipairs(self:TobenStatList()) do
+		local ent = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/UpBtn")
+		if isvalid(ent) then
+			local capId = s.id
+			local h = ent:ConnectEvent(ButtonClickEvent, function() self:OnTobenStatUp(capId) end)
+			table.insert(self.tobenStatHds, { ent = ent, hd = h })
+		end
+	end
+
 	self:ClosePopup()
 	log("[EquipScreen] wired (items=" .. tostring(#self.defOrder) .. ")")
 end
@@ -160,8 +263,99 @@ method void OnOpen()
 	self:RefreshSlots()
 	self:RefreshStats()
 	self:ApplyAppearance()
+	self:RefreshToben()
 	_TimerService:SetTimer(self, self.ApplyAppearance, 0.6, false)
 	log("[EquipScreen] OnOpen")
+end
+
+method table TobenStatList()
+	-- 토벤 스탯 id / 표시 이름 / 값 단위.
+	return {
+		{ id = "attack", name = "공격력", unit = "%" },
+		{ id = "atkspeed", name = "공격속도", unit = "%" },
+		{ id = "hp", name = "체력", unit = "" },
+		{ id = "defense", name = "방어력", unit = "" },
+	}
+end
+
+method void RefreshToben()
+	-- 좌측 토벤 스탯 패널 갱신: 레벨/레벨업 비용, 보유 포인트, 4개 스탯 행(이름 Lv.N / 효과값 / 강화 버튼).
+	if _PlayerSave == nil then return end
+	local level = _PlayerSave:GetTobenLevel()
+	local free = _PlayerSave:GetTobenFreePoints()
+	local total = _PlayerSave:GetTobenTotalPoints()
+
+	local lvEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/LevelText")
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		lvEnt.TextComponent.Text = "토벤 레벨 " .. tostring(level)
+	end
+	local upEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/LevelUpBtn")
+	if isvalid(upEnt) and upEnt.TextComponent ~= nil then
+		upEnt.TextComponent.Text = "레벨업   ·   다음 " .. tostring(_PlayerSave:TobenLevelUpCost(level)) .. " 메소"
+	end
+	local ptEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/PointsText")
+	if isvalid(ptEnt) and ptEnt.TextComponent ~= nil then
+		ptEnt.TextComponent.Text = "보유 포인트 : " .. tostring(free) .. " / " .. tostring(total)
+	end
+
+	for _, s in ipairs(self:TobenStatList()) do
+		local elv = _PlayerSave:GetTobenStatLevel(s.id)
+		local maxLv = 5
+		local nameEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/Name")
+		if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+			nameEnt.TextComponent.Text = s.name .. " Lv." .. tostring(elv)
+		end
+		local valEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/Value")
+		if isvalid(valEnt) and valEnt.TextComponent ~= nil then
+			local curVal = _PlayerSave:TobenStatValue(s.id, elv)
+			if elv >= maxLv then
+				valEnt.TextComponent.Text = "현재 +" .. string.format("%g", curVal) .. s.unit .. " (최대)"
+			else
+				local nextVal = _PlayerSave:TobenStatValue(s.id, elv + 1)
+				valEnt.TextComponent.Text = "+" .. string.format("%g", curVal) .. s.unit .. " › +" .. string.format("%g", nextVal) .. s.unit
+			end
+		end
+		local btnEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/UpBtn")
+		if isvalid(btnEnt) and btnEnt.TextComponent ~= nil then
+			if elv >= maxLv then
+				btnEnt.TextComponent.Text = "최대"
+				if btnEnt.SpriteGUIRendererComponent ~= nil then
+					btnEnt.SpriteGUIRendererComponent.Color = Color(0.5, 0.5, 0.5, 1)
+				end
+			else
+				local cost = _PlayerSave:TobenStatUpgradeCost(elv)
+				btnEnt.TextComponent.Text = "강화 (" .. tostring(cost) .. "P)"
+				if btnEnt.SpriteGUIRendererComponent ~= nil then
+					if free >= cost then
+						btnEnt.SpriteGUIRendererComponent.Color = Color(0.85, 0.7, 0.4, 1)
+					else
+						btnEnt.SpriteGUIRendererComponent.Color = Color(0.5, 0.44, 0.3, 1)
+					end
+				end
+			end
+		end
+	end
+end
+
+method void OnTobenLevelUp()
+	-- 토벤 레벨업 요청(메소 지불). 서버가 처리 후 ReceiveMyData → RefreshSavedUI → RefreshToben로 갱신된다.
+	if _PlayerSave ~= nil then
+		_PlayerSave:LevelUpToben()
+	end
+end
+
+method void OnTobenStatUp(string statId)
+	-- 토벤 스탯 강화 요청(포인트 지불).
+	if _PlayerSave ~= nil then
+		_PlayerSave:LevelUpTobenStat(statId)
+	end
+end
+
+method void OnTobenReset()
+	-- 토벤 스탯 초기화 요청(레벨 유지, 포인트 회수).
+	if _PlayerSave ~= nil then
+		_PlayerSave:ResetToben()
+	end
 end
 
 method integer ItemLevel(string id)
@@ -176,14 +370,14 @@ method integer ItemLevel(string id)
 end
 
 method void RefreshInventory()
-	-- Fill inventory cells with the player's OWNED items matching the current tab.
+	-- 인벤토리: 해금된 무기만 표시(무기 전용). 잠긴 무기는 표시하지 않음(추후 확장).
 	self.cellItems = {}
 	local idx = 0
-	for _, id in ipairs(self.defOrder) do
-		local d = self.defs[id]
-		local owned = (_PlayerSave ~= nil and _PlayerSave:IsOwned(id))
-		if d ~= nil and owned and (self.curTab == "all" or d.slot == self.curTab) then
-			if idx <= 15 then
+	if self.weaponOrder ~= nil then
+		for _, id in ipairs(self.weaponOrder) do
+			local d = self.defs[id]
+			local unlocked = (_PlayerSave ~= nil and _PlayerSave:IsWeaponUnlocked(id))
+			if d ~= nil and unlocked and idx <= 15 then
 				self.cellItems[idx] = id
 				self:FillCell(idx, id, d)
 				idx = idx + 1
@@ -212,7 +406,11 @@ method void FillCell(integer idx, string id, table d)
 	end
 	local lvEnt = cell:GetChildByName("Lv", false)
 	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
-		lvEnt.TextComponent.Text = tostring(d.grade) .. "성 Lv." .. tostring(self:ItemLevel(id))
+		if d.isWeapon then
+			lvEnt.TextComponent.Text = self:GradeName(d.grade)
+		else
+			lvEnt.TextComponent.Text = tostring(d.grade) .. "성 Lv." .. tostring(self:ItemLevel(id))
+		end
 		lvEnt.TextComponent.FontColor = self:GradeColor(d.grade)
 	end
 	local isEq = (self.equipped[d.slot] == id and id ~= "")
@@ -291,6 +489,18 @@ method void RefreshSlots()
 			end
 		end
 	end
+	self:RefreshSlotDesc()
+end
+
+method void RefreshSlotDesc()
+	-- 장착칸 오른쪽: 현재 장착 무기의 이름/등급 + 스탯 설명(장비스탯 + 궁극기/자동공격).
+	local id = self.equipped["weapon"]
+	local txt = "장착된 무기가 없습니다."
+	if id ~= nil and id ~= "" and self.defs[id] ~= nil then
+		local d = self.defs[id]
+		txt = tostring(d.name) .. "  (" .. self:GradeName(d.grade) .. ")\n" .. self:WeaponStatSummary(d)
+	end
+	self:SetText("/ui/EquipGroup/CharPanel/SlotStatDesc", txt)
 end
 
 method string IdToRuid(string id)
@@ -322,29 +532,70 @@ method void ApplyRuidsToCostume(any cm, string weapon, string glove, string coat
 	elseif revertEmptyToAccount then
 		cm:SetEquip(MapleAvatarItemCategory.OneHandedWeapon, "")
 	end
-	-- Glove.
+
+	-- 장착 무기에 딸린 '방어구 커스텀 세트'를 무기 ruid로 역조회해 착용(한벌옷=상하의 대체 + 장갑 + 모자 + 신발).
+	-- 세트가 있으면 개별 방어구 인자(glove/coat/pants)는 무시하고 세트로 통일한다.
+	local wset = self:WeaponSetByRuid(weapon)
+	if wset ~= nil then
+		if wset.armor ~= "" then
+			cm:SetEquip(MapleAvatarItemCategory.Longcoat, wset.armor)
+			cm:SetEquip(MapleAvatarItemCategory.Coat, "")
+			cm:SetEquip(MapleAvatarItemCategory.Pants, "")
+		end
+		if wset.glove ~= "" then
+			cm:SetEquip(MapleAvatarItemCategory.Glove, wset.glove)
+		end
+		if wset.cap ~= "" then
+			cm:SetEquip(MapleAvatarItemCategory.Cap, wset.cap)
+		end
+		if wset.shoes ~= "" then
+			cm:SetEquip(MapleAvatarItemCategory.Shoes, wset.shoes)
+		end
+		return
+	end
+
+	-- 무기 세트가 없을 때: 기존 개별 방어구(glove/coat/pants) 로직.
 	if glove ~= nil and glove ~= "" then
 		cm:SetEquip(MapleAvatarItemCategory.Glove, glove)
 	elseif revertEmptyToAccount then
 		cm:SetEquip(MapleAvatarItemCategory.Glove, "")
 	end
-	-- Coat.
 	if coat ~= nil and coat ~= "" then
 		cm:SetEquip(MapleAvatarItemCategory.Coat, coat)
 	elseif revertEmptyToAccount then
 		cm:SetEquip(MapleAvatarItemCategory.Coat, "")
 	end
-	-- Pants.
 	if pants ~= nil and pants ~= "" then
 		cm:SetEquip(MapleAvatarItemCategory.Pants, pants)
 	elseif revertEmptyToAccount then
 		cm:SetEquip(MapleAvatarItemCategory.Pants, "")
 	end
-	-- Longcoat (한벌옷/overall) occupies BOTH the coat + pants slots. If we placed a separate game coat
-	-- or pants, clear the account longcoat so it can't render over (overlap) the game armor.
 	if (coat ~= nil and coat ~= "") or (pants ~= nil and pants ~= "") then
 		cm:SetEquip(MapleAvatarItemCategory.Longcoat, "")
 	end
+	-- 무기 세트가 없고 되돌리기(계정 클론)라면, 세트 전용 슬롯(한벌옷/모자/신발)도 계정 기본으로 원복.
+	if revertEmptyToAccount then
+		cm:SetEquip(MapleAvatarItemCategory.Longcoat, "")
+		cm:SetEquip(MapleAvatarItemCategory.Cap, "")
+		cm:SetEquip(MapleAvatarItemCategory.Shoes, "")
+	end
+end
+
+method any WeaponSetByRuid(string ruid)
+	-- 무기 ruid로 그 무기의 방어구 커스텀 세트({armor,glove,cap,shoes})를 역조회. 세트가 없으면 nil.
+	if ruid == nil or ruid == "" or self.defs == nil or self.weaponOrder == nil then
+		return nil
+	end
+	for _, id in ipairs(self.weaponOrder) do
+		local d = self.defs[id]
+		if d ~= nil and d.isWeapon == true and d.ruid == ruid then
+			if (d.armorRuid or "") ~= "" or (d.gloveRuid or "") ~= "" or (d.capRuid or "") ~= "" or (d.shoesRuid or "") ~= "" then
+				return { armor = d.armorRuid or "", glove = d.gloveRuid or "", cap = d.capRuid or "", shoes = d.shoesRuid or "" }
+			end
+			return nil
+		end
+	end
+	return nil
 end
 
 method void ApplyEquippedFromSaveTo(any cm, boolean revertEmptyToAccount)
@@ -432,7 +683,24 @@ method void RefreshStats()
 			def = def + d.def * mult
 		end
 	end
-	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Values", "공격력 " .. self:Fmt(atk) .. "    공속 " .. self:Fmt(aspd) .. "    체력 " .. self:Fmt(hp) .. "    방어력 " .. self:Fmt(def))
+	-- 토벤 스탯(계정 영구)까지 합산: 공격력 = 장비공격 ×(1+토벤공격%), 공속 = 장비공속 + 토벤공속%,
+	-- 체력/방어력 = 장비 + 토벤(둘 다 flat). → 캐릭터 아래 '총 스탯'이 장비+토벤 합산치가 되도록.
+	local tAtk = 0
+	local tAspd = 0
+	local tHp = 0
+	local tDef = 0
+	if _PlayerSave ~= nil then
+		tAtk = _PlayerSave:TobenStatValue("attack", _PlayerSave:GetTobenStatLevel("attack"))
+		tAspd = _PlayerSave:TobenStatValue("atkspeed", _PlayerSave:GetTobenStatLevel("atkspeed"))
+		tHp = _PlayerSave:TobenStatValue("hp", _PlayerSave:GetTobenStatLevel("hp"))
+		tDef = _PlayerSave:TobenStatValue("defense", _PlayerSave:GetTobenStatLevel("defense"))
+	end
+	local totalAtk = atk * (1 + tAtk / 100)
+	local totalAspd = aspd + tAspd
+	local totalHp = hp + tHp
+	local totalDef = def + tDef
+	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Values",
+		"공격력 " .. self:Fmt(totalAtk) .. "    공속 " .. self:Fmt(totalAspd) .. "%    체력 " .. self:Fmt(totalHp) .. "    방어력 " .. self:Fmt(totalDef))
 end
 
 method void RefreshTabs()
@@ -497,6 +765,56 @@ method void ClosePopup()
 	end
 end
 
+method string WeaponStatSummary(table d)
+	-- 무기 스탯 요약(장비스탯 4종 + 궁극기 사용 갯수 + 자동공격 값).
+	local parts = {}
+	if d.atk ~= nil and d.atk > 0 then
+		table.insert(parts, "공격력 " .. self:Fmt(d.atk))
+	end
+	if d.aspd ~= nil and d.aspd > 0 then
+		table.insert(parts, "공속 " .. self:Fmt(d.aspd) .. "%")
+	end
+	if d.hp ~= nil and d.hp > 0 then
+		table.insert(parts, "체력 " .. self:Fmt(d.hp))
+	end
+	if d.def ~= nil and d.def > 0 then
+		table.insert(parts, "방어력 " .. self:Fmt(d.def))
+	end
+	local line1 = table.concat(parts, "   ")
+	local line2 = "궁극기 사용 " .. tostring(d.ultCount or 0) .. "회    자동공격 " .. self:Fmt(d.autoDmg or 0)
+	return line1 .. "\n" .. line2
+end
+
+method void RefreshWeaponPopup(string id, table d)
+	-- 무기 팝업: 등급 + 설명 + 스탯 표시, 장착/해제 토글, 등급업 버튼은 잠금 표시(기능 미구현).
+	self:SetText("/ui/EquipPopupGroup/Panel/GradeLv", self:GradeName(d.grade))
+	local gEnt = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/GradeLv")
+	if isvalid(gEnt) and gEnt.TextComponent ~= nil then
+		gEnt.TextComponent.FontColor = self:GradeColor(d.grade)
+	end
+	self:SetText("/ui/EquipPopupGroup/Panel/Stats", tostring(d.desc) .. "\n" .. self:WeaponStatSummary(d))
+	-- 장착/해제 버튼.
+	local isEq = (self.equipped["weapon"] == id and id ~= "")
+	local eqBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/EquipBtn")
+	if isEq then
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착 해제")
+		self:SetBtnColor(eqBtn, 0.42, 0.42, 0.48)
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "장착중")
+	else
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착")
+		self:SetBtnColor(eqBtn, 0.2, 0.5, 0.85)
+		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "")
+	end
+	-- 등급업 버튼(잠금): 회색으로 표시하고 눌러도 기능 없음(토스트).
+	local actBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/ActBtn")
+	if isvalid(actBtn) then
+		actBtn.Enable = true
+	end
+	self:SetText("/ui/EquipPopupGroup/Panel/ActBtn", "등급업 (잠금)")
+	self:SetBtnColor(actBtn, 0.5, 0.5, 0.5)
+	self:SetText("/ui/EquipPopupGroup/Panel/ActCost", "준비 중")
+end
+
 method void RefreshPopup()
 	-- Fill the popup with the selected item + configure the 장착/강화·진화 buttons.
 	local id = self.selected
@@ -511,6 +829,11 @@ method void RefreshPopup()
 		icon.SpriteGUIRendererComponent.ImageRUID = DataRef("thumbnail://" .. d.ruid)
 	end
 	self:SetText("/ui/EquipPopupGroup/Panel/Name", d.name)
+	-- 무기는 등급업(잠금) 팝업으로 분기.
+	if d.isWeapon then
+		self:RefreshWeaponPopup(id, d)
+		return
+	end
 	self:SetText("/ui/EquipPopupGroup/Panel/GradeLv", tostring(d.grade) .. "성    Lv." .. tostring(lv) .. "/" .. tostring(d.maxLevel))
 	self:SetText("/ui/EquipPopupGroup/Panel/Stats", self:StatSummary(d, mult))
 	-- equip button state
@@ -608,6 +931,13 @@ method void OnPopupAct()
 		return
 	end
 	local d = self.defs[id]
+	-- 무기 등급업은 아직 잠금(기능 미구현) → 안내 토스트만.
+	if d.isWeapon then
+		if _UIToast ~= nil then
+			_UIToast:ShowMessage("등급업은 준비 중입니다")
+		end
+		return
+	end
 	local lv = self:ItemLevel(id)
 	if lv < d.maxLevel then
 		_PlayerSave:EnhanceGear(id)
@@ -650,6 +980,7 @@ method void RefreshFromSave()
 		self:RefreshPopup()
 	end
 	self:ApplyAppearance()
+	self:RefreshToben()
 end
 
 method void DisconnectList(any list)
@@ -683,6 +1014,9 @@ method void OnEndPlay()
 	self:DisconnectOne("/ui/EquipPopupGroup/Panel/EquipBtn", self.equipBtnHd)
 	self:DisconnectOne("/ui/EquipPopupGroup/Panel/ActBtn", self.actBtnHd)
 	self:DisconnectOne("/ui/EquipPopupGroup/Panel/CloseBtn", self.closeBtnHd)
+	self:DisconnectOne("/ui/EquipGroup/TobenPanel/LevelUpBtn", self.tobenLvHd)
+	self:DisconnectOne("/ui/EquipGroup/TobenPanel/ResetBtn", self.tobenResetHd)
+	self:DisconnectList(self.tobenStatHds)
 end
 
 end

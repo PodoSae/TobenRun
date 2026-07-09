@@ -786,13 +786,13 @@ method string BlessEffectDesc(string effectId)
 	if effectId == "pierce" then
 		return "투사체가 적을 더 많이 관통합니다."
 	elseif effectId == "crit" then
-		return "치명타 확률이 증가합니다."
+		return "일반 몬스터를 확률로 즉사시킵니다."
 	elseif effectId == "hitcount" then
-		return "공격의 타격 횟수가 증가합니다."
+		return "확률로 추가 타격이 1회 발생합니다."
 	elseif effectId == "swift" then
 		return "공격 속도가 빨라집니다."
 	elseif effectId == "regen" then
-		return "시간마다 체력을 회복합니다."
+		return "10초마다 최대 체력의 일부를 회복합니다."
 	elseif effectId == "iframe" then
 		return "피격 시 무적 시간이 늘어납니다."
 	end
@@ -804,13 +804,13 @@ method string BlessEffectUnit(string effectId)
 	if effectId == "pierce" then
 		return "회 관통"
 	elseif effectId == "crit" then
-		return "%"
+		return "% 즉사"
 	elseif effectId == "hitcount" then
-		return "타"
+		return "% 확률"
 	elseif effectId == "swift" then
 		return "%"
 	elseif effectId == "regen" then
-		return " HP"
+		return "% 회복"
 	elseif effectId == "iframe" then
 		return "초"
 	end

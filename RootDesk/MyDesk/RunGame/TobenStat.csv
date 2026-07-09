@@ -1,0 +1,5 @@
+﻿id,name,type,maxLevel,lv1,lv2,lv3,lv4,lv5
+attack,공격력,attack,5,5,10,15,20,25
+atkspeed,공격속도,atkspeed,5,5,10,15,20,25
+hp,체력,hp,5,500,1000,1500,2000,2500
+defense,방어력,defense,5,2,4,6,8,10

@@ -1,0 +1,29 @@
+@Component
+script BlessPierce extends Component
+
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    --  축복[무기관통]  (BlessEffect DataSet의 effectId = "pierce")
+    -- ───────────────────────────────────────────────────────────────────────────────────────
+    --  효과   : 검기(자동공격)가 기본보다 적을 추가로 N마리 더 관통한다(정수 가산). 예) BonusPierce=2면
+    --           기본 1관통 무기가 3마리를 뚫고 지나간다.
+    --  데이터 : 로비 축복 강화 → be_pierce 레벨 → BlessEffect의 lv{레벨} 효과값 → PlayerSave:ApplyBlessToPlayer가
+    --  흐름     스테이지 진입마다 SetBless(값)로 이 컴포넌트에 주입 → PowerStrike.FireBeam이 GetBonusPierce()를
+    --           읽어 [BasePierce + 스테이지 관통버프 + 이 값]으로 검기의 최종 관통 수를 정한다.
+    --  부착   : DefaultPlayer.model은 편집 불가라 런타임(AddComponent)으로 붙는다. "계정 영구" 축복이라
+    --  /수명    로그라이트 스테이지 버프와 독립 — 스테이지 리셋의 영향 없이 자체 필드에 값을 유지한다.
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    @HideFromInspector property integer BonusPierce = 0
+
+    @ExecSpace("ServerOnly")
+    method void SetBless(number value)
+        -- 인게임 시작 전 주입점: 이 플레이어의 무기관통 축복 효과값을 관통 수로 저장(0 = 미보유).
+        self.BonusPierce = math.floor(value + 0.5)
+        log("[BlessPierce] SetBless -> +" .. tostring(self.BonusPierce) .. " pierce")
+    end
+
+    method integer GetBonusPierce()
+        -- PowerStrike가 매 검기 발사 시 읽어가는 축복 관통 가산치.
+        return self.BonusPierce
+    end
+
+end

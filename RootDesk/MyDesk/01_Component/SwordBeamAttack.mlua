@@ -5,6 +5,9 @@ script SwordBeamAttack extends AttackComponent
     -- is only a fallback when a beam is fired without configuration.
     property number BaseDamage = 100
     property number CriticalRate = 1.5
+    -- 축복[급소 일격] 일반몬스터 즉사 확률(0~1). PowerStrike가 발사 직전 그 플레이어의 BlessCrit 값으로 설정한다.
+    -- 0이면 즉사 없음. >0이면 일반 몬스터(MonsterUnit)를 때릴 때마다 이 확률로 즉사(현재 HP만큼 피해). 보스 제외.
+    @HideFromInspector property number InstakillChance = 0
     -- Must match the attackInfo the beam passes to AttackFrom (PowerStrike.AttackInfo / SwordBeam.AttackInfo).
     property string SkillTag = "PowerStrike"
 
@@ -23,6 +26,19 @@ script SwordBeamAttack extends AttackComponent
         -- Returns the configured beam damage for our skill tag; anything else is treated as a stray 1.
         -- ⚠ No @ExecSpace: parent AttackComponent.CalcDamage is ExecSpace=All; adding one => LEA-3014.
         if attackInfo == self.SkillTag then
+            -- 축복[급소 일격]: 일반 몬스터(MonsterUnit)에 한해 InstakillChance 확률로 즉사시킨다. 즉사 시 그 몬스터의
+            -- 현재 HP만큼 피해를 반환 → 정상 HitEvent 파이프라인으로 처치(메소/궁극기 게이지/사망연출 그대로 유지).
+            -- 보스(MushmomBoss)는 MonsterUnit이 아니므로 자동 제외된다.
+            if self.InstakillChance > 0 and defender ~= nil then
+                ---@type MonsterUnit
+                local mu = defender:GetComponent("script.MonsterUnit")
+                if mu ~= nil and _UtilLogic:RandomDouble() < self.InstakillChance then
+                    local cur = math.floor(mu.Hp)
+                    if cur < 1 then cur = 1 end
+                    log("[SwordBeamAttack] 급소일격 즉사! -> " .. tostring(defender.Name) .. " (hp=" .. tostring(cur) .. ")")
+                    return cur
+                end
+            end
             return self.BaseDamage
         end
         return 1
@@ -34,7 +50,7 @@ script SwordBeamAttack extends AttackComponent
     end
 
     method boolean CalcCritical(Entity attacker, Entity defender, string attackInfo)
-        -- Beams do not crit by default.
+        -- 검기는 기본적으로 치명타 없음(급소 일격 축복은 치명타가 아니라 '즉사'로 CalcDamage에서 처리한다).
         return false
     end
 
