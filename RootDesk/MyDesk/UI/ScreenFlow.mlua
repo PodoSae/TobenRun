@@ -17,11 +17,37 @@ property any startGameHandler = nil
 property any stageHandlers = nil
 property any stageSelectOpenHandler = nil
 property any stageSelectBackHandler = nil
-property any shopOpenHandler = nil
+property any equipHandler = nil
+property any equipBackHandler = nil
+property any blessHandler = nil
+property any blessBackHandler = nil
+property any blessUpHandler = nil
+property any blessRowHandlers = nil
+property any blessResetHandler = nil
+property any blessAllHandler = nil
+property any blessLockHandler = nil
+property any blessUpgradeHandler = nil
+property any blessCloseHandler = nil
+-- Currently selected 축복 효과 id ("" = none → right detail panel content hidden).
+property string blessSelected = ""
+property any settingsHandler = nil
+property any settingsCloseHandler = nil
+property any bgmSliderHandler = nil
+property any sfxSliderHandler = nil
 property any shopBackHandler = nil
 property any shopCells = nil
 -- Running gauge fill-animation timer ids (cleared on rebuild / end play).
 property any gaugeTimers = nil
+-- 축복 button icon idle animation (3 layers): aura (static, glow pulse) + wings (flap) + sword (float).
+property any blessWings = nil
+property any blessSword = nil
+property any blessAura = nil
+property number blessT = 0
+property number swBaseX = 0
+property number swBaseY = 0
+property number wgBaseSX = 1
+property number wgBaseSY = 1
+property boolean blessInit = false
 
 @ExecSpace("ClientOnly")
 method void OnBeginPlay()
@@ -56,27 +82,121 @@ method void OnBeginPlay()
 			table.insert(self.stageHandlers, { ent = btn, hd = h })
 		end
 	end
-	-- Lobby -> StageSelect entry button, and StageSelect -> Lobby back button.
-	local stageBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StageBtn")
-	if isvalid(stageBtn) then
-		self.stageSelectOpenHandler = stageBtn:ConnectEvent(ButtonClickEvent, self.OnStageSelectOpenClick)
+	-- "모험 시작!" button opens the StageSelect screen (game start -> pick a stage).
+	local startBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StartBtn")
+	if isvalid(startBtn) then
+		self.stageSelectOpenHandler = startBtn:ConnectEvent(ButtonClickEvent, self.OnStageSelectOpenClick)
 	end
 	local stageBack = _EntityService:GetEntityByPath("/ui/StageSelectGroup/BackBtn")
 	if isvalid(stageBack) then
 		self.stageSelectBackHandler = stageBack:ConnectEvent(ButtonClickEvent, self.OnStageSelectBackClick)
 	end
-	-- Shop screen: hidden at start; wire its open / back / buy buttons.
+	-- Shop screen kept hidden (no longer opened from the lobby; the shop button became 장비).
 	local shop = _EntityService:GetEntityByPath("/ui/ShopGroup")
 	if isvalid(shop) then
 		shop.Enable = false
 	end
-	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
-	if isvalid(shopBtn) then
-		self.shopOpenHandler = shopBtn:ConnectEvent(ButtonClickEvent, self.OnShopOpenClick)
-	end
 	local shopBack = _EntityService:GetEntityByPath("/ui/ShopGroup/BackBtn")
 	if isvalid(shopBack) then
 		self.shopBackHandler = shopBack:ConnectEvent(ButtonClickEvent, self.OnShopBackClick)
+	end
+	-- Equipment screen (temporary empty screen): hidden at start; wire its back button.
+	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(equip) then
+		equip.Enable = false
+	end
+	local equipBack = _EntityService:GetEntityByPath("/ui/EquipGroup/BackBtn")
+	if isvalid(equipBack) then
+		self.equipBackHandler = equipBack:ConnectEvent(ButtonClickEvent, self.OnEquipBackClick)
+	end
+	-- Blessing screen (temporary empty screen): hidden at start; wire its back button.
+	local bless = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(bless) then
+		bless.Enable = false
+	end
+	local blessBack = _EntityService:GetEntityByPath("/ui/BlessGroup/BackBtn")
+	if isvalid(blessBack) then
+		self.blessBackHandler = blessBack:ConnectEvent(ButtonClickEvent, self.OnBlessBackClick)
+	end
+	-- Lobby menu buttons: 장비 / 모험가의 축복 open their screens; 설정 is a placeholder.
+	local equipBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/EquipBtn")
+	if isvalid(equipBtn) then
+		self.equipHandler = equipBtn:ConnectEvent(ButtonClickEvent, self.OnEquipClick)
+	end
+	local blessBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn")
+	if isvalid(blessBtn) then
+		self.blessHandler = blessBtn:ConnectEvent(ButtonClickEvent, self.OnBlessClick)
+	end
+	-- 축복 레벨업 button (inside the blessing page).
+	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
+	if isvalid(blessUp) then
+		self.blessUpHandler = blessUp:ConnectEvent(ButtonClickEvent, self.OnBlessLevelUpClick)
+	end
+	-- 축복 효과 행(Row_<id>) — 클릭 시 그 효과를 선택하고 우측 상세(강화) 패널을 연다. closure captures the id.
+	self.blessRowHandlers = {}
+	local beds = _DataService:GetTable("BlessEffect")
+	if beds ~= nil then
+		for i = 1, beds:GetRowCount() do
+			local row = beds:GetRow(i)
+			if row ~= nil then
+				local eid = row:GetItem("id")
+				if eid ~= nil and eid ~= "" then
+					local rowBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. eid)
+					if isvalid(rowBtn) then
+						local capturedId = eid
+						local rh = rowBtn:ConnectEvent(ButtonClickEvent, function() self:OnBlessRowClick(capturedId) end)
+						table.insert(self.blessRowHandlers, { ent = rowBtn, hd = rh })
+					end
+				end
+			end
+		end
+	end
+	-- 축복 효과 초기화 button (inside the blessing page) — resets all effect levels to 0 (level kept).
+	local blessReset = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/ResetBtn")
+	if isvalid(blessReset) then
+		self.blessResetHandler = blessReset:ConnectEvent(ButtonClickEvent, self.OnBlessResetClick)
+	end
+	-- 좌측 카테고리 탭 (ALL만 동작, 잠금은 자리표시자) + 우측 상세 패널의 강화/닫기 버튼.
+	local allTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
+	if isvalid(allTab) then
+		self.blessAllHandler = allTab:ConnectEvent(ButtonClickEvent, self.OnBlessAllTabClick)
+	end
+	local lockTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
+	if isvalid(lockTab) then
+		self.blessLockHandler = lockTab:ConnectEvent(ButtonClickEvent, self.OnBlessLockTabClick)
+	end
+	local upgradeBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
+	if isvalid(upgradeBtn) then
+		self.blessUpgradeHandler = upgradeBtn:ConnectEvent(ButtonClickEvent, self.OnBlessUpgradeClick)
+	end
+	local closeBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/CloseBtn")
+	if isvalid(closeBtn) then
+		self.blessCloseHandler = closeBtn:ConnectEvent(ButtonClickEvent, self.OnBlessDetailClose)
+	end
+	-- Cache the 축복 icon's 3 animation layers (aura / wings / sword) for the idle animation.
+	self.blessAura = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon")
+	self.blessWings = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/Wings")
+	self.blessSword = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/Sword")
+	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
+	if isvalid(settingsBtn) then
+		self.settingsHandler = settingsBtn:ConnectEvent(ButtonClickEvent, self.OnSettingsClick)
+	end
+	-- Settings popup: overlay hidden at start; wire close button + the two volume sliders.
+	local settings = _EntityService:GetEntityByPath("/ui/SettingsGroup")
+	if isvalid(settings) then
+		settings.Enable = false
+	end
+	local settingsClose = _EntityService:GetEntityByPath("/ui/SettingsGroup/CloseBtn")
+	if isvalid(settingsClose) then
+		self.settingsCloseHandler = settingsClose:ConnectEvent(ButtonClickEvent, self.OnSettingsCloseClick)
+	end
+	local bgmSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/BgmSlider")
+	if isvalid(bgmSlider) then
+		self.bgmSliderHandler = bgmSlider:ConnectEvent(SliderValueChangedEvent, self.OnBgmVolumeChanged)
+	end
+	local sfxSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/SfxSlider")
+	if isvalid(sfxSlider) then
+		self.sfxSliderHandler = sfxSlider:ConnectEvent(SliderValueChangedEvent, self.OnSfxVolumeChanged)
 	end
 	-- Build the dynamic shop list (one cloned card per ShopItem dataset row).
 	self:BuildShopList()
@@ -89,6 +209,8 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnUpdate(number delta)
+	-- 축복 icon idle animation (runs regardless of the title-hint early-return below).
+	self:AnimateBlessIcon(delta)
 	-- Pulse the title "터치하여 시작" prompt's alpha up and down while the title screen is visible.
 	if isvalid(self.titleHint) == false or self.titleHint.TextComponent == nil then
 		return
@@ -108,6 +230,45 @@ method void OnUpdate(number delta)
 end
 
 @ExecSpace("ClientOnly")
+method void AnimateBlessIcon(number delta)
+	-- Idle 축복 emblem animation (3 independent layers), only while the lobby is visible:
+	--   wings  → quick horizontal-scale flap (with a small vertical counter-beat)
+	--   sword  → slow vertical float (bob up/down)
+	--   aura   → gentle glow pulse via alpha
+	-- Base transforms are captured once on the first tick.
+	if isvalid(self.lobbyRoot) == false or self.lobbyRoot.Enable == false then
+		return
+	end
+	self.blessT = self.blessT + delta
+	if self.blessInit == false then
+		if isvalid(self.blessWings) and self.blessWings.UITransformComponent ~= nil then
+			local sc = self.blessWings.UITransformComponent.UIScale
+			self.wgBaseSX = sc.x
+			self.wgBaseSY = sc.y
+		end
+		if isvalid(self.blessSword) and self.blessSword.UITransformComponent ~= nil then
+			local ap = self.blessSword.UITransformComponent.anchoredPosition
+			self.swBaseX = ap.x
+			self.swBaseY = ap.y
+		end
+		self.blessInit = true
+	end
+	if isvalid(self.blessWings) and self.blessWings.UITransformComponent ~= nil then
+		local flap = math.sin(self.blessT * 6.5)
+		self.blessWings.UITransformComponent.UIScale = Vector3(self.wgBaseSX * (1.0 + 0.12 * flap), self.wgBaseSY * (1.0 - 0.06 * flap), 1)
+	end
+	if isvalid(self.blessSword) and self.blessSword.UITransformComponent ~= nil then
+		local bob = 6.0 * math.sin(self.blessT * 2.4)
+		self.blessSword.UITransformComponent.anchoredPosition = Vector2(self.swBaseX, self.swBaseY + bob)
+	end
+	if isvalid(self.blessAura) and self.blessAura.SpriteGUIRendererComponent ~= nil then
+		local c = self.blessAura.SpriteGUIRendererComponent.Color
+		local a = 0.78 + 0.22 * math.sin(self.blessT * 2.0)
+		self.blessAura.SpriteGUIRendererComponent.Color = Color(c.r, c.g, c.b, a)
+	end
+end
+
+@ExecSpace("ClientOnly")
 method void RefreshSavedUI()
 	-- Apply the cached account data to the lobby (stage best scores) and shop (owned marks).
 	if _PlayerSave == nil then
@@ -116,9 +277,78 @@ method void RefreshSavedUI()
 	-- Gold balance on lobby + shop.
 	local gold = _PlayerSave:GetGold()
 	local goldText = "골드 " .. tostring(gold)
-	local lobbyGold = _EntityService:GetEntityByPath("/ui/LobbyGroup/Gold")
-	if isvalid(lobbyGold) and lobbyGold.TextComponent ~= nil then
-		lobbyGold.TextComponent.Text = goldText
+	local lobbyMeso = _EntityService:GetEntityByPath("/ui/LobbyGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(lobbyMeso) and lobbyMeso.TextComponent ~= nil then
+		-- Number only (the pill icon already indicates 메소); abbreviated so big values fit the box.
+		lobbyMeso.TextComponent.Text = self:AbbreviateNumber(gold)
+	end
+	-- 토벤코인 (used by equipment evolution) on lobby + equip screens.
+	local coin = 0
+	if _PlayerSave ~= nil then
+		coin = _PlayerSave:GetCoin()
+	end
+	local lobbyCoin = _EntityService:GetEntityByPath("/ui/LobbyGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(lobbyCoin) and lobbyCoin.TextComponent ~= nil then
+		-- Number only (the pill icon already indicates 토벤코인); abbreviated so big values fit the box.
+		lobbyCoin.TextComponent.Text = self:AbbreviateNumber(coin)
+	end
+	local eqMeso = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(eqMeso) and eqMeso.TextComponent ~= nil then
+		eqMeso.TextComponent.Text = self:AbbreviateNumber(gold)
+	end
+	local eqCoin = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(eqCoin) and eqCoin.TextComponent ~= nil then
+		eqCoin.TextComponent.Text = self:AbbreviateNumber(coin)
+	end
+	-- If the equipment screen is open, re-sync it after any save change (enhance/evolve/currency).
+	local eqGroup = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(eqGroup) and eqGroup.Enable and _EquipScreen ~= nil then
+		_EquipScreen:RefreshFromSave()
+	end
+	-- If the blessing screen is open, re-sync its currency + level/cost after any save change.
+	local blGroup = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(blGroup) and blGroup.Enable then
+		local blMeso = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/MesoPill/Text")
+		if isvalid(blMeso) and blMeso.TextComponent ~= nil then
+			blMeso.TextComponent.Text = self:AbbreviateNumber(gold)
+		end
+		local blCoin = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/CoinPill/Text")
+		if isvalid(blCoin) and blCoin.TextComponent ~= nil then
+			blCoin.TextComponent.Text = self:AbbreviateNumber(coin)
+		end
+		self:RefreshBlessUI()
+	end
+	-- Profile name → the local player's account nickname.
+	local lp = _UserService.LocalPlayer
+	if isvalid(lp) and lp.PlayerComponent ~= nil then
+		local nick = lp.PlayerComponent.Nickname
+		local nameEnt = _EntityService:GetEntityByPath("/ui/LobbyGroup/ProfileCard/Name")
+		if isvalid(nameEnt) and nameEnt.TextComponent ~= nil and nick ~= nil and nick ~= "" then
+			nameEnt.TextComponent.Text = nick
+		end
+		-- Profile image → the local player's own avatar (clone the user's equipped costume).
+		local uid = lp.PlayerComponent.UserId
+		local portrait = _EntityService:GetEntityByPath("/ui/LobbyGroup/ProfileCard/Portrait/Avatar")
+		if isvalid(portrait) and portrait.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+			if portrait.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+				portrait.CostumeManagerComponent.DefaultEquipUserId = uid
+				-- The avatar is built a moment later; freeze it in a stand pose then (stops the default fly/idle bob).
+				_TimerService:SetTimer(self, self.ApplyProfilePose, 0.5, false)
+			end
+		end
+		-- Lobby center avatar → account base costume + the equipped 4-slot setup (mirrors the equip screen).
+		local centerAv = _EntityService:GetEntityByPath("/ui/LobbyGroup/CharacterDisplay/Avatar")
+		if isvalid(centerAv) and centerAv.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+			if centerAv.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+				centerAv.CostumeManagerComponent.DefaultEquipUserId = uid
+			end
+			if _EquipScreen ~= nil then
+				_EquipScreen:ApplyAppearanceTo("/ui/LobbyGroup/CharacterDisplay/Avatar")
+			end
+			-- Re-apply the equipped overrides + stand pose on a short delay so the DefaultEquipUserId
+			-- account clone (async) doesn't overwrite the equipped slots or leave the default fly bob.
+			_TimerService:SetTimer(self, self.RefreshLobbyAvatar, 0.6, false)
+		end
 	end
 	local shopGold = _EntityService:GetEntityByPath("/ui/ShopGroup/Gold")
 	if isvalid(shopGold) and shopGold.TextComponent ~= nil then
@@ -128,20 +358,18 @@ method void RefreshSavedUI()
 	if isvalid(stageGold) and stageGold.TextComponent ~= nil then
 		stageGold.TextComponent.Text = goldText
 	end
-	-- Stage unlock gating: a stage opens once the SUM of all stages best scores
-	-- reaches its StageUnlock threshold (1-1 = 0, always open). Locked stages show a
-	-- Lock overlay entity (dim + lock icon + required total) instead of being enterable.
-	local total = self:GetTotalBest()
+	-- Stage unlock gating: 1-1 is always open; every later stage opens once the PREVIOUS
+	-- stage has been cleared (goal reached). Locked stages show a Lock overlay whose label
+	-- names the stage that must be cleared first.
 	for _, stage in ipairs(self:StageList()) do
 		local btnPath = "/ui/StageSelectGroup/Stage_" .. string.gsub(stage, "-", "_")
-		local unlock = self:GetStageUnlock(stage)
-		local locked = total < unlock
+		local locked = (self:IsStageUnlocked(stage) == false)
 		local lockEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock")
 		if isvalid(lockEnt) then
 			lockEnt.Enable = locked
 			local reqEnt = _EntityService:GetEntityByPath(btnPath .. "/Lock/Req")
 			if isvalid(reqEnt) and reqEnt.TextComponent ~= nil then
-				reqEnt.TextComponent.Text = "합계 " .. tostring(unlock)
+				reqEnt.TextComponent.Text = self:PrevStage(stage) .. " 클리어 필요"
 			end
 		end
 		local best = _PlayerSave:GetStageBest(stage)
@@ -154,9 +382,100 @@ method void RefreshSavedUI()
 			end
 		end
 	end
+	-- Apply the saved sound volumes to the SoundManager (restores the user's setting on login).
+	if _SoundManager ~= nil then
+		_SoundManager:SetBgmVolume(_PlayerSave:GetBgmVolume())
+		_SoundManager:SetSfxVolume(_PlayerSave:GetSfxVolume())
+	end
 	-- Refresh the dynamic shop list (levels / prices / buy state).
 	self:RefreshShopCells()
 	log("[ScreenFlow] RefreshSavedUI")
+end
+
+@ExecSpace("ClientOnly")
+method void StandAvatarAt(string path)
+	-- Freeze the avatar at `path` in a stand pose so it doesn't play the default fly/idle bob.
+	local av = _EntityService:GetEntityByPath(path)
+	if isvalid(av) == false or av.AvatarGUIRendererComponent == nil then
+		return
+	end
+	local body = av.AvatarGUIRendererComponent:GetBodyEntity()
+	if isvalid(body) == false then
+		return
+	end
+	local ev = ActionStateChangedEvent()
+	ev.CoreActionName = "stand1"
+	ev.PartsActionName = "stand1"
+	ev.PlayType = SpriteAnimClipPlayType.ZigzagLoop
+	body:SendEvent(ev)
+end
+
+@ExecSpace("ClientOnly")
+method void ApplyProfilePose()
+	-- Lobby profile avatar → stand pose.
+	self:StandAvatarAt("/ui/LobbyGroup/ProfileCard/Portrait/Avatar")
+	log("[ScreenFlow] profile avatar -> stand1")
+end
+
+@ExecSpace("ClientOnly")
+method void StandEquipAvatars()
+	-- Equip screen's two avatars (head portrait + full-body) → stand pose.
+	self:StandAvatarAt("/ui/EquipGroup/ProfileCard/Portrait/Avatar")
+	self:StandAvatarAt("/ui/EquipGroup/CharPanel/CharAvatar")
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshLobbyAvatar()
+	-- Re-apply the equipped costume + stand pose to the lobby center avatar (deferred so the async
+	-- DefaultEquipUserId account clone doesn't overwrite the equipped-slot overrides / fly bob).
+	local path = "/ui/LobbyGroup/CharacterDisplay/Avatar"
+	if _EquipScreen ~= nil then
+		_EquipScreen:ApplyAppearanceTo(path)
+	end
+	self:StandAvatarAt(path)
+end
+
+@ExecSpace("ClientOnly")
+method void FillEquipScreen()
+	-- Populate the equipment screen's reused profile / currency / character from live player data.
+	local lp = _UserService.LocalPlayer
+	local uid = ""
+	local nick = ""
+	if isvalid(lp) and lp.PlayerComponent ~= nil then
+		uid = lp.PlayerComponent.UserId
+		nick = lp.PlayerComponent.Nickname
+	end
+	local nameEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/ProfileCard/Name")
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil and nick ~= nil and nick ~= "" then
+		nameEnt.TextComponent.Text = nick
+	end
+	-- Both avatars mirror the local player's costume (equipping will override slots later).
+	for _, p in ipairs({ "/ui/EquipGroup/ProfileCard/Portrait/Avatar", "/ui/EquipGroup/CharPanel/CharAvatar" }) do
+		local e = _EntityService:GetEntityByPath(p)
+		if isvalid(e) and e.CostumeManagerComponent ~= nil and uid ~= nil and uid ~= "" then
+			if e.CostumeManagerComponent.DefaultEquipUserId ~= uid then
+				e.CostumeManagerComponent.DefaultEquipUserId = uid
+			end
+		end
+	end
+	_TimerService:SetTimer(self, self.StandEquipAvatars, 0.5, false)
+	-- Currency (meso from save; coin stays a placeholder).
+	local gold = 0
+	if _PlayerSave ~= nil then
+		gold = _PlayerSave:GetGold()
+	end
+	local m = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(m) and m.TextComponent ~= nil then
+		m.TextComponent.Text = self:AbbreviateNumber(gold)
+	end
+	local coin = 0
+	if _PlayerSave ~= nil then
+		coin = _PlayerSave:GetCoin()
+	end
+	local cc = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(cc) and cc.TextComponent ~= nil then
+		cc.TextComponent.Text = self:AbbreviateNumber(coin)
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -394,6 +713,436 @@ method void OnShopBackClick(ButtonClickEvent event)
 end
 
 @ExecSpace("ClientOnly")
+method void OnEquipClick(ButtonClickEvent event)
+	-- Lobby -> Equipment screen (temporary empty screen).
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(equip) then
+		equip.Enable = true
+	end
+	self:FillEquipScreen()
+	if _EquipScreen ~= nil then
+		_EquipScreen:OnOpen()
+	end
+	log("[ScreenFlow] -> Equip")
+end
+
+@ExecSpace("ClientOnly")
+method void OnEquipBackClick(ButtonClickEvent event)
+	-- Equipment -> Lobby.
+	local equip = _EntityService:GetEntityByPath("/ui/EquipGroup")
+	if isvalid(equip) then
+		equip.Enable = false
+	end
+	if _EquipScreen ~= nil then
+		_EquipScreen:ClosePopup()
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	log("[ScreenFlow] Equip -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessClick(ButtonClickEvent event)
+	-- Lobby -> Blessing screen (reuses the lobby profile + currency, like the equip screen).
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	local bless = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(bless) then
+		bless.Enable = true
+	end
+	self:FillBlessScreen()
+	log("[ScreenFlow] -> Blessing")
+end
+
+@ExecSpace("ClientOnly")
+method void FillBlessScreen()
+	-- Populate the 축복 screen's currency, clear any prior selection (right detail starts hidden),
+	-- then refresh the level / points / effect list. (No profile avatar on this screen anymore.)
+	local gold = 0
+	local coin = 0
+	if _PlayerSave ~= nil then
+		gold = _PlayerSave:GetGold()
+		coin = _PlayerSave:GetCoin()
+	end
+	local m = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/MesoPill/Text")
+	if isvalid(m) and m.TextComponent ~= nil then
+		m.TextComponent.Text = self:AbbreviateNumber(gold)
+	end
+	local c = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/CoinPill/Text")
+	if isvalid(c) and c.TextComponent ~= nil then
+		c.TextComponent.Text = self:AbbreviateNumber(coin)
+	end
+	self:ClearBlessSelection()
+	self:RefreshBlessUI()
+end
+
+method string BlessEffectDesc(string effectId)
+	-- Static Korean flavor text per effect (the BlessEffect DataSet has no description column).
+	if effectId == "pierce" then
+		return "투사체가 적을 더 많이 관통합니다."
+	elseif effectId == "crit" then
+		return "일반 몬스터를 확률로 즉사시킵니다."
+	elseif effectId == "hitcount" then
+		return "확률로 추가 타격이 1회 발생합니다."
+	elseif effectId == "swift" then
+		return "공격 속도가 빨라집니다."
+	elseif effectId == "regen" then
+		return "10초마다 최대 체력의 일부를 회복합니다."
+	elseif effectId == "iframe" then
+		return "피격 시 무적 시간이 늘어납니다."
+	end
+	return ""
+end
+
+method string BlessEffectUnit(string effectId)
+	-- Value suffix shown in the detail panel per effect.
+	if effectId == "pierce" then
+		return "회 관통"
+	elseif effectId == "crit" then
+		return "% 즉사"
+	elseif effectId == "hitcount" then
+		return "% 확률"
+	elseif effectId == "swift" then
+		return "%"
+	elseif effectId == "regen" then
+		return "% 회복"
+	elseif effectId == "iframe" then
+		return "초"
+	end
+	return ""
+end
+
+method any BlessEffectColor(string effectId)
+	-- Icon color per effect (mirrors the swatches placed in BlessGroup.ui).
+	if effectId == "pierce" then
+		return Color(0.90, 0.30, 0.30, 1)
+	elseif effectId == "crit" then
+		return Color(0.96, 0.62, 0.22, 1)
+	elseif effectId == "hitcount" then
+		return Color(0.34, 0.60, 0.95, 1)
+	elseif effectId == "swift" then
+		return Color(0.34, 0.75, 0.45, 1)
+	elseif effectId == "regen" then
+		return Color(0.92, 0.50, 0.66, 1)
+	elseif effectId == "iframe" then
+		return Color(0.60, 0.45, 0.85, 1)
+	end
+	return Color(0.9, 0.3, 0.3, 1)
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshBlessUI()
+	-- Update the 축복 page from save: level header, level-up cost, top point pill, and each effect row
+	-- (name / description / level pill / selection highlight). Refreshes the detail panel if one is open.
+	if _PlayerSave == nil then
+		return
+	end
+	local level = _PlayerSave:GetBlessLevel()
+	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelText")
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		lvEnt.TextComponent.Text = "축복 레벨 " .. tostring(level)
+	end
+	-- Level-up row (replaces the excluded XP bar): show the next 토벤코인 cost.
+	local upEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
+	if isvalid(upEnt) and upEnt.TextComponent ~= nil then
+		upEnt.TextComponent.Text = "레벨업   ·   다음 레벨 " .. tostring(_PlayerSave:BlessLevelUpCost(level)) .. " 토벤코인"
+	end
+	-- Free 축복 포인트 → top "P" pill.
+	local free = _PlayerSave:GetBlessFreePoints()
+	local ptEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/PointPill/Text")
+	if isvalid(ptEnt) and ptEnt.TextComponent ~= nil then
+		ptEnt.TextComponent.Text = tostring(free)
+	end
+	-- Effect rows.
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds ~= nil then
+		for i = 1, eds:GetRowCount() do
+			local row = eds:GetRow(i)
+			if row ~= nil then
+				local id = row:GetItem("id")
+				if id ~= nil and id ~= "" then
+					local elv = _PlayerSave:GetEffectLevel(id)
+					local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Name")
+					if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+						nameEnt.TextComponent.Text = tostring(row:GetItem("name"))
+					end
+					local descEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Desc")
+					if isvalid(descEnt) and descEnt.TextComponent ~= nil then
+						descEnt.TextComponent.Text = self:BlessEffectDesc(id)
+					end
+					local lvTxt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/LvPill/Txt")
+					if isvalid(lvTxt) and lvTxt.TextComponent ~= nil then
+						lvTxt.TextComponent.Text = "Lv." .. tostring(elv)
+					end
+					-- Selection highlight (selected row bright, others tan).
+					local rowEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id)
+					if isvalid(rowEnt) and rowEnt.SpriteGUIRendererComponent ~= nil then
+						if id == self.blessSelected then
+							rowEnt.SpriteGUIRendererComponent.Color = Color(0.99, 0.93, 0.72, 1)
+						else
+							rowEnt.SpriteGUIRendererComponent.Color = Color(0.86, 0.79, 0.64, 1)
+						end
+					end
+				end
+			end
+		end
+	end
+	if self.blessSelected ~= nil and self.blessSelected ~= "" then
+		self:RefreshBlessDetail()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void RefreshBlessDetail()
+	-- Fill the right detail panel for the currently selected effect (name / icon / level / value / cost).
+	if _PlayerSave == nil or self.blessSelected == nil or self.blessSelected == "" then
+		return
+	end
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds == nil then
+		return
+	end
+	local row = eds:FindRow("id", self.blessSelected)
+	if row == nil then
+		return
+	end
+	local id = self.blessSelected
+	local maxLv = tonumber(row:GetItem("maxLevel")) or 5
+	local elv = _PlayerSave:GetEffectLevel(id)
+	local unit = self:BlessEffectUnit(id)
+	local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetName")
+	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
+		nameEnt.TextComponent.Text = tostring(row:GetItem("name"))
+	end
+	local descEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetDesc")
+	if isvalid(descEnt) and descEnt.TextComponent ~= nil then
+		descEnt.TextComponent.Text = self:BlessEffectDesc(id)
+	end
+	local iconEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetIcon")
+	if isvalid(iconEnt) and iconEnt.SpriteGUIRendererComponent ~= nil then
+		iconEnt.SpriteGUIRendererComponent.Color = self:BlessEffectColor(id)
+	end
+	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetLv")
+	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
+		if elv >= maxLv then
+			lvEnt.TextComponent.Text = "Lv." .. tostring(elv) .. " (최대)"
+		else
+			lvEnt.TextComponent.Text = "Lv." .. tostring(elv) .. " › Lv." .. tostring(elv + 1)
+		end
+	end
+	local valEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetValue")
+	if isvalid(valEnt) and valEnt.TextComponent ~= nil then
+		local curVal = "0"
+		if elv >= 1 then
+			curVal = tostring(row:GetItem("lv" .. tostring(elv)))
+		end
+		if elv >= maxLv then
+			valEnt.TextComponent.Text = "효과량 : " .. curVal .. unit .. " (최대)"
+		else
+			local nextVal = tostring(row:GetItem("lv" .. tostring(elv + 1)))
+			valEnt.TextComponent.Text = "효과량 : " .. curVal .. unit .. " › " .. nextVal .. unit
+		end
+	end
+	local upBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
+	if isvalid(upBtn) and upBtn.TextComponent ~= nil then
+		if elv >= maxLv then
+			upBtn.TextComponent.Text = "최대 레벨"
+			if upBtn.SpriteGUIRendererComponent ~= nil then
+				upBtn.SpriteGUIRendererComponent.Color = Color(0.55, 0.55, 0.55, 1)
+			end
+		else
+			local cost = _PlayerSave:EffectUpgradeCost(elv)
+			upBtn.TextComponent.Text = "강화 (" .. tostring(cost) .. " P)"
+			if upBtn.SpriteGUIRendererComponent ~= nil then
+				if _PlayerSave:GetBlessFreePoints() >= cost then
+					upBtn.SpriteGUIRendererComponent.Color = Color(0.96, 0.79, 0.24, 1)
+				else
+					upBtn.SpriteGUIRendererComponent.Color = Color(0.55, 0.47, 0.3, 1)
+				end
+			end
+		end
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void ClearBlessSelection()
+	-- Deselect: hide the right detail content (back-board stays), show the "select an effect" hint.
+	self.blessSelected = ""
+	local detail = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail")
+	if isvalid(detail) then
+		detail.Enable = false
+	end
+	local hint = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/EmptyHint")
+	if isvalid(hint) then
+		hint.Enable = true
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessRowClick(string effectId)
+	-- Select an effect row → reveal the right detail (강화) content and populate it.
+	self.blessSelected = effectId
+	local detail = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail")
+	if isvalid(detail) then
+		detail.Enable = true
+	end
+	local hint = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/EmptyHint")
+	if isvalid(hint) then
+		hint.Enable = false
+	end
+	self:RefreshBlessUI()
+	log("[ScreenFlow] bless effect selected: " .. tostring(effectId))
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessDetailClose(ButtonClickEvent event)
+	-- Close the detail content (deselect); the back-board panel remains visible.
+	self:ClearBlessSelection()
+	self:RefreshBlessUI()
+	log("[ScreenFlow] bless detail closed")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessAllTabClick(ButtonClickEvent event)
+	-- ALL tab: show every effect (already all shown) — just keep it visually selected.
+	local allTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
+	if isvalid(allTab) and allTab.SpriteGUIRendererComponent ~= nil then
+		allTab.SpriteGUIRendererComponent.Color = Color(0.99, 0.93, 0.72, 1)
+	end
+	local lockTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
+	if isvalid(lockTab) and lockTab.SpriteGUIRendererComponent ~= nil then
+		lockTab.SpriteGUIRendererComponent.Color = Color(0.42, 0.36, 0.30, 1)
+	end
+	log("[ScreenFlow] bless tab: ALL")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessLockTabClick(ButtonClickEvent event)
+	-- Lock tab is a placeholder for now (no lock/unlock data yet).
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage("잠금된 카테고리입니다")
+	end
+	log("[ScreenFlow] bless tab: Lock (placeholder)")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessLevelUpClick(ButtonClickEvent event)
+	-- Request a 축복 레벨업; server checks/spends 토벤코인 then resyncs (-> RefreshSavedUI -> RefreshBlessUI).
+	if _PlayerSave ~= nil then
+		_PlayerSave:LevelUpBless()
+	end
+	log("[ScreenFlow] bless level-up requested")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessUpgradeClick(ButtonClickEvent event)
+	-- Request a 축복 효과 강화 for the selected effect; server checks/spends 포인트 then resyncs.
+	if _PlayerSave ~= nil and self.blessSelected ~= nil and self.blessSelected ~= "" then
+		_PlayerSave:LevelUpEffect(self.blessSelected)
+	end
+	log("[ScreenFlow] bless effect up requested: " .. tostring(self.blessSelected))
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessResetClick(ButtonClickEvent event)
+	-- Request a 축복 효과 초기화; server zeroes every effect level (bless level kept) then resyncs
+	-- (-> RefreshSavedUI -> RefreshBlessUI). Points return automatically since they're level-derived.
+	if _PlayerSave ~= nil then
+		_PlayerSave:ResetBless()
+	end
+	log("[ScreenFlow] bless effect reset requested")
+end
+
+@ExecSpace("ClientOnly")
+method void OnBlessBackClick(ButtonClickEvent event)
+	-- Blessing -> Lobby.
+	local bless = _EntityService:GetEntityByPath("/ui/BlessGroup")
+	if isvalid(bless) then
+		bless.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = true
+	end
+	log("[ScreenFlow] Blessing -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void OnSettingsClick(ButtonClickEvent event)
+	-- Open the settings popup ON TOP of the current screen (lobby stays visible behind the dimmer).
+	local settings = _EntityService:GetEntityByPath("/ui/SettingsGroup")
+	if isvalid(settings) == false then
+		return
+	end
+	-- Sync the sliders to the current volumes before showing.
+	local bgm = 1.0
+	local sfx = 1.0
+	if _SoundManager ~= nil then
+		bgm = _SoundManager.bgmVolume
+		sfx = _SoundManager.sfxVolume
+	end
+	self:SetSliderValue("/ui/SettingsGroup/Panel/BgmSlider", bgm)
+	self:SetSliderValue("/ui/SettingsGroup/Panel/SfxSlider", sfx)
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/BgmValue", bgm)
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/SfxValue", sfx)
+	settings.Enable = true
+	log("[ScreenFlow] Settings open (bgm=" .. tostring(bgm) .. " sfx=" .. tostring(sfx) .. ")")
+end
+
+@ExecSpace("ClientOnly")
+method void OnSettingsCloseClick(ButtonClickEvent event)
+	-- Close the settings popup and persist the chosen volumes (one save per close, dirty-checked).
+	local settings = _EntityService:GetEntityByPath("/ui/SettingsGroup")
+	if isvalid(settings) then
+		settings.Enable = false
+	end
+	if _PlayerSave ~= nil and _SoundManager ~= nil then
+		_PlayerSave:SaveVolume(_SoundManager.bgmVolume, _SoundManager.sfxVolume)
+	end
+	log("[ScreenFlow] Settings close")
+end
+
+@ExecSpace("ClientOnly")
+method void SetSliderValue(string path, number v)
+	-- Set a slider's value without triggering audible surprises (used to sync UI to stored volume).
+	local ent = _EntityService:GetEntityByPath(path)
+	if isvalid(ent) and ent.SliderComponent ~= nil then
+		ent.SliderComponent.Value = v
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void SetVolumeLabel(string path, number v)
+	-- Show a volume as an integer percentage (e.g. 0.8 -> "80%").
+	local ent = _EntityService:GetEntityByPath(path)
+	if isvalid(ent) and ent.TextComponent ~= nil then
+		ent.TextComponent.Text = tostring(math.floor(v * 100 + 0.5)) .. "%"
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void OnBgmVolumeChanged(SliderValueChangedEvent event)
+	-- BGM slider moved -> apply live and update the % label.
+	if _SoundManager ~= nil then
+		_SoundManager:SetBgmVolume(event.Value)
+	end
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/BgmValue", event.Value)
+end
+
+@ExecSpace("ClientOnly")
+method void OnSfxVolumeChanged(SliderValueChangedEvent event)
+	-- SFX slider moved -> store the new SFX volume and update the % label.
+	if _SoundManager ~= nil then
+		_SoundManager:SetSfxVolume(event.Value)
+	end
+	self:SetVolumeLabel("/ui/SettingsGroup/Panel/SfxValue", event.Value)
+end
+
+@ExecSpace("ClientOnly")
 method void OnBuyClick(string itemId)
 	-- Request purchase: the server checks gold/level, deducts, persists, then pushes the result
 	-- (toast via BuyResultClient + data resync via ReceiveMyData → RefreshSavedUI).
@@ -411,67 +1160,84 @@ method void OnBuyClick(string itemId)
 	log("[ScreenFlow] buy request " .. tostring(itemId))
 end
 
-method integer GetTotalBest()
-	-- Sum of every stage's best score — the basis for unlock gating.
-	if _PlayerSave == nil then
-		return 0
-	end
-	local total = 0
-	for _, stage in ipairs(self:StageList()) do
-		total = total + _PlayerSave:GetStageBest(stage)
-	end
-	return total
-end
-
 method table StageList()
-	-- The stages offered in the lobby. Must match the Stage_W_S buttons in LobbyGroup.ui.
+	-- The stages offered in the lobby. Must match the Stage_W_S buttons in StageSelectGroup.ui.
 	return { "1-1", "1-2", "1-3" }
 end
 
-method integer GetStageUnlock(string stage)
-	-- Required total-best-score to open this stage (StageUnlock dataset; 0 if missing).
-	local ds = _DataService:GetTable("StageUnlock")
-	if ds == nil then
-		return 0
+method string PrevStage(string stage)
+	-- The stage immediately before `stage` in StageList ("" = first stage or not found).
+	local prev = ""
+	for _, s in ipairs(self:StageList()) do
+		if s == stage then
+			return prev
+		end
+		prev = s
 	end
-	local row = ds:FindRow("stage", stage)
-	if row == nil then
-		return 0
+	return ""
+end
+
+method string AbbreviateNumber(number value)
+	-- Compact currency formatting so long balances stay inside the pill:
+	--   950 -> "950", 12300 -> "12.3K", 4500000 -> "4.5M", 1200000000 -> "1.2B", 3.4e12 -> "3.4T".
+	-- Under 1000 the raw integer is shown; above that it is scaled by 1000s with one decimal
+	-- (a trailing ".0" is dropped, e.g. 2000000 -> "2M" not "2.0M").
+	local n = math.floor(value + 0.5)
+	if n < 0 then
+		return "-" .. self:AbbreviateNumber(-n)
 	end
-	local v = tonumber(row:GetItem("unlock"))
-	if v == nil then
-		return 0
+	if n < 1000 then
+		return tostring(n)
 	end
-	return math.floor(v)
+	local units = { "K", "M", "B", "T" }
+	local unitIndex = 1
+	local scaled = n / 1000
+	while scaled >= 1000 and unitIndex < #units do
+		scaled = scaled / 1000
+		unitIndex = unitIndex + 1
+	end
+	-- Round to one decimal; if rounding carries to 1000 (e.g. 999999), promote to the next unit.
+	local rounded = math.floor(scaled * 10 + 0.5) / 10
+	if rounded >= 1000 and unitIndex < #units then
+		rounded = rounded / 1000
+		unitIndex = unitIndex + 1
+	end
+	local text = ""
+	if rounded == math.floor(rounded) then
+		text = tostring(math.floor(rounded))
+	else
+		text = string.format("%.1f", rounded)
+	end
+	return text .. units[unitIndex]
 end
 
 method boolean IsStageUnlocked(string stage)
-	-- A stage is open when the player's total best score meets its threshold.
-	return self:GetTotalBest() >= self:GetStageUnlock(stage)
+	-- Sequential unlock: the first stage is always open; every later stage opens once the
+	-- PREVIOUS stage has been cleared (goal reached, persisted server-side as c_<stage>).
+	local prev = self:PrevStage(stage)
+	if prev == "" then
+		return true
+	end
+	if _PlayerSave == nil then
+		return false
+	end
+	return _PlayerSave:IsStageCleared(prev)
 end
 
 @ExecSpace("ClientOnly")
 method void OnStageClick(string stage)
-	-- Stage button → look up the stage's map name in the StageMap dataset, then go there.
+	-- Stage button → enter the run. All stages share the RunStage map; per-stage visuals
+	-- (background, tiles, layout) come from the course data (Course<stage>), so there is no
+	-- stage→map dataset anymore.
 	if self:IsStageUnlocked(stage) == false then
-		local need = self:GetStageUnlock(stage)
+		local prev = self:PrevStage(stage)
 		if _UIToast ~= nil then
-			_UIToast:ShowMessage("최고점수 합계 " .. tostring(need) .. " 이상이면 열려요")
+			_UIToast:ShowMessage(prev .. " 스테이지를 먼저 클리어하세요")
 		end
-		log("[ScreenFlow] stage " .. tostring(stage) .. " locked (need " .. tostring(need) .. ")")
+		log("[ScreenFlow] stage " .. tostring(stage) .. " locked (needs clear of " .. tostring(prev) .. ")")
 		return
 	end
-	local ds = _DataService:GetTable("StageMap")
-	if ds == nil then
-		log("[ScreenFlow] StageMap dataset not found")
-		return
-	end
-	local row = ds:FindRow("stage", stage)
-	if row == nil then
-		log("[ScreenFlow] no StageMap row for stage " .. tostring(stage))
-		return
-	end
-	local mapName = row:GetItem("map")
+	local mapName = "RunStage"
 	if isvalid(self.stageSelectRoot) then
 		self.stageSelectRoot.Enable = false
 	end
@@ -594,9 +1360,9 @@ method void OnEndPlay()
 		end
 		self.stageHandlers = nil
 	end
-	local stageBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StageBtn")
-	if isvalid(stageBtn) and self.stageSelectOpenHandler ~= nil then
-		stageBtn:DisconnectEvent(ButtonClickEvent, self.stageSelectOpenHandler)
+	local startBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StartBtn")
+	if isvalid(startBtn) and self.stageSelectOpenHandler ~= nil then
+		startBtn:DisconnectEvent(ButtonClickEvent, self.stageSelectOpenHandler)
 		self.stageSelectOpenHandler = nil
 	end
 	local stageBack = _EntityService:GetEntityByPath("/ui/StageSelectGroup/BackBtn")
@@ -604,10 +1370,83 @@ method void OnEndPlay()
 		stageBack:DisconnectEvent(ButtonClickEvent, self.stageSelectBackHandler)
 		self.stageSelectBackHandler = nil
 	end
-	local shopBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/ShopBtn")
-	if isvalid(shopBtn) and self.shopOpenHandler ~= nil then
-		shopBtn:DisconnectEvent(ButtonClickEvent, self.shopOpenHandler)
-		self.shopOpenHandler = nil
+	local equipBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/EquipBtn")
+	if isvalid(equipBtn) and self.equipHandler ~= nil then
+		equipBtn:DisconnectEvent(ButtonClickEvent, self.equipHandler)
+		self.equipHandler = nil
+	end
+	local equipBack = _EntityService:GetEntityByPath("/ui/EquipGroup/BackBtn")
+	if isvalid(equipBack) and self.equipBackHandler ~= nil then
+		equipBack:DisconnectEvent(ButtonClickEvent, self.equipBackHandler)
+		self.equipBackHandler = nil
+	end
+	local blessBack = _EntityService:GetEntityByPath("/ui/BlessGroup/BackBtn")
+	if isvalid(blessBack) and self.blessBackHandler ~= nil then
+		blessBack:DisconnectEvent(ButtonClickEvent, self.blessBackHandler)
+		self.blessBackHandler = nil
+	end
+	local blessBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn")
+	if isvalid(blessBtn) and self.blessHandler ~= nil then
+		blessBtn:DisconnectEvent(ButtonClickEvent, self.blessHandler)
+		self.blessHandler = nil
+	end
+	local blessUp = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
+	if isvalid(blessUp) and self.blessUpHandler ~= nil then
+		blessUp:DisconnectEvent(ButtonClickEvent, self.blessUpHandler)
+		self.blessUpHandler = nil
+	end
+	if self.blessRowHandlers ~= nil then
+		for _, rec in ipairs(self.blessRowHandlers) do
+			if isvalid(rec.ent) and rec.hd ~= nil then
+				rec.ent:DisconnectEvent(ButtonClickEvent, rec.hd)
+			end
+		end
+		self.blessRowHandlers = nil
+	end
+	local blessReset = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/ResetBtn")
+	if isvalid(blessReset) and self.blessResetHandler ~= nil then
+		blessReset:DisconnectEvent(ButtonClickEvent, self.blessResetHandler)
+		self.blessResetHandler = nil
+	end
+	local blessAll = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
+	if isvalid(blessAll) and self.blessAllHandler ~= nil then
+		blessAll:DisconnectEvent(ButtonClickEvent, self.blessAllHandler)
+		self.blessAllHandler = nil
+	end
+	local blessLock = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
+	if isvalid(blessLock) and self.blessLockHandler ~= nil then
+		blessLock:DisconnectEvent(ButtonClickEvent, self.blessLockHandler)
+		self.blessLockHandler = nil
+	end
+	local blessUpgrade = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
+	if isvalid(blessUpgrade) and self.blessUpgradeHandler ~= nil then
+		blessUpgrade:DisconnectEvent(ButtonClickEvent, self.blessUpgradeHandler)
+		self.blessUpgradeHandler = nil
+	end
+	local blessClose = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/CloseBtn")
+	if isvalid(blessClose) and self.blessCloseHandler ~= nil then
+		blessClose:DisconnectEvent(ButtonClickEvent, self.blessCloseHandler)
+		self.blessCloseHandler = nil
+	end
+	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
+	if isvalid(settingsBtn) and self.settingsHandler ~= nil then
+		settingsBtn:DisconnectEvent(ButtonClickEvent, self.settingsHandler)
+		self.settingsHandler = nil
+	end
+	local settingsClose = _EntityService:GetEntityByPath("/ui/SettingsGroup/CloseBtn")
+	if isvalid(settingsClose) and self.settingsCloseHandler ~= nil then
+		settingsClose:DisconnectEvent(ButtonClickEvent, self.settingsCloseHandler)
+		self.settingsCloseHandler = nil
+	end
+	local bgmSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/BgmSlider")
+	if isvalid(bgmSlider) and self.bgmSliderHandler ~= nil then
+		bgmSlider:DisconnectEvent(SliderValueChangedEvent, self.bgmSliderHandler)
+		self.bgmSliderHandler = nil
+	end
+	local sfxSlider = _EntityService:GetEntityByPath("/ui/SettingsGroup/Panel/SfxSlider")
+	if isvalid(sfxSlider) and self.sfxSliderHandler ~= nil then
+		sfxSlider:DisconnectEvent(SliderValueChangedEvent, self.sfxSliderHandler)
+		self.sfxSliderHandler = nil
 	end
 	local shopBack = _EntityService:GetEntityByPath("/ui/ShopGroup/BackBtn")
 	if isvalid(shopBack) and self.shopBackHandler ~= nil then

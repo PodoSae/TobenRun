@@ -380,6 +380,27 @@ method void ChargeUltDistance()
 end
 
 @ExecSpace("ClientOnly")
+method void ApplyEquippedGear(Entity player)
+	-- 인게임 캐릭터(실제 계정 아바타)에 장착한 게임 장비 세트(무기+장갑+상의+하의)를 계정 코디 위에 덮어씌운다.
+	-- 슬롯 겹침 처리 포함: 두손무기(목검)는 한손 슬롯 점유 → 비움, 한벌옷(Longcoat)은 상/하의 점유 → 비움.
+	-- 미장착 슬롯은 건드리지 않아 계정 코디가 그대로 남는다(revertEmptyToAccount=false). 저장/데이터셋
+	-- 매핑·겹침 규칙은 EquipScreen:ApplyRuidsToCostume에 중앙화되어 캐릭터·로비·장비창·고스트가 모두 일치.
+	if isvalid(player) == false then
+		return
+	end
+	local cm = player.CostumeManagerComponent
+	if cm == nil then
+		log("[RunGameHud] no CostumeManagerComponent on player — skip gear apply")
+		return
+	end
+	if _EquipScreen == nil then
+		return
+	end
+	_EquipScreen:ApplyEquippedFromSaveTo(cm, false)
+	log("[RunGameHud] applied in-game equipped gear set")
+end
+
+@ExecSpace("ClientOnly")
 method void OnArriveMap(Entity player)
 	-- Re-initialize per-map run state whenever the player enters a (new) map.
 	-- The course start is the configured start X; the goal is this stage's goal X.
@@ -427,6 +448,8 @@ method void OnArriveMap(Entity player)
 	self:ResetUltimate()
 	-- Reset roguelite stage buffs (attack up, ...) so they don't carry into the next stage.
 	self:ResetStageBuff()
+	-- 인게임 캐릭터에 장착 장비 세트(무기+방어구) 외형 적용. 매 스테이지 진입마다 재적용.
+	self:ApplyEquippedGear(player)
 	-- Rebuild coin / gap interactions for this stage.
 	self:BuildCourseInteractions(self.curStage)
 	-- 스테이지 BGM 재생(코스의 Set,bgm,<ruid>). SoundManager가 빈 값/동일 곡을 무시하므로 재진입해도 재시작되지

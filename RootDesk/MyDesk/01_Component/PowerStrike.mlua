@@ -60,6 +60,48 @@ script PowerStrike extends SkillComponent
     -- Ultimate ref for the auto-fire suppression (궁극기 중 일반공격 미발동, 기획 §3.3). Lazily resolved.
     property any ult = nil
 
+    -- 축복(계정 영구) 컴포넌트 캐시. 런타임에 부착되므로 사용 시점에 지연 조회/캐싱한다(스테이지 버프와 독립).
+    @HideFromInspector property any blessPierce = nil
+    @HideFromInspector property any blessCrit = nil
+    @HideFromInspector property any blessSwift = nil
+    @HideFromInspector property any blessHit = nil
+
+    -- 토벤 스탯(계정 영구, 장비창에서 강화). 스테이지 시작 전 PlayerSave:ApplyTobenToPlayer가 SetTobenStats로 주입.
+    -- 공격력 = 데미지 배율(1 + atk%/100), 공격속도 = 쿨다운 나눗셈 배율(1 + aspd%/100). 스테이지 버프/축복과 독립.
+    @HideFromInspector property number tobenAtkMult = 1
+    @HideFromInspector property number tobenAspdMult = 1
+
+    -- 장착 무기(장비)의 스탯(계정 영구, Weapon 데이터셋의 현재 등급 행). 스테이지 시작 전 PlayerSave:ApplyWeaponToPlayer가
+    -- SetWeaponStats로 주입. 인게임 자동공격(검기) 데미지 = 자동공격값(weaponAutoDmg, 기본) + 공격력(weaponAtkBonus),
+    -- 공격속도(%) = 쿨다운 나눗셈 배율. 스테이지 버프/토벤과 독립. 무기 미장착이면 0으로 주입돼 self.Damage 폴백.
+    @HideFromInspector property number weaponAtkBonus = 0
+    @HideFromInspector property number weaponAspdMult = 1
+    @HideFromInspector property number weaponAutoDmg = 0
+
+    @ExecSpace("ServerOnly")
+    method void SetTobenStats(number atkPct, number aspdPct)
+        -- 토벤 공격력/공격속도(%)를 배율로 저장. 0%면 x1.0(무보정).
+        self.tobenAtkMult = 1.0 + (atkPct or 0) / 100.0
+        self.tobenAspdMult = 1.0 + (aspdPct or 0) / 100.0
+        if self.tobenAtkMult < 0.01 then self.tobenAtkMult = 0.01 end
+        if self.tobenAspdMult < 0.1 then self.tobenAspdMult = 0.1 end
+        log("[PowerStrike] toben stats atkMult=" .. tostring(self.tobenAtkMult) .. " aspdMult=" .. tostring(self.tobenAspdMult))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetWeaponStats(number atkFlat, number aspdPct, number autoDmg)
+        -- 장착 무기 자동공격값(검기 기본 데미지)/공격력(기본 데미지에 가산)/공격속도(%, 쿨다운 배율)를 저장.
+        -- 미장착이면 0/0/0으로 호출돼 무보정(자동공격값 0 → GetEffectiveDamage가 self.Damage 폴백).
+        self.weaponAtkBonus = atkFlat or 0
+        if self.weaponAtkBonus < 0 then self.weaponAtkBonus = 0 end
+        self.weaponAutoDmg = autoDmg or 0
+        if self.weaponAutoDmg < 0 then self.weaponAutoDmg = 0 end
+        self.weaponAspdMult = 1.0 + (aspdPct or 0) / 100.0
+        if self.weaponAspdMult < 0.1 then self.weaponAspdMult = 0.1 end
+        log("[PowerStrike] weapon stats autoDmg=" .. tostring(self.weaponAutoDmg) .. " atk+" .. tostring(self.weaponAtkBonus)
+            .. " aspdMult=" .. tostring(self.weaponAspdMult))
+    end
+
     -- ── 로그라이트 스테이지 버프(모두 transient, RunGameHud가 스테이지마다 ResetStageBuff로 초기화) ──
     -- 스테이지를 벗어나면 효과 소멸. 서버 권위(서버에서만 읽고 쓴다).
     -- 공격력 배율(가산 누적) — GetEffectiveDamage에 곱해져 검기+궁극기 모두 반영.
@@ -206,16 +248,63 @@ script PowerStrike extends SkillComponent
         return 1
     end
 
+    method integer GetBlessPierce()
+        -- 축복[무기관통] 관통 가산치. 런타임 부착된 BlessPierce를 지연 조회/캐싱해서 읽는다(미보유 시 0).
+        if self.blessPierce == nil then
+            self.blessPierce = self.Entity:GetComponent("script.BlessPierce")
+        end
+        ---@type BlessPierce
+        local b = self.blessPierce
+        if b == nil then return 0 end
+        return b:GetBonusPierce()
+    end
+
+    method number GetBlessInstakillChance()
+        -- 축복[급소 일격] 즉사 확률(0~1). 검기 발사 시 SwordBeamAttack.InstakillChance로 실어준다(미보유 시 0).
+        if self.blessCrit == nil then
+            self.blessCrit = self.Entity:GetComponent("script.BlessCrit")
+        end
+        ---@type BlessCrit
+        local b = self.blessCrit
+        if b == nil then return 0 end
+        return b:GetInstakillChance()
+    end
+
+    method number GetBlessSwiftMult()
+        -- 축복[신속 공격] 공격속도 배율(1 = 미보유). GetEffectiveCooldown에서 나눠 쿨다운을 줄인다.
+        if self.blessSwift == nil then
+            self.blessSwift = self.Entity:GetComponent("script.BlessSwift")
+        end
+        ---@type BlessSwift
+        local b = self.blessSwift
+        if b == nil then return 1 end
+        return b:GetSpeedMult()
+    end
+
+    method number GetBlessHitChance()
+        -- 축복[타격수 강화] 추가 타격 발생 확률(0~1, 미보유 시 0). OnActivate가 이 확률로 검기를 1발 더 발사한다.
+        if self.blessHit == nil then
+            self.blessHit = self.Entity:GetComponent("script.BlessHitCount")
+        end
+        ---@type BlessHitCount
+        local b = self.blessHit
+        if b == nil then return 0 end
+        return b:GetHitChance()
+    end
+
     method number GetEffectiveDamage()
-        -- Per-beam attack power = base Damage scaled by the AttackPower stat — the SAME value fed into each
-        -- sword beam (see OnActivate). Public so other skills (e.g. the ultimate) can size their damage off
-        -- the player's attack power without duplicating the stat lookup. Server-side (stat defs are
-        -- server-only); returns base Damage unscaled if the stat manager is unavailable.
+        -- 인게임 자동공격(검기) 한 발의 데미지 = (장착 무기 자동공격값 + 공격력) × AttackPower 스탯 × 스테이지버프 × 토벤.
+        -- 자동공격값(weaponAutoDmg)이 검기 기본 데미지가 되고 공격력(weaponAtkBonus)이 가산된다. 무기 미장착(자동공격값 0)이면
+        -- 기존 self.Damage 프로퍼티를 기본값으로 폴백. GetEffectiveDamage는 검기와 궁극기(UltimateSkill)가 공유한다.
         local power = 1.0
         if self.statManager ~= nil then
             power = self.statManager:GetStatValue(self.PowerStatKey)
         end
-        return self.Damage * power * self.stageAttackMult
+        local base = self.Damage
+        if self.weaponAutoDmg > 0 then
+            base = self.weaponAutoDmg
+        end
+        return (base + self.weaponAtkBonus) * power * self.stageAttackMult * self.tobenAtkMult
     end
 
     @ExecSpace("ServerOnly")
@@ -255,7 +344,8 @@ script PowerStrike extends SkillComponent
         -- 부모(스탯 기반 쿨다운)에 스테이지 공격속도 버프를 얹는다: 배율이 클수록 쿨다운이 짧아진다.
         -- 부모 SkillComponent.GetEffectiveCooldown은 @ExecSpace 없음 → 오버라이드도 없이 시그니처 일치(LEA-3014 방지).
         local base = __base:GetEffectiveCooldown()
-        local mult = self.stageAttackSpeedMult
+        -- 스테이지 공격속도 버프(로그라이트) × 축복[신속 공격] × 토벤 × 장착 무기 공격속도 배율을 함께 적용(값↑ = 쿨다운↓).
+        local mult = self.stageAttackSpeedMult * self:GetBlessSwiftMult() * self.tobenAspdMult * self.weaponAspdMult
         if mult < 0.1 then mult = 0.1 end
         return base / mult
     end
@@ -321,6 +411,17 @@ script PowerStrike extends SkillComponent
             self:PlayAttackAnim()
         end
 
+        -- 축복[타격수 강화]: HitChance 확률로 이번 공격에 추가 타격 1회 발생 → 검기를 1발 더 짧은 간격으로 발사한다.
+        -- 각 검기는 독립적으로 관통/즉사 판정을 하므로 추가 타격 1회가 실제 타수 증가로 이어진다.
+        local hitChance = self:GetBlessHitChance()
+        if hitChance > 0 and _UtilLogic:RandomDouble() < hitChance then
+            local d = direction
+            local dmg = effectiveDamage
+            _TimerService:SetTimerOnce(function()
+                self:FireBeam(d, dmg)
+            end, 0.09)
+        end
+
         -- 검기 스윙 사운드는 SwordBeam이 발사(Launch) 시 자체 동기화(@Sync launchSeq → OnSyncProperty)로 재생한다.
         -- 이렇게 해야 사운드가 검기 비주얼과 같은 복제 채널을 타서 싱크가 맞는다(별도 Multicast는 채널이 달라 어긋남).
 
@@ -346,8 +447,15 @@ script PowerStrike extends SkillComponent
         -- Tag the firing player so monster kills credit meso to the right wallet.
         beam.OwnerEntity = self.Entity
 
-        -- 관통 수 = 기본 + 스테이지 관통 버프(정수). 검기가 이 수만큼 서로 다른 적을 통과한 뒤 소멸한다.
-        local pierce = self.BasePierce + math.floor(self.stagePierceBonus)
+        -- 축복[급소 일격]: 이 검기의 즉사 확률을 발사 직전에 그 플레이어의 BlessCrit 값으로 설정.
+        ---@type SwordBeamAttack
+        local sba = beam.Entity:GetComponent("script.SwordBeamAttack")
+        if sba ~= nil then
+            sba.InstakillChance = self:GetBlessInstakillChance()
+        end
+
+        -- 관통 수 = 기본 + 스테이지 관통 버프(정수) + 축복[무기관통]. 검기가 이 수만큼 서로 다른 적을 통과한 뒤 소멸.
+        local pierce = self.BasePierce + math.floor(self.stagePierceBonus) + self:GetBlessPierce()
         if pierce < 1 then pierce = 1 end
 
         local wp = self.Entity.TransformComponent.WorldPosition

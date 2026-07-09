@@ -400,6 +400,14 @@ method void ResetStageBuffsOnMap(Entity map)
 			if hp ~= nil then
 				hp:ResetStageHealthBuffs()
 			end
+			-- 축복(계정 영구) 재적용: 스테이지 리셋 직후 이 플레이어의 축복 효과 6종을 캐릭터 컴포넌트에 (재)주입한다.
+			-- 스테이지 버프와 달리 리셋 대상이 아니므로, 리셋 이후에 넘겨줘야 이번 판 시작부터 효과가 살아있다.
+			local plc = user.PlayerComponent
+			if plc ~= nil then
+				_PlayerSave:ApplyBlessToPlayer(user, plc.UserId)
+				_PlayerSave:ApplyTobenToPlayer(user, plc.UserId)
+				_PlayerSave:ApplyWeaponToPlayer(user, plc.UserId)
+			end
 		end
 	end
 end
@@ -447,6 +455,18 @@ method void BuildCourse(string stage, Entity map)
 			table.insert(gaps, { x1 = gx, x2 = gx + glen })
 		else
 			table.insert(cmds, r)
+		end
+	end
+	-- Stage background (Set,bg,<templateRUID>). BackgroundComponent lives on the map's "Background"
+	-- child entity and is @Sync, so applying it here (server) propagates to every client. Stages with
+	-- no Set,bg row keep whatever background the map already had.
+	if cfg.bgRuid ~= nil and cfg.bgRuid ~= "" and isvalid(map) then
+		local bgEnt = map:GetChildByName("Background", true)
+		if isvalid(bgEnt) and bgEnt.BackgroundComponent ~= nil then
+			bgEnt.BackgroundComponent:ChangeBackgroundByTemplateRUID(cfg.bgRuid)
+			log("[CourseGen] bg applied stage=" .. tostring(stage) .. " ruid=" .. tostring(cfg.bgRuid))
+		else
+			log("[CourseGen] bg skip stage=" .. tostring(stage) .. " (no Background entity/component)")
 		end
 	end
 	-- Boss course (Set,goal,boss): the boss is placed with a "Boss,<id>,<x>" row like a monster is placed
@@ -592,6 +612,14 @@ method void ApplySet(table cfg, string key, string val)
 	if key == "tile" then
 		if val ~= nil and val ~= "" then
 			cfg.tileRuid = val
+		end
+		return
+	end
+	if key == "bg" then
+		-- Stage background: a Template-type background RUID (string). Applied to the map's
+		-- BackgroundComponent in BuildCourse. Handled before the tonumber gate below.
+		if val ~= nil and val ~= "" then
+			cfg.bgRuid = val
 		end
 		return
 	end

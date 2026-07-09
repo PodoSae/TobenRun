@@ -1,0 +1,31 @@
+@Component
+script BlessHitCount extends Component
+
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    --  축복[타격수 강화]  (BlessEffect DataSet의 effectId = "hitcount")
+    -- ───────────────────────────────────────────────────────────────────────────────────────
+    --  효과   : 자동공격 발동 때마다 이 확률로 "추가 타격 1회"가 발생 → 검기를 1발 더 짧은 간격으로 발사한다.
+    --           각 검기가 독립적으로 관통/즉사 판정을 하므로 실제 타수 증가로 이어진다. HitChance = 확률 0~1.
+    --  데이터 : 로비 축복 강화 → be_hitcount 레벨 → BlessEffect의 lv{레벨} 효과값(%) → PlayerSave:ApplyBlessToPlayer가
+    --  흐름     스테이지 진입마다 SetBless(값)로 주입 → PowerStrike.OnActivate가 발동 시 GetHitChance()로 1회
+    --           판정 → 성공하면 0.09초 뒤 검기를 1발 더 발사한다(FireBeam 재호출).
+    --  부착   : DefaultPlayer.model 편집 불가 → 런타임(AddComponent) 부착. "계정 영구" 축복이라 스테이지
+    --  /수명    로그라이트 버프와 독립 — 스테이지 리셋의 영향 없이 자체 확률을 유지한다.
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    @HideFromInspector property number HitChance = 0
+
+    @ExecSpace("ServerOnly")
+    method void SetBless(number value)
+        -- 인게임 시작 전 주입점: value = 추가 타격 발생 확률(%). 0~1 비율로 변환해 저장(0 = 미보유).
+        self.HitChance = value / 100.0
+        if self.HitChance < 0 then self.HitChance = 0 end
+        if self.HitChance > 1 then self.HitChance = 1 end
+        log("[BlessHitCount] SetBless -> " .. tostring(value) .. "% extra-hit chance")
+    end
+
+    method number GetHitChance()
+        -- PowerStrike가 발동 시 읽어 추가 검기 발사 여부를 판정하는 확률(0~1).
+        return self.HitChance
+    end
+
+end

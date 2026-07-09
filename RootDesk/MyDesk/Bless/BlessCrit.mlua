@@ -1,0 +1,31 @@
+@Component
+script BlessCrit extends Component
+
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    --  축복[급소 일격]  (BlessEffect DataSet의 effectId = "crit")
+    -- ───────────────────────────────────────────────────────────────────────────────────────
+    --  효과   : 검기가 일반 몬스터를 때릴 때 이 확률로 "즉사" 판정. 성공 시 그 몬스터의 현재 HP만큼 피해를
+    --           줘 한 방에 처치한다(보스 제외). InstakillChance = 확률 0~1(예: 15% → 0.15).
+    --  데이터 : 로비 축복 강화 → be_crit 레벨 → BlessEffect의 lv{레벨} 효과값(%) → PlayerSave:ApplyBlessToPlayer가
+    --  흐름     스테이지 진입마다 SetBless(값)로 주입 → PowerStrike.FireBeam이 발사 직전 GetInstakillChance()를
+    --           읽어 그 검기의 SwordBeamAttack.InstakillChance에 실어준다 → 검기가 적중 시 즉사 판정을 수행한다.
+    --  부착   : DefaultPlayer.model 편집 불가 → 런타임(AddComponent) 부착. "계정 영구" 축복이라 스테이지
+    --  /수명    로그라이트 버프와 독립 — 스테이지 리셋의 영향 없이 자체 확률을 유지한다.
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    @HideFromInspector property number InstakillChance = 0
+
+    @ExecSpace("ServerOnly")
+    method void SetBless(number value)
+        -- 인게임 시작 전 주입점: value = 즉사 확률(%). 0~1 비율로 변환해 저장(0 = 미보유).
+        self.InstakillChance = value / 100.0
+        if self.InstakillChance < 0 then self.InstakillChance = 0 end
+        if self.InstakillChance > 1 then self.InstakillChance = 1 end
+        log("[BlessCrit] SetBless -> " .. tostring(value) .. "% instakill")
+    end
+
+    method number GetInstakillChance()
+        -- PowerStrike가 검기 발사 시 읽어 SwordBeamAttack에 실어주는 즉사 확률(0~1).
+        return self.InstakillChance
+    end
+
+end

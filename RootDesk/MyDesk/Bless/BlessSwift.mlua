@@ -1,0 +1,30 @@
+@Component
+script BlessSwift extends Component
+
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    --  축복[신속 공격]  (BlessEffect DataSet의 effectId = "swift")
+    -- ───────────────────────────────────────────────────────────────────────────────────────
+    --  효과   : 자동공격(검기)의 공격 속도를 %만큼 올린다 → 검기 쿨다운이 줄어 더 자주 발사한다.
+    --           SpeedMult = 1 + value/100 배율로 저장(예: 20% → x1.2).
+    --  데이터 : 로비 축복 강화 → be_swift 레벨 → BlessEffect의 lv{레벨} 효과값(%) → PlayerSave:ApplyBlessToPlayer가
+    --  흐름     스테이지 진입마다 SetBless(값)로 주입 → PowerStrike.GetEffectiveCooldown이 GetSpeedMult()를
+    --           읽어 [스테이지 공속버프 × 이 배율 × 토벤 공속]으로 쿨다운을 나눈다(값↑ = 쿨다운↓ = 더 빠름).
+    --  부착   : DefaultPlayer.model 편집 불가 → 런타임(AddComponent) 부착. "계정 영구" 축복이라 스테이지
+    --  /수명    로그라이트 버프와 독립 — 스테이지 리셋의 영향 없이 자체 배율을 유지한다.
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    @HideFromInspector property number SpeedMult = 1
+
+    @ExecSpace("ServerOnly")
+    method void SetBless(number value)
+        -- 인게임 시작 전 주입점: value = 공격 속도 증가(%). 배율로 변환해 저장(0% → x1.0 = 미보유).
+        self.SpeedMult = 1.0 + value / 100.0
+        if self.SpeedMult < 0.1 then self.SpeedMult = 0.1 end
+        log("[BlessSwift] SetBless -> x" .. tostring(self.SpeedMult) .. " atk speed")
+    end
+
+    method number GetSpeedMult()
+        -- PowerStrike가 쿨다운 계산 시 나누는 공격속도 배율(1 = 미보유).
+        return self.SpeedMult
+    end
+
+end

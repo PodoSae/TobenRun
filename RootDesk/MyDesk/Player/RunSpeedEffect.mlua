@@ -214,20 +214,41 @@ script RunSpeedEffect extends Component
 			return
 		end
 
-		-- Mirror the runner's avatar appearance (clones this user's equipped costume).
+		-- Mirror the runner's ACCOUNT coord (hair/face/body + any account clothes) onto the ghost.
 		local costume = ghost.CostumeManagerComponent
 		if isvalid(costume) and userId ~= "" then
 			costume.DefaultEquipUserId = userId
 		end
 
-		-- Slide pose flag → RunGhost (@Sync) so every client poses this ghost as crouch to match the
-		-- sliding player. Set in the same server tick as the spawn so it rides the initial replication.
-		if crouch then
-			---@type RunGhost
-			local rg = ghost:GetComponent("script.RunGhost")
-			if rg ~= nil then
+		-- Resolve the owner's equipped GAME gear (server-authoritative save) to overlay on top of the clone.
+		local wruid = ""
+		local gruid = ""
+		local cruid = ""
+		local pruid = ""
+		if _PlayerSave ~= nil and userId ~= "" then
+			wruid = _PlayerSave:GetEquippedRuidForUser(userId, "weapon")
+			gruid = _PlayerSave:GetEquippedRuidForUser(userId, "glove")
+			cruid = _PlayerSave:GetEquippedRuidForUser(userId, "coat")
+			pruid = _PlayerSave:GetEquippedRuidForUser(userId, "pants")
+		end
+
+		-- Push slide-pose + equipped gear RUIDs to the ghost's RunGhost (@Sync) in the same server tick as
+		-- the spawn so they ride the initial replication. The client re-applies the gear (RunGhost.ApplyEquipped
+		-- → EquipScreen:ApplyRuidsToCostume) AFTER the async account clone settles, so the ghost matches the
+		-- running player exactly (weapon + armor, with two-handed / longcoat conflicts cleared).
+		---@type RunGhost
+		local rg = ghost:GetComponent("script.RunGhost")
+		if rg ~= nil then
+			if crouch then
 				rg.Crouch = true
 			end
+			-- Owner id → on that player's client the ghost mirrors the player's LIVE costume 1:1 (runtime
+			-- coord changes included). The gear RUIDs are the fallback for OTHER clients (account clone).
+			rg.OwnerUserId = userId
+			rg.WeaponRuid = wruid
+			rg.GloveRuid = gruid
+			rg.CoatRuid = cruid
+			rg.PantsRuid = pruid
 		end
 
 		-- Pose is set client-side by the ghost's own RunGhost component (BodyActionStateChangeEvent),

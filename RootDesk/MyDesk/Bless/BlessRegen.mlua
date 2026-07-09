@@ -1,0 +1,45 @@
+@Component
+script BlessRegen extends Component
+
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    --  축복[체력 재생]  (BlessEffect DataSet의 effectId = "regen")
+    -- ───────────────────────────────────────────────────────────────────────────────────────
+    --  효과   : Interval(기본 10초)마다 최대 체력의 RegenPct(%)만큼 HP를 회복한다(사망/최대치 상한은
+    --           PlayerHealth.HealFromBless가 처리). 스테이지 재생 버프(stageRegenPerSec)와 독립적으로 누적된다.
+    --  데이터 : 로비 축복 강화 → be_regen 레벨 → BlessEffect의 lv{레벨} 효과값(%) → PlayerSave:ApplyBlessToPlayer가
+    --  흐름     스테이지 진입마다 SetBless(값)로 주입 → PlayerHealth.OnUpdate가 매 프레임 Tick(delta, hp)를 호출 →
+    --           누적 시간이 Interval에 도달할 때마다 hp:HealFromBless(최대체력×RegenPct%)로 회복을 요청한다.
+    --  구동   : 다른 축복은 전투 허브가 Get*로 "값을 읽어가는" 수동형이지만, 재생은 시간 로직이 필요해 이 컴포넌트가
+    --  방식     타이밍/양을 직접 관리한다. 단, 런타임 부착이라 자체 OnUpdate 수명에 의존하지 않도록 PlayerHealth가
+    --           외부에서 Tick을 구동한다(외부 구동 방식). RegenPct<=0(미보유)이면 Tick이 즉시 반환.
+    --  부착   : DefaultPlayer.model 편집 불가 → 런타임(AddComponent) 부착. "계정 영구" 축복이라 스테이지 리셋의
+    --  /수명    영향 없이 자체 필드를 유지한다.
+    -- ═══════════════════════════════════════════════════════════════════════════════════════
+    @HideFromInspector property number RegenPct = 0
+    @DisplayName("재생 간격(초)")
+    property number Interval = 10.0
+    @HideFromInspector property number accum = 0
+
+    @ExecSpace("ServerOnly")
+    method void SetBless(number value)
+        -- 인게임 시작 전 주입점: 간격마다 회복할 "최대 체력 대비 %"를 저장하고 누적 타이머를 리셋(0 = 미보유).
+        self.RegenPct = value
+        self.accum = 0
+        log("[BlessRegen] SetBless -> 최대체력 " .. tostring(value) .. "% / " .. tostring(self.Interval) .. "s")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void Tick(number delta, PlayerHealth hp)
+        -- PlayerHealth가 매 프레임 구동. 간격(Interval)마다 최대 체력의 RegenPct% 만큼 회복 요청(사망/최대치
+        -- 상한은 PlayerHealth.HealFromBless가 처리). RegenPct<=0(미보유)이면 아무것도 하지 않는다.
+        if self.RegenPct <= 0 then return end
+        if hp == nil then return end
+        self.accum = self.accum + delta
+        if self.accum >= self.Interval then
+            self.accum = self.accum - self.Interval
+            local amount = hp.MaxHp * self.RegenPct / 100.0
+            hp:HealFromBless(amount)
+        end
+    end
+
+end

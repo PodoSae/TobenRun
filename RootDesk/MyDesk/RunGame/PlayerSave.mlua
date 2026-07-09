@@ -43,6 +43,40 @@ method any LoadUser(string userId)
 	if data.gold == nil then
 		data.gold = 0
 	end
+	if data.bless_lv == nil then
+		data.bless_lv = 1                 -- 축복 레벨은 1부터 시작
+	end
+	-- 각 축복 효과는 레벨 0으로 시작 (BlessEffect DataSet의 효과 id별로 be_<id> = 0).
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds ~= nil then
+		local n = eds:GetRowCount()
+		for i = 1, n do
+			local row = eds:GetRow(i)
+			if row ~= nil then
+				local eid = row:GetItem("id")
+				if eid ~= nil and eid ~= "" and data["be_" .. eid] == nil then
+					data["be_" .. eid] = 0
+				end
+			end
+		end
+	end
+	-- 토벤 레벨/스탯(축복과 동형): toben_lv는 1부터, 각 토벤 스탯은 tp_<id> = 0으로 시작.
+	if data.toben_lv == nil then
+		data.toben_lv = 1
+	end
+	local tds = _DataService:GetTable("TobenStat")
+	if tds ~= nil then
+		local tn = tds:GetRowCount()
+		for i = 1, tn do
+			local row = tds:GetRow(i)
+			if row ~= nil then
+				local sid = row:GetItem("id")
+				if sid ~= nil and sid ~= "" and data["tp_" .. sid] == nil then
+					data["tp_" .. sid] = 0
+				end
+			end
+		end
+	end
 	self.caches[userId] = data
 	log("[PlayerSave] loaded user=" .. tostring(userId) .. " gold=" .. tostring(data.gold))
 	return data
@@ -74,8 +108,82 @@ method void RequestMyData()
 	if userId == nil or userId == "" then
 		return
 	end
+	self:EnsureStarterEquip(userId)
 	local data = self:LoadUser(userId)
 	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+end
+
+@ExecSpace("ServerOnly")
+method void EnsureStarterEquip(string userId)
+	-- 장비는 무기(해금식)만 관리. 방어구(장갑/상의/하의)는 외형 기본값으로 배경에서만 유지(UI 비노출).
+	-- 무기는 "히어로"만 해금 + 장착. 기존 유저의 옛 무기(Weapon 데이터셋에 없는 id)는 히어로로 마이그레이션.
+	local data = self:LoadUser(userId)
+	local changed = false
+	-- 첫 로그인: 스타터 방어구(외형용) 장착 + 히어로 무기 장착.
+	if data["eq_weapon"] == nil then
+		data["eq_glove"] = "starter_glove"
+		data["eq_coat"] = "starter_coat"
+		data["eq_pants"] = "starter_pants"
+		data["own_starter_glove"] = 1
+		data["own_starter_coat"] = 1
+		data["own_starter_pants"] = 1
+		data["eq_weapon"] = "hero"
+		changed = true
+	end
+	-- 히어로 해금 보장 + 등급 기본 1.
+	if data["wown_hero"] == nil or math.floor(data["wown_hero"] or 0) == 0 then
+		data["wown_hero"] = 1
+		changed = true
+	end
+	if data["wg_hero"] == nil then
+		data["wg_hero"] = 1
+		changed = true
+	end
+	-- 옛 무기(Weapon 데이터셋에 없는 id) 장착 상태면 히어로로 교체. 빈 문자열("")=의도적 해제라 유지.
+	local eqw = data["eq_weapon"]
+	if eqw ~= nil and eqw ~= "" and self:IsWeaponId(eqw) == false then
+		data["eq_weapon"] = "hero"
+		changed = true
+	end
+	if data.coin == nil then
+		data.coin = 50
+		changed = true
+	end
+	if changed then
+		self:Persist(userId)
+		log("[PlayerSave] ensure starter/weapon equip for " .. tostring(userId))
+	end
+end
+
+@ExecSpace("Server")
+method void ClearEquip()
+	-- Reset equipment (also lets the starter set re-grant on the next data request).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	data["eq_weapon"] = nil
+	data["eq_glove"] = nil
+	data["eq_coat"] = nil
+	data["eq_pants"] = nil
+	-- Also drop all owned equip items so the next login re-grants only the default starters.
+	local ds = _DataService:GetTable("EquipItem")
+	if ds ~= nil then
+		local n = ds:GetRowCount()
+		for i = 1, n do
+			local row = ds:GetRow(i)
+			if row ~= nil then
+				local id = row:GetItem("id")
+				if id ~= nil and id ~= "" then
+					data["own_" .. id] = nil
+				end
+			end
+		end
+	end
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	log("[PlayerSave] cleared equip for " .. tostring(userId))
 end
 
 @ExecSpace("Client")
@@ -91,10 +199,24 @@ method void ReceiveMyData(string json)
 	if data.gold == nil then
 		data.gold = 0
 	end
+	if data.bless_lv == nil then
+		data.bless_lv = 1
+	end
+	if data.toben_lv == nil then
+		data.toben_lv = 1
+	end
 	self.clientData = data
 	log("[PlayerSave] client received save data gold=" .. tostring(data.gold))
 	if _ScreenFlow ~= nil then
 		_ScreenFlow:RefreshSavedUI()
+	end
+	-- 세이브 도착 후 인게임 캐릭터 외형(무기+방어구 세트)을 재적용 — 스테이지 진입(OnArriveMap)이 세이브 수신보다
+	-- 먼저 끝나는 프리로드 레이스에서 장비가 안 입혀지는 문제 방지. 장비/무기 변경 후 재동기화에도 반영된다.
+	if _RunGameHud ~= nil then
+		local lp = _UserService.LocalPlayer
+		if lp ~= nil and isvalid(lp) then
+			_RunGameHud:ApplyEquippedGear(lp)
+		end
 	end
 end
 
@@ -108,6 +230,14 @@ method integer GetStageBest(string stage)
 		return 0
 	end
 	return math.floor(v)
+end
+
+method boolean IsStageCleared(string stage)
+	-- Client-side read of the persisted clear flag (goal reached at least once → c_<stage>=1).
+	if self.clientData == nil then
+		return false
+	end
+	return tonumber(self.clientData["c_" .. stage]) == 1
 end
 
 method integer GetItemLevel(string itemId)
@@ -130,9 +260,965 @@ method integer GetGold()
 	return math.floor(self.clientData.gold)
 end
 
+method number GetBgmVolume()
+	-- Client-side read of the saved BGM volume (default 1.0 when never set).
+	if self.clientData == nil then
+		return 1.0
+	end
+	local v = self.clientData["vol_bgm"]
+	if v == nil then
+		return 1.0
+	end
+	return v
+end
+
+method number GetSfxVolume()
+	-- Client-side read of the saved SFX volume (default 1.0 when never set).
+	if self.clientData == nil then
+		return 1.0
+	end
+	local v = self.clientData["vol_sfx"]
+	if v == nil then
+		return 1.0
+	end
+	return v
+end
+
+@ExecSpace("Server")
+method void SaveVolume(number bgm, number sfx)
+	-- Settings popup closed → persist the two volumes (event-driven, dirty-checked).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local dirty = false
+	if data["vol_bgm"] ~= bgm then
+		data["vol_bgm"] = bgm
+		dirty = true
+	end
+	if data["vol_sfx"] ~= sfx then
+		data["vol_sfx"] = sfx
+		dirty = true
+	end
+	if dirty then
+		self:Persist(userId)
+		-- Keep the owning client's cache in step so a later reopen reads the saved value.
+		self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+		log("[PlayerSave] volume saved bgm=" .. tostring(bgm) .. " sfx=" .. tostring(sfx))
+	end
+end
+
+@ExecSpace("Server")
+method void EquipGear(string slot, string itemId)
+	-- Equip/unequip a slot (itemId "" = unequip). Persist + resync to the owning client.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if slot == nil or slot == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local k = "eq_" .. slot
+	if data[k] ~= itemId then
+		data[k] = itemId
+		self:Persist(userId)
+		self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+		log("[PlayerSave] equip " .. slot .. " = " .. tostring(itemId))
+	end
+end
+
+method string GetEquipped(string slot)
+	-- Client read of the equipped item id for a slot ("" = none).
+	if self.clientData == nil then
+		return ""
+	end
+	local v = self.clientData["eq_" .. slot]
+	if v == nil then
+		return ""
+	end
+	return v
+end
+
+method integer GetItemLevelById(string itemId)
+	-- Client read of an equip item's enhancement level (0 = not owned).
+	if self.clientData == nil then
+		return 0
+	end
+	local v = self.clientData["own_" .. itemId]
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+method boolean IsOwned(string itemId)
+	-- Client read: does the player own this item.
+	if self.clientData == nil then
+		return false
+	end
+	return self.clientData["own_" .. itemId] ~= nil
+end
+
+method integer GetCoin()
+	-- Client read of the 토벤코인 balance.
+	if self.clientData == nil or self.clientData.coin == nil then
+		return 0
+	end
+	return math.floor(self.clientData.coin)
+end
+
+method integer GetBlessLevel()
+	-- Client read of the current 축복 레벨 (defaults to 1).
+	if self.clientData == nil or self.clientData.bless_lv == nil then
+		return 1
+	end
+	local lv = math.floor(self.clientData.bless_lv)
+	if lv < 1 then
+		return 1
+	end
+	return lv
+end
+
+method integer BlessLevelUpCost(integer level)
+	-- Shared (client + server): 토벤코인 cost to raise 축복 from `level` to `level+1`.
+	-- Looked up per-level from the BlessLevel DataSet (row where level == `level` -> upCost).
+	-- Beyond the highest defined level, the last row's cost is used (cap).
+	local lv = level
+	if lv < 1 then
+		lv = 1
+	end
+	local ds = _DataService:GetTable("BlessLevel")
+	if ds == nil then
+		return 5
+	end
+	local lastCost = 5
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local rowLv = tonumber(row:GetItem("level")) or 0
+			local cost = tonumber(row:GetItem("upCost")) or 5
+			lastCost = cost
+			if rowLv == lv then
+				return math.floor(cost)
+			end
+		end
+	end
+	return math.floor(lastCost)
+end
+
+method integer BlessMaxPoint(integer level)
+	-- 최대 축복 포인트 available at bless `level`, looked up from the BlessLevel DataSet (maxPoint column).
+	-- Beyond the highest defined level, the last row's maxPoint is used (cap).
+	local lv = level
+	if lv < 1 then
+		lv = 1
+	end
+	local ds = _DataService:GetTable("BlessLevel")
+	if ds == nil then
+		return lv * 5
+	end
+	local lastPt = 5
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local rowLv = tonumber(row:GetItem("level")) or 0
+			local pt = tonumber(row:GetItem("maxPoint")) or 0
+			lastPt = pt
+			if rowLv == lv then
+				return math.floor(pt)
+			end
+		end
+	end
+	return math.floor(lastPt)
+end
+
+method integer GetEffectLevel(string effectId)
+	-- Client read of a 축복 효과's current level (0 = not raised yet).
+	if self.clientData == nil then
+		return 0
+	end
+	local v = self.clientData["be_" .. effectId]
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
+method integer EffectUpgradeCost(integer level)
+	-- 포인트 cost to raise an effect from `level` to `level+1` = effCostBase + effCostInc*level.
+	-- (base=1, inc=1 -> 0→1 costs 1, 1→2 costs 2, 2→3 costs 3 …). Reads the Blessing DataSet.
+	local ds = _DataService:GetTable("Blessing")
+	local base = 1
+	local inc = 1
+	if ds ~= nil then
+		local row = ds:FindRow("id", "bless")
+		if row ~= nil then
+			base = tonumber(row:GetItem("effCostBase")) or base
+			inc = tonumber(row:GetItem("effCostInc")) or inc
+		end
+	end
+	local lv = level
+	if lv < 0 then
+		lv = 0
+	end
+	return math.floor(base + inc * lv)
+end
+
+method integer EffectSpentTo(integer level)
+	-- Cumulative points needed to raise an effect from 0 up to `level` (sum of per-step costs).
+	local total = 0
+	local k = 0
+	while k < level do
+		total = total + self:EffectUpgradeCost(k)
+		k = k + 1
+	end
+	return total
+end
+
+method integer GetBlessTotalPoints()
+	-- Total(최대) 축복 포인트 for the current level, from the BlessLevel DataSet (maxPoint).
+	return self:BlessMaxPoint(self:GetBlessLevel())
+end
+
+method integer GetBlessSpentPoints()
+	-- Points already spent across all effects = sum(cumulative cost to each effect's level).
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds == nil then
+		return 0
+	end
+	local spent = 0
+	local n = eds:GetRowCount()
+	for i = 1, n do
+		local row = eds:GetRow(i)
+		if row ~= nil then
+			local eid = row:GetItem("id")
+			if eid ~= nil and eid ~= "" then
+				spent = spent + self:EffectSpentTo(self:GetEffectLevel(eid))
+			end
+		end
+	end
+	return spent
+end
+
+method integer GetBlessFreePoints()
+	-- Points available to spend = total - spent.
+	local free = self:GetBlessTotalPoints() - self:GetBlessSpentPoints()
+	if free < 0 then
+		return 0
+	end
+	return free
+end
+
+method string GetItemRuid(string itemId)
+	-- Shared (client & server): 장착 아이템 id → 아바타 RUID. 무기(Weapon 데이터셋) 우선, 없으면 EquipItem(방어구).
+	-- 인게임 캐릭터/고스트 외형에 장착 무기를 입히는 데 사용.
+	if itemId == nil or itemId == "" then
+		return ""
+	end
+	local wds = _DataService:GetTable("Weapon")
+	if wds ~= nil then
+		local wrow = wds:FindRow("id", itemId)
+		if wrow ~= nil then
+			local wruid = wrow:GetItem("ruid")
+			if wruid ~= nil and wruid ~= "" then
+				return wruid
+			end
+		end
+	end
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		return ""
+	end
+	local row = ds:FindRow("id", itemId)
+	if row == nil then
+		return ""
+	end
+	local ruid = row:GetItem("ruid")
+	if ruid == nil then
+		return ""
+	end
+	return ruid
+end
+
+method boolean IsWeaponId(string itemId)
+	-- Weapon 데이터셋에 존재하는 무기 id인지(서버/클라 공용).
+	if itemId == nil or itemId == "" then
+		return false
+	end
+	local wds = _DataService:GetTable("Weapon")
+	if wds == nil then
+		return false
+	end
+	return wds:FindRow("id", itemId) ~= nil
+end
+
+method boolean IsWeaponUnlocked(string weaponId)
+	-- 클라: 이 무기가 해금됐는지(wown_<id>==1).
+	if self.clientData == nil then
+		return false
+	end
+	return math.floor(self.clientData["wown_" .. weaponId] or 0) == 1
+end
+
+method integer GetWeaponGrade(string weaponId)
+	-- 클라: 이 무기의 현재 등급(wg_<id>, 기본 1).
+	if self.clientData == nil then
+		return 1
+	end
+	local g = self.clientData["wg_" .. weaponId]
+	if g == nil then
+		return 1
+	end
+	local gi = math.floor(g)
+	if gi < 1 then
+		return 1
+	end
+	return gi
+end
+
+@ExecSpace("ServerOnly")
+method string GetEquippedWeaponRuidForUser(string userId)
+	-- Server read of a user's equipped weapon avatar RUID ("" if none) — for the ghost costume clone.
+	return self:GetEquippedRuidForUser(userId, "weapon")
+end
+
+@ExecSpace("ServerOnly")
+method string GetEquippedRuidForUser(string userId, string slot)
+	-- Server read of a user's equipped item avatar RUID for one slot ("weapon"/"glove"/"coat"/"pants";
+	-- "" if none) — used to sync the running ghost's full equipped look (RunSpeedEffect.SpawnGhostServer).
+	local data = self:LoadUser(userId)
+	if data == nil then
+		return ""
+	end
+	local id = data["eq_" .. slot]
+	if id == nil or id == "" then
+		return ""
+	end
+	return self:GetItemRuid(id)
+end
+
+@ExecSpace("ServerOnly")
+method table GetItemDef(string itemId)
+	-- Server read of one EquipItem row (for enhance/evolve validation & costs).
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		return nil
+	end
+	local row = ds:FindRow("id", itemId)
+	if row == nil then
+		return nil
+	end
+	return {
+		slot = row:GetItem("slot"),
+		itemType = row:GetItem("type"),
+		grade = tonumber(row:GetItem("grade")) or 1,
+		maxLevel = tonumber(row:GetItem("maxLevel")) or 5,
+		upgradeCost = tonumber(row:GetItem("upgradeCost")) or 0,
+		upgradeCostInc = tonumber(row:GetItem("upgradeCostInc")) or 0,
+		evolveCost = tonumber(row:GetItem("evolveCost")) or 0,
+	}
+end
+
+@ExecSpace("ServerOnly")
+method string FindEvolveTarget(string itemType, integer grade)
+	-- The item id of the same type at grade+1 ("" if none = final tier).
+	local ds = _DataService:GetTable("EquipItem")
+	if ds == nil then
+		return ""
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			if row:GetItem("type") == itemType and (tonumber(row:GetItem("grade")) or 0) == grade + 1 then
+				return row:GetItem("id")
+			end
+		end
+	end
+	return ""
+end
+
+@ExecSpace("Client")
+method void EquipMsgClient(string msg)
+	-- Toast an enhance/evolve result on the owning client.
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage(msg)
+	end
+end
+
+@ExecSpace("Server")
+method void EnhanceGear(string itemId)
+	-- 강화: spend 메소(gold) to raise the item's level by 1 (up to maxLevel).
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if data["own_" .. itemId] == nil then
+		return
+	end
+	local def = self:GetItemDef(itemId)
+	if def == nil then
+		return
+	end
+	local lv = math.floor(data["own_" .. itemId])
+	if lv >= def.maxLevel then
+		self:EquipMsgClient("이미 최대 강화입니다", userId)
+		return
+	end
+	local cost = def.upgradeCost + def.upgradeCostInc * (lv - 1)
+	if (data.gold or 0) < cost then
+		self:EquipMsgClient("메소가 부족합니다", userId)
+		return
+	end
+	data.gold = data.gold - cost
+	data["own_" .. itemId] = lv + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("강화 성공! +" .. tostring(lv + 1), userId)
+	log("[PlayerSave] enhance " .. itemId .. " -> Lv." .. tostring(lv + 1))
+end
+
+@ExecSpace("Server")
+method void EvolveGear(string itemId)
+	-- 진화: at maxLevel, spend 토벤코인 to become the next-grade same-type item at Lv.1.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if data["own_" .. itemId] == nil then
+		return
+	end
+	local def = self:GetItemDef(itemId)
+	if def == nil then
+		return
+	end
+	local lv = math.floor(data["own_" .. itemId])
+	if lv < def.maxLevel then
+		self:EquipMsgClient("최대 강화 후 진화할 수 있습니다", userId)
+		return
+	end
+	local nextId = self:FindEvolveTarget(def.itemType, def.grade)
+	if nextId == nil or nextId == "" then
+		self:EquipMsgClient("최종 단계입니다", userId)
+		return
+	end
+	if (data.coin or 0) < def.evolveCost then
+		self:EquipMsgClient("토벤코인이 부족합니다", userId)
+		return
+	end
+	data.coin = (data.coin or 0) - def.evolveCost
+	data["own_" .. itemId] = nil
+	data["own_" .. nextId] = 1
+	if data["eq_" .. def.slot] == itemId then
+		data["eq_" .. def.slot] = nextId
+	end
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("진화 성공!", userId)
+	log("[PlayerSave] evolve " .. itemId .. " -> " .. nextId)
+end
+
+@ExecSpace("Server")
+method void LevelUpBless()
+	-- 축복 레벨업: spend 토벤코인 (cost = baseCost + costInc*(level-1)) to raise 축복 by 1.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local level = 1
+	if data.bless_lv ~= nil then
+		level = math.floor(data.bless_lv)
+	end
+	if level < 1 then
+		level = 1
+	end
+	local cost = self:BlessLevelUpCost(level)
+	if (data.coin or 0) < cost then
+		self:EquipMsgClient("토벤코인이 부족합니다", userId)
+		log("[PlayerSave] bless up denied (coin " .. tostring(data.coin) .. " < " .. tostring(cost) .. ")")
+		return
+	end
+	data.coin = (data.coin or 0) - cost
+	data.bless_lv = level + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("축복 레벨 " .. tostring(level + 1) .. " 달성!", userId)
+	log("[PlayerSave] bless level up -> " .. tostring(level + 1) .. " (-" .. tostring(cost) .. " coin, coin=" .. tostring(data.coin) .. ")")
+end
+
+@ExecSpace("Server")
+method void LevelUpEffect(string effectId)
+	-- 축복 효과 강화: spend 축복 포인트 (free points) to raise one effect level by 1.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if effectId == nil or effectId == "" then
+		return
+	end
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds == nil then
+		return
+	end
+	local def = eds:FindRow("id", effectId)
+	if def == nil then
+		return
+	end
+	local maxLevel = tonumber(def:GetItem("maxLevel")) or 5
+	local data = self:LoadUser(userId)
+	local curLv = math.floor(data["be_" .. effectId] or 0)
+	if curLv >= maxLevel then
+		self:EquipMsgClient("이미 최대 레벨입니다", userId)
+		return
+	end
+	local cost = self:EffectUpgradeCost(curLv)
+	-- Free points = maxPoint(level) - spent(cumulative per effect), computed from server data.
+	local total = self:BlessMaxPoint(math.floor(data.bless_lv or 1))
+	local spent = 0
+	local n = eds:GetRowCount()
+	for i = 1, n do
+		local row = eds:GetRow(i)
+		if row ~= nil then
+			local eid = row:GetItem("id")
+			if eid ~= nil and eid ~= "" then
+				spent = spent + self:EffectSpentTo(math.floor(data["be_" .. eid] or 0))
+			end
+		end
+	end
+	local free = total - spent
+	if free < cost then
+		self:EquipMsgClient("축복 포인트가 부족합니다", userId)
+		log("[PlayerSave] bless effect up denied (free " .. tostring(free) .. " < " .. tostring(cost) .. ")")
+		return
+	end
+	data["be_" .. effectId] = curLv + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient(def:GetItem("name") .. " 강화! Lv." .. tostring(curLv + 1), userId)
+	log("[PlayerSave] bless effect " .. effectId .. " -> Lv." .. tostring(curLv + 1) .. " (-" .. tostring(cost) .. "P)")
+end
+
+@ExecSpace("Server")
+method void ResetBless()
+	-- 축복 효과 초기화: 축복 레벨은 그대로 두고, 모든 효과 레벨(be_<id>)만 0으로 되돌린다.
+	-- 축복 포인트는 레벨에서 파생(free = maxPoint(level) - spent)되므로, 효과가 0이 되면
+	-- 쓴 포인트(spent)가 0이 되어 보유 포인트가 레벨에 맞게 전부 자동으로 되돌아온다. 토벤코인은 건드리지 않음.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local changed = false
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds ~= nil then
+		for i = 1, eds:GetRowCount() do
+			local row = eds:GetRow(i)
+			if row ~= nil then
+				local eid = row:GetItem("id")
+				if eid ~= nil and eid ~= "" then
+					if math.floor(data["be_" .. eid] or 0) ~= 0 then
+						changed = true
+					end
+					data["be_" .. eid] = 0
+				end
+			end
+		end
+	end
+	if changed == false then
+		self:EquipMsgClient("초기화할 축복 효과가 없습니다", userId)
+		log("[PlayerSave] bless reset skipped (no effect levels set)")
+		return
+	end
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("축복 효과가 초기화되었습니다", userId)
+	log("[PlayerSave] bless reset (level kept=" .. tostring(math.floor(data.bless_lv or 1)) .. ", all effects=0)")
+end
+
+-- ===== 토벤 레벨/스탯 (축복과 동형: 메소 → 토벤 레벨 → 토벤 포인트 → 토벤 스탯 4종 + 초기화) =====
+
+method integer GetTobenLevel()
+	-- Client read of the current 토벤 레벨 (defaults to 1).
+	if self.clientData == nil or self.clientData.toben_lv == nil then
+		return 1
+	end
+	local lv = math.floor(self.clientData.toben_lv)
+	if lv < 1 then
+		return 1
+	end
+	return lv
+end
+
+method integer TobenLevelUpCost(integer level)
+	-- 메소 cost to raise 토벤 레벨 from `level` to `level+1` (TobenLevel.upCost, capped at last row).
+	local lv = level
+	if lv < 1 then lv = 1 end
+	local ds = _DataService:GetTable("TobenLevel")
+	if ds == nil then return 100 end
+	local lastCost = 100
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local rowLv = tonumber(row:GetItem("level")) or 0
+			local cost = tonumber(row:GetItem("upCost")) or 100
+			lastCost = cost
+			if rowLv == lv then return math.floor(cost) end
+		end
+	end
+	return math.floor(lastCost)
+end
+
+method integer TobenMaxPoint(integer level)
+	-- 최대 토벤 포인트 at `level` (TobenLevel.maxPoint, capped at last row).
+	local lv = level
+	if lv < 1 then lv = 1 end
+	local ds = _DataService:GetTable("TobenLevel")
+	if ds == nil then return lv * 4 end
+	local lastPt = 4
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local rowLv = tonumber(row:GetItem("level")) or 0
+			local pt = tonumber(row:GetItem("maxPoint")) or 0
+			lastPt = pt
+			if rowLv == lv then return math.floor(pt) end
+		end
+	end
+	return math.floor(lastPt)
+end
+
+method integer GetTobenStatLevel(string statId)
+	-- Client read of a 토벤 스탯's current level (0 = not raised yet).
+	if self.clientData == nil then return 0 end
+	local v = self.clientData["tp_" .. statId]
+	if v == nil then return 0 end
+	return math.floor(v)
+end
+
+method integer TobenStatUpgradeCost(integer level)
+	-- 포인트 cost to raise a stat from `level` to `level+1` = 1 + level (0→1=1, 1→2=2, 2→3=3 …).
+	local lv = level
+	if lv < 0 then lv = 0 end
+	return 1 + lv
+end
+
+method integer TobenStatSpentTo(integer level)
+	-- Cumulative points to raise a stat from 0 to `level`.
+	local total = 0
+	local k = 0
+	while k < level do
+		total = total + self:TobenStatUpgradeCost(k)
+		k = k + 1
+	end
+	return total
+end
+
+method integer GetTobenTotalPoints()
+	return self:TobenMaxPoint(self:GetTobenLevel())
+end
+
+method integer GetTobenSpentPoints()
+	local tds = _DataService:GetTable("TobenStat")
+	if tds == nil then return 0 end
+	local spent = 0
+	local n = tds:GetRowCount()
+	for i = 1, n do
+		local row = tds:GetRow(i)
+		if row ~= nil then
+			local sid = row:GetItem("id")
+			if sid ~= nil and sid ~= "" then
+				spent = spent + self:TobenStatSpentTo(self:GetTobenStatLevel(sid))
+			end
+		end
+	end
+	return spent
+end
+
+method integer GetTobenFreePoints()
+	local free = self:GetTobenTotalPoints() - self:GetTobenSpentPoints()
+	if free < 0 then return 0 end
+	return free
+end
+
+method number TobenStatValue(string statId, integer level)
+	-- TobenStat lv{level} 효과값 (level<1 → 0, maxLevel clamp). Client display + server apply 공용.
+	if level < 1 then return 0 end
+	local tds = _DataService:GetTable("TobenStat")
+	if tds == nil then return 0 end
+	local row = tds:FindRow("id", statId)
+	if row == nil then return 0 end
+	local maxLv = tonumber(row:GetItem("maxLevel")) or 5
+	local lv = level
+	if lv > maxLv then lv = maxLv end
+	local v = tonumber(row:GetItem("lv" .. tostring(lv)))
+	if v == nil then return 0 end
+	return v
+end
+
+@ExecSpace("Server")
+method void LevelUpToben()
+	-- 토벤 레벨업: 메소(gold)를 지불해 토벤 레벨을 1 올린다.
+	local userId = senderUserId
+	if userId == nil or userId == "" then return end
+	local data = self:LoadUser(userId)
+	local level = 1
+	if data.toben_lv ~= nil then level = math.floor(data.toben_lv) end
+	if level < 1 then level = 1 end
+	local cost = self:TobenLevelUpCost(level)
+	if (data.gold or 0) < cost then
+		self:EquipMsgClient("메소가 부족합니다", userId)
+		log("[PlayerSave] toben up denied (gold " .. tostring(data.gold) .. " < " .. tostring(cost) .. ")")
+		return
+	end
+	data.gold = (data.gold or 0) - cost
+	data.toben_lv = level + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("토벤 레벨 " .. tostring(level + 1) .. " 달성!", userId)
+	log("[PlayerSave] toben level up -> " .. tostring(level + 1) .. " (-" .. tostring(cost) .. " meso, gold=" .. tostring(data.gold) .. ")")
+end
+
+@ExecSpace("Server")
+method void LevelUpTobenStat(string statId)
+	-- 토벤 스탯 강화: 토벤 포인트(free)를 지불해 스탯 레벨을 1 올린다.
+	local userId = senderUserId
+	if userId == nil or userId == "" then return end
+	if statId == nil or statId == "" then return end
+	local tds = _DataService:GetTable("TobenStat")
+	if tds == nil then return end
+	local def = tds:FindRow("id", statId)
+	if def == nil then return end
+	local maxLevel = tonumber(def:GetItem("maxLevel")) or 5
+	local data = self:LoadUser(userId)
+	local curLv = math.floor(data["tp_" .. statId] or 0)
+	if curLv >= maxLevel then
+		self:EquipMsgClient("이미 최대 레벨입니다", userId)
+		return
+	end
+	local cost = self:TobenStatUpgradeCost(curLv)
+	local total = self:TobenMaxPoint(math.floor(data.toben_lv or 1))
+	local spent = 0
+	local n = tds:GetRowCount()
+	for i = 1, n do
+		local row = tds:GetRow(i)
+		if row ~= nil then
+			local sid = row:GetItem("id")
+			if sid ~= nil and sid ~= "" then
+				spent = spent + self:TobenStatSpentTo(math.floor(data["tp_" .. sid] or 0))
+			end
+		end
+	end
+	local free = total - spent
+	if free < cost then
+		self:EquipMsgClient("토벤 포인트가 부족합니다", userId)
+		log("[PlayerSave] toben stat up denied (free " .. tostring(free) .. " < " .. tostring(cost) .. ")")
+		return
+	end
+	data["tp_" .. statId] = curLv + 1
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient(def:GetItem("name") .. " 강화! Lv." .. tostring(curLv + 1), userId)
+	log("[PlayerSave] toben stat " .. statId .. " -> Lv." .. tostring(curLv + 1) .. " (-" .. tostring(cost) .. "P)")
+end
+
+@ExecSpace("Server")
+method void ResetToben()
+	-- 토벤 스탯 초기화: 토벤 레벨은 유지, 모든 tp_<id>만 0으로. 포인트는 레벨 파생이라 자동 회수. 메소 안 건드림.
+	local userId = senderUserId
+	if userId == nil or userId == "" then return end
+	local data = self:LoadUser(userId)
+	local changed = false
+	local tds = _DataService:GetTable("TobenStat")
+	if tds ~= nil then
+		for i = 1, tds:GetRowCount() do
+			local row = tds:GetRow(i)
+			if row ~= nil then
+				local sid = row:GetItem("id")
+				if sid ~= nil and sid ~= "" then
+					if math.floor(data["tp_" .. sid] or 0) ~= 0 then changed = true end
+					data["tp_" .. sid] = 0
+				end
+			end
+		end
+	end
+	if changed == false then
+		self:EquipMsgClient("초기화할 토벤 스탯이 없습니다", userId)
+		return
+	end
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("토벤 스탯이 초기화되었습니다", userId)
+	log("[PlayerSave] toben reset (level kept=" .. tostring(math.floor(data.toben_lv or 1)) .. ", all stats=0)")
+end
+
+@ExecSpace("ServerOnly")
+method void ApplyTobenToPlayer(Entity player, string userId)
+	-- 인게임(스테이지) 시작 전 토벤 스탯 4종을 캐릭터 전투 컴포넌트에 반영한다. 스테이지 진입마다 호출.
+	if isvalid(player) == false then return end
+	if userId == nil or userId == "" then return end
+	local data = self:LoadUser(userId)
+	if data == nil then return end
+	local atkPct = self:TobenStatValue("attack", math.floor(data["tp_attack"] or 0))
+	local aspdPct = self:TobenStatValue("atkspeed", math.floor(data["tp_atkspeed"] or 0))
+	local hpAdd = self:TobenStatValue("hp", math.floor(data["tp_hp"] or 0))
+	local defAdd = self:TobenStatValue("defense", math.floor(data["tp_defense"] or 0))
+	---@type PowerStrike
+	local ps = player:GetComponent("script.PowerStrike")
+	if ps ~= nil then
+		ps:SetTobenStats(atkPct, aspdPct)
+	end
+	---@type PlayerHealth
+	local hp = player:GetComponent("script.PlayerHealth")
+	if hp ~= nil then
+		hp:SetTobenStats(hpAdd, defAdd)
+	end
+	log("[PlayerSave] applied toben to " .. tostring(player.Name) .. " atk%=" .. tostring(atkPct)
+		.. " aspd%=" .. tostring(aspdPct) .. " hp+" .. tostring(hpAdd) .. " def+" .. tostring(defAdd))
+end
+
+@ExecSpace("ServerOnly")
+method any GetEquippedWeaponStatsForUser(string userId)
+	-- 서버: 유저가 장착한 무기의 현재 등급(wg_<id>) 스탯(atk/aspd/hp/def)을 Weapon 데이터셋에서 읽어 테이블로 반환.
+	-- 미장착("")/비무기/행 없음 → nil. (id가 같은 여러 등급 행 중 grade 일치 행을 찾는다.)
+	local data = self:LoadUser(userId)
+	if data == nil then return nil end
+	local wid = data["eq_weapon"]
+	if wid == nil or wid == "" then return nil end
+	if self:IsWeaponId(wid) == false then return nil end
+	local grade = math.floor(data["wg_" .. wid] or 1)
+	if grade < 1 then grade = 1 end
+	local wds = _DataService:GetTable("Weapon")
+	if wds == nil then return nil end
+	local n = wds:GetRowCount()
+	for i = 1, n do
+		local row = wds:GetRow(i)
+		if row ~= nil and row:GetItem("id") == wid and (tonumber(row:GetItem("grade")) or 0) == grade then
+			return {
+				atk = tonumber(row:GetItem("atk")) or 0,
+				aspd = tonumber(row:GetItem("aspd")) or 0,
+				hp = tonumber(row:GetItem("hp")) or 0,
+				def = tonumber(row:GetItem("def")) or 0,
+				autoDmg = tonumber(row:GetItem("autoDmg")) or 0,
+			}
+		end
+	end
+	return nil
+end
+
+@ExecSpace("ServerOnly")
+method void ApplyWeaponToPlayer(Entity player, string userId)
+	-- 인게임(스테이지) 시작 전 장착 무기(장비)의 스탯 4종을 캐릭터 전투 컴포넌트에 반영한다. ApplyTobenToPlayer 옆에서
+	-- 스테이지 진입마다 호출 → 장비창에서 바꾼 무기/등급이 다음 판에 바로 반영. 미장착이면 0으로 주입돼 무보정.
+	if isvalid(player) == false then return end
+	if userId == nil or userId == "" then return end
+	local stats = self:GetEquippedWeaponStatsForUser(userId)
+	local atk = 0
+	local aspd = 0
+	local hpAdd = 0
+	local defAdd = 0
+	local autoDmg = 0
+	if stats ~= nil then
+		atk = stats.atk
+		aspd = stats.aspd
+		hpAdd = stats.hp
+		defAdd = stats.def
+		autoDmg = stats.autoDmg
+	end
+	---@type PowerStrike
+	local ps = player:GetComponent("script.PowerStrike")
+	if ps ~= nil then
+		ps:SetWeaponStats(atk, aspd, autoDmg)
+	end
+	---@type PlayerHealth
+	local hp = player:GetComponent("script.PlayerHealth")
+	if hp ~= nil then
+		hp:SetWeaponStats(hpAdd, defAdd)
+	end
+	log("[PlayerSave] applied weapon to " .. tostring(player.Name) .. " autoDmg=" .. tostring(autoDmg)
+		.. " atk+" .. tostring(atk) .. " aspd%=" .. tostring(aspd) .. " hp+" .. tostring(hpAdd) .. " def+" .. tostring(defAdd))
+end
+
 method integer ShopItemCost(number price, number priceInc, number level)
 	-- Cost to buy the NEXT level (level is the current level). Shared by client display + server.
 	return math.floor(price + priceInc * level)
+end
+
+@ExecSpace("ServerOnly")
+method number BlessEffectValue(string effectId, integer level)
+	-- BlessEffect 데이터셋에서 effectId 효과의 level(1~maxLevel)에 해당하는 효과값(lvN 컬럼)을 반환한다.
+	-- level<1(미보유)이면 0. level이 maxLevel을 넘으면 maxLevel 값으로 clamp. (lv1..lv5 컬럼이 실제 효과량)
+	if level < 1 then
+		return 0
+	end
+	local eds = _DataService:GetTable("BlessEffect")
+	if eds == nil then
+		return 0
+	end
+	local row = eds:FindRow("id", effectId)
+	if row == nil then
+		return 0
+	end
+	local maxLv = tonumber(row:GetItem("maxLevel")) or 5
+	local lv = level
+	if lv > maxLv then
+		lv = maxLv
+	end
+	local v = tonumber(row:GetItem("lv" .. tostring(lv)))
+	if v == nil then
+		return 0
+	end
+	return v
+end
+
+@ExecSpace("ServerOnly")
+method void ApplyBlessToPlayer(Entity player, string userId)
+	-- 인게임(스테이지) 시작 전 축복 주입점: 이 플레이어의 계정 축복 효과 6종을 캐릭터의 각 축복 컴포넌트에 넘긴다.
+	-- 각 효과: be_<id> 레벨 → BlessEffect의 lv{레벨} 효과값 → 해당 컴포넌트.SetBless(값).
+	-- 캐릭터(Global/DefaultPlayer.model)는 편집 불가라 컴포넌트가 없으면 런타임 부착(AddComponent)한다.
+	-- 스테이지(재)진입마다 호출되므로 로비에서 올린 축복이 다음 판에 바로 반영된다.
+	if isvalid(player) == false then
+		return
+	end
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if data == nil then
+		return
+	end
+
+	-- 효과 id ↔ 축복 컴포넌트 매핑(모든 컴포넌트는 동일한 SetBless(number) 인터페이스를 가진다).
+	local specs = {
+		{ id = "pierce", comp = "script.BlessPierce" },
+		{ id = "crit", comp = "script.BlessCrit" },
+		{ id = "hitcount", comp = "script.BlessHitCount" },
+		{ id = "swift", comp = "script.BlessSwift" },
+		{ id = "regen", comp = "script.BlessRegen" },
+		{ id = "iframe", comp = "script.BlessIframe" },
+	}
+	for _, spec in ipairs(specs) do
+		local level = math.floor(data["be_" .. spec.id] or 0)
+		local value = self:BlessEffectValue(spec.id, level)
+		local comp = player:GetComponent(spec.comp)
+		if comp == nil then
+			comp = player:AddComponent(spec.comp)
+		end
+		if comp ~= nil then
+			comp:SetBless(value)
+		else
+			log_warning("[PlayerSave] bless component attach failed: " .. spec.comp)
+		end
+	end
+	log("[PlayerSave] applied bless to " .. tostring(player.Name) .. " user=" .. tostring(userId))
 end
 
 @ExecSpace("ServerOnly")
@@ -194,8 +1280,20 @@ method void GrantStageReward(string stage, boolean isClear)
 	end
 	local data = self:LoadUser(userId)
 	local amount = self:LookupReward(stage, isClear)
+	local dirty = false
 	if amount > 0 then
 		data.gold = (data.gold or 0) + amount
+		dirty = true
+	end
+	-- Sequential unlock: mark this stage cleared (goal reached) so the next stage opens.
+	if isClear then
+		local ck = "c_" .. stage
+		if tonumber(data[ck]) ~= 1 then
+			data[ck] = 1
+			dirty = true
+		end
+	end
+	if dirty then
 		self:Persist(userId)
 	end
 	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
@@ -209,6 +1307,22 @@ method void ShowRewardClient(integer amount)
 	if _RunGameHud ~= nil then
 		_RunGameHud:ShowReward(amount)
 	end
+end
+
+@ExecSpace("Server")
+method void DebugFillCurrency(integer gold, integer coin)
+	-- TEST-ONLY helper: set the caller's 메소(gold) + 토벤코인(coin) to the given amounts, persist,
+	-- and resync to the client (→ RefreshSavedUI updates the lobby/equip currency bars). Safe to remove.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	data.gold = gold
+	data.coin = coin
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	log("[PlayerSave] DEBUG fill currency gold=" .. tostring(gold) .. " coin=" .. tostring(coin))
 end
 
 @ExecSpace("Server")

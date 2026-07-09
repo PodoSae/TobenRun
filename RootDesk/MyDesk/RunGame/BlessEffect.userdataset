@@ -1,7 +1,7 @@
 {
   "Id": "",
   "GameId": "",
-  "EntryKey": "userdataset://167745a4-b3c6-4269-8662-2370468b52d9",
+  "EntryKey": "userdataset://f3668d00-184e-4137-b3b6-29d59fe57669",
   "ContentType": "x-mod/userdataset",
   "Content": "",
   "Usage": 0,
@@ -13,8 +13,8 @@
   "ContentProto": {
     "Use": "Json",
     "Json": {
-      "name": "StageUnlock",
-      "id": "167745a4-b3c6-4269-8662-2370468b52d9",
+      "name": "BlessEffect",
+      "id": "f3668d00-184e-4137-b3b6-29d59fe57669",
       "serveronly": false,
       "syncDataSetWebUrl": "",
       "dynamicloading": 0
