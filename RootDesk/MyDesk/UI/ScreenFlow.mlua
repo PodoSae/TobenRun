@@ -870,10 +870,35 @@ method void RefreshBlessUI()
 	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
 		lvEnt.TextComponent.Text = "축복 레벨 " .. tostring(level)
 	end
-	-- Level-up row (replaces the excluded XP bar): show the next 토벤코인 cost.
+	-- 레벨업 버튼: 강화 버튼과 동일 구성(재화 아이콘 + 비용 슬롯 + 보유량에 따른 배경 교체).
+	-- 축복 레벨업은 토벤코인을 소모하므로 재화 아이콘은 코인 아이콘을 쓴다.
 	local upEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn")
-	if isvalid(upEnt) and upEnt.TextComponent ~= nil then
-		upEnt.TextComponent.Text = "레벨업   ·   다음 레벨 " .. tostring(_PlayerSave:BlessLevelUpCost(level)) .. " 토벤코인"
+	if isvalid(upEnt) then
+		local cost = _PlayerSave:BlessLevelUpCost(level)
+		local canAfford = (_PlayerSave:GetCoin() >= cost)
+		-- 배경 스프라이트 교체(가능=밝은 금색 / 불가=어두운 버튼), 틴트는 흰색으로 원본 아트 유지.
+		if upEnt.SpriteGUIRendererComponent ~= nil then
+			if canAfford then
+				upEnt.SpriteGUIRendererComponent.ImageRUID = DataRef("da0db26c9f514bfbafd3645ac3845208")
+			else
+				upEnt.SpriteGUIRendererComponent.ImageRUID = DataRef("9ab369f457a342c5a833618a484692ae")
+			end
+			upEnt.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+		end
+		-- 버튼 자체 중앙 라벨은 비우고(자식 텍스트로 분리).
+		if upEnt.TextComponent ~= nil then
+			upEnt.TextComponent.Text = ""
+		end
+		-- 재화(토벤코인) 아이콘: 강화 버튼과 동일하게 값 앞에 표시.
+		local upIcon = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn/CostIcon")
+		if isvalid(upIcon) and upIcon.SpriteGUIRendererComponent ~= nil then
+			upIcon.SpriteGUIRendererComponent.ImageRUID = DataRef("cf9cf3f4d48546adb9b4462dc6a34c1e")
+		end
+		-- 비용 텍스트(재화 종류에 따른 값).
+		local upCost = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn/CostText")
+		if isvalid(upCost) and upCost.TextComponent ~= nil then
+			upCost.TextComponent.Text = tostring(cost)
+		end
 	end
 	-- Free 축복 포인트 → top "P" pill.
 	local free = _PlayerSave:GetBlessFreePoints()
@@ -971,22 +996,53 @@ method void RefreshBlessDetail()
 			valEnt.TextComponent.Text = "효과량 : " .. curVal .. unit .. " › " .. nextVal .. unit
 		end
 	end
+	-- 강화 버튼: 강화 가능 여부에 따라 배경 스프라이트를 교체하고, 파진 슬롯에 재료값(P)을 표시한다.
 	local upBtn = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn")
-	if isvalid(upBtn) and upBtn.TextComponent ~= nil then
-		if elv >= maxLv then
-			upBtn.TextComponent.Text = "최대 레벨"
-			if upBtn.SpriteGUIRendererComponent ~= nil then
-				upBtn.SpriteGUIRendererComponent.Color = Color(0.55, 0.55, 0.55, 1)
-			end
+	if isvalid(upBtn) then
+		-- 재료값(강화 비용) + 강화 가능 여부 계산. 값 앞 아이콘이 축복 포인트를 나타내므로 숫자만 표시한다.
+		local costText = "MAX"
+		local canUpgrade = false
+		local atMax = (elv >= maxLv)
+		if atMax then
+			costText = "MAX"
+			canUpgrade = false
 		else
 			local cost = _PlayerSave:EffectUpgradeCost(elv)
-			upBtn.TextComponent.Text = "강화 (" .. tostring(cost) .. " P)"
-			if upBtn.SpriteGUIRendererComponent ~= nil then
-				if _PlayerSave:GetBlessFreePoints() >= cost then
-					upBtn.SpriteGUIRendererComponent.Color = Color(0.96, 0.79, 0.24, 1)
+			costText = tostring(cost)
+			canUpgrade = (_PlayerSave:GetBlessFreePoints() >= cost)
+		end
+		-- 배경 스프라이트 교체(가능=밝은 금색 / 불가=어두운 버튼), 틴트는 흰색으로 원본 아트 유지.
+		if upBtn.SpriteGUIRendererComponent ~= nil then
+			if canUpgrade then
+				upBtn.SpriteGUIRendererComponent.ImageRUID = DataRef("da0db26c9f514bfbafd3645ac3845208")
+			else
+				upBtn.SpriteGUIRendererComponent.ImageRUID = DataRef("9ab369f457a342c5a833618a484692ae")
+			end
+			upBtn.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+		end
+		-- 버튼 자체 중앙 라벨은 비우고(자식 텍스트로 분리), 파진 슬롯 자식에 재료값을 넣는다.
+		if upBtn.TextComponent ~= nil then
+			upBtn.TextComponent.Text = ""
+		end
+		local costEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn/CostText")
+		if isvalid(costEnt) and costEnt.TextComponent ~= nil then
+			costEnt.TextComponent.Text = costText
+			-- MAX일 땐 아이콘 숨김 → 'MAX'를 슬롯 정중앙(x=0)에. 비용 표시일 땐 아이콘+값을 하나의 묶음으로 가운데 정렬(x=14).
+			if costEnt.UITransformComponent ~= nil then
+				if atMax then
+					costEnt.UITransformComponent.anchoredPosition = Vector2(0, 18)
 				else
-					upBtn.SpriteGUIRendererComponent.Color = Color(0.55, 0.47, 0.3, 1)
+					costEnt.UITransformComponent.anchoredPosition = Vector2(14, 18)
 				end
+			end
+		end
+		-- 축복 포인트 아이콘: 비용이 있는 상태에서만 값 앞에 표시(최대 레벨이면 'MAX'만 남기고 숨김).
+		-- 아이콘도 왼쪽으로 살짝 당겨(x=-20) 값(x=14)과 겹치지 않게 띄우면서 아이콘+값 묶음이 버튼 가운데에 오도록 한다.
+		local iconEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn/CostIcon")
+		if isvalid(iconEnt) then
+			iconEnt.Enable = (atMax == false)
+			if iconEnt.UITransformComponent ~= nil then
+				iconEnt.UITransformComponent.anchoredPosition = Vector2(-20, 18)
 			end
 		end
 	end
@@ -994,11 +1050,16 @@ end
 
 @ExecSpace("ClientOnly")
 method void ClearBlessSelection()
-	-- Deselect: hide the right detail content (back-board stays), show the "select an effect" hint.
+	-- Deselect: hide the right detail content + its background board, show the "select an effect" hint.
 	self.blessSelected = ""
 	local detail = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail")
 	if isvalid(detail) then
 		detail.Enable = false
+	end
+	-- "효과를 선택하세요" 상태 → DetailBG(상세 배경판)도 숨긴다.
+	local detailBg = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/DetailBG")
+	if isvalid(detailBg) then
+		detailBg.Enable = false
 	end
 	local hint = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/EmptyHint")
 	if isvalid(hint) then
@@ -1008,11 +1069,16 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnBlessRowClick(string effectId)
-	-- Select an effect row → reveal the right detail (강화) content and populate it.
+	-- Select an effect row → reveal the right detail (강화) content + its background board, populate it.
 	self.blessSelected = effectId
 	local detail = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail")
 	if isvalid(detail) then
 		detail.Enable = true
+	end
+	-- 효과 선택 → DetailBG(상세 배경판)을 켠다.
+	local detailBg = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/DetailBG")
+	if isvalid(detailBg) then
+		detailBg.Enable = true
 	end
 	local hint = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/EmptyHint")
 	if isvalid(hint) then
