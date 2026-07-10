@@ -13,8 +13,17 @@ script RunSpeedEffect extends Component
 	-- Effects are one-shot (isLoop = false) and auto-expire, so there is nothing to RemoveEffect.
 
 	-- ───────── Toggles ─────────
-	property boolean enableAfterimage = true
+	-- 캐릭터 뒤에 따라오는 잔상(afterimage/ghost 트레일)은 사용자 요청으로 OFF. 대신 아래 러너 이펙트를 캐릭터에 부착.
+	property boolean enableAfterimage = false
 	property boolean enableSpeedLines = true
+	-- ───────── 러너 이펙트(캐릭터 부착, 잔상 대체) ─────────
+	-- 달리는 동안 캐릭터에 부착해 루프 재생하는 이펙트(animationclip). 트레일이 아니라 캐릭터에 붙어 함께 움직인다.
+	property boolean enableRunEffect = true
+	property string runEffectRUID = "78e5af5d1b0c4a98b3a3fd984d1e25a5"
+	property Vector3 runEffectOffset = Vector3(0, 0, 0)
+	property Vector3 runEffectScale = Vector3(-1, 1, 1)
+	-- 재생 중인 부착 이펙트 핸들(0=없음). 달릴 때 1회 시작, 멈추면 제거.
+	@HideFromInspector property integer runEffectSerial = 0
 	-- Afterimage style:
 	--   "ghost"  → fading copies of the REAL avatar (clones the player's costume). Default.
 	--   "streak" → cheap cyan motion streaks (no avatar reference; the original fallback).
@@ -110,9 +119,15 @@ script RunSpeedEffect extends Component
 		if self.body == nil then return end
 
 		local speed = math.abs(self.body.MoveVelocity.x)
-		if speed < self.minSpeed then return end
-
 		local isLocalPlayer = (_UserService.LocalPlayer == self.Entity)
+
+		-- 러너 이펙트(캐릭터 부착 루프): 달릴 때 켜고 멈추면 끈다(소유 클라만). minSpeed 게이트보다 앞에서 처리해야
+		-- 정지 시(아래 early-return) 이펙트를 끌 수 있다.
+		if self.enableRunEffect and isLocalPlayer then
+			self:UpdateRunEffect(speed >= self.minSpeed)
+		end
+
+		if speed < self.minSpeed then return end
 
 		if self.enableAfterimage then
 			if self.afterimageMode == "ghost" then
@@ -279,6 +294,22 @@ script RunSpeedEffect extends Component
 		if not self.loggedLine then
 			self.loggedLine = true
 			log("[RunSpeedEffect] speed line spawned at y-offset=" .. tostring(offY))
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void UpdateRunEffect(boolean running)
+		-- 달리는 동안 캐릭터에 부착(루프)하는 러너 이펙트. running이면 1회 시작(핸들 저장), 멈추면 제거. 트레일이 아니라
+		-- 캐릭터에 붙어 함께 움직인다. isLoop=true라 스스로 끝나지 않으므로 정지 시 RemoveEffect로 꺼야 한다.
+		if running then
+			if self.runEffectSerial == 0 and isvalid(self.Entity) then
+				self.runEffectSerial = _EffectService:PlayEffectAttached(self.runEffectRUID, self.Entity, self.runEffectOffset, 0, self.runEffectScale, true)
+			end
+		else
+			if self.runEffectSerial ~= 0 then
+				_EffectService:RemoveEffect(self.runEffectSerial)
+				self.runEffectSerial = 0
+			end
 		end
 	end
 

@@ -224,8 +224,6 @@ method void OnUpdate(number delta)
 	end
 	self:UpdateProgress()
 
-	-- 네이티브 낙사 리스폰 앵커를 '직전 안전 지점'으로 계속 갱신(구덩이에 빠지면 엔진이 시작부가 아니라 여기로 되돌림).
-	self:UpdateRespawnAnchor(player, x)
 
 	-- Coins are collected by each Coin pickup's own box-overlap (script.Coin → AddCoin); no loop here.
 
@@ -263,6 +261,10 @@ method void OnUpdate(number delta)
 		self:FallIntoGap()
 		return
 	end
+
+	-- 네이티브 낙사 리스폰 앵커를 '직전 안전 지점'으로 계속 갱신(구덩이에 빠지면 엔진이 시작부가 아니라 여기로 되돌림).
+	--self:UpdateRespawnAnchor(player, x)
+	--	log("2222")
 end
 
 @ExecSpace("ClientOnly")
@@ -289,7 +291,7 @@ method void FallIntoGap()
 	if rx < self.spawnX then
 		rx = self.spawnX
 	end
-	-- 스폰 높이(spawnY = floorY+1)로 세워 중력이 바로 그 땅에 안착시킨다(초기 스폰과 동일).
+	-- 스폰 높이(spawnY = floorY+0.5)로 세워 중력이 바로 그 땅에 안착시킨다(초기 스폰과 동일).
 	player.MovementComponent:Stop()
 	player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY))
 	log("[RunGameHud] fell into gap fx=" .. string.format("%.1f", fx) .. " -> respawn x=" .. string.format("%.1f", rx))
@@ -387,6 +389,8 @@ method void Setup(Entity player)
 	local cam = player.CameraComponent
 	if cam ~= nil then
 		cam.ConfineCameraArea = false
+		-- 카메라를 조금 더 뒤(플레이어 진행 반대쪽=-X)로: 시점을 -X로 옮겨 플레이어가 화면 우측에 서고 뒤쪽이 더 보인다.
+		cam.CameraOffset = Vector2(-2, 0)
 	end
 	-- Do NOT run yet. Per-map spawn/goal init happens in OnArriveMap (also for the first map).
 	self.isAlive = false
@@ -479,9 +483,10 @@ method void OnArriveMap(Entity player)
 			_CourseGen:RequestBuildCourse(self.curStage, self.curMapName)
 		end
 	end
-	-- Stand the runner at the start of the generated floor.
+	-- Stand the runner at the start of the generated floor. 바닥 바로 위(floorY+0.5)에 세운다(예전 +1.0은 1유닛
+	-- 위에서 떨어져 안착). 스폰/리스폰 모두 self.spawnY를 쓰므로 여기만 바꾸면 전부 반영된다.
 	local sx = cfg.startX
-	local sy = cfg.floorY + 1.0
+	local sy = cfg.floorY + 0.5
 	if player.MovementComponent ~= nil then
 		player.MovementComponent:SetWorldPosition(Vector2(sx, sy))
 	end

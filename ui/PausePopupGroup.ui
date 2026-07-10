@@ -655,163 +655,18 @@
         }
       },
       {
-        "id": "8babdfaa-8cfe-45a7-8178-76f246b7bd5a",
-        "path": "/ui/PausePopupGroup/Content/Window",
-        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent",
+        "id": "4af0517b-71cd-4839-bdbe-5b43df8a4927",
+        "path": "/ui/PausePopupGroup/Content/Title",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.TextComponent",
         "jsonString": {
-          "name": "Window",
-          "path": "/ui/PausePopupGroup/Content/Window",
+          "name": "Title",
+          "path": "/ui/PausePopupGroup/Content/Title",
           "nameEditable": true,
           "enable": true,
           "visible": true,
           "localize": true,
           "displayOrder": 1,
           "pathConstraints": "////",
-          "revision": 0,
-          "origin": {
-            "type": "Model",
-            "entry_id": "UISprite",
-            "sub_entity_id": null,
-            "root_entity_id": null,
-            "replaced_model_id": null
-          },
-          "modelId": "uisprite",
-          "@components": [
-            {
-              "@type": "MOD.Core.UITransformComponent",
-              "ActivePlatform": 255,
-              "AlignmentOption": 0,
-              "AnchorsMax": {
-                "x": 0.5,
-                "y": 0.5
-              },
-              "AnchorsMin": {
-                "x": 0.5,
-                "y": 0.5
-              },
-              "MobileOnly": false,
-              "OffsetMax": {
-                "x": 390.0,
-                "y": 220.0
-              },
-              "OffsetMin": {
-                "x": -390.0,
-                "y": -220.0
-              },
-              "Pivot": {
-                "x": 0.5,
-                "y": 0.5
-              },
-              "RectSize": {
-                "x": 780.0,
-                "y": 440.0
-              },
-              "UIMode": 1,
-              "UIScale": {
-                "x": 1.0,
-                "y": 1.0,
-                "z": 1.0
-              },
-              "UIVersion": 2,
-              "anchoredPosition": {
-                "x": 0.0,
-                "y": 0.0
-              },
-              "Position": {
-                "x": 0.0,
-                "y": 0.0,
-                "z": 0.0
-              },
-              "QuaternionRotation": {
-                "x": 0.0,
-                "y": 0.0,
-                "z": 0.0,
-                "w": 1.0
-              },
-              "Scale": {
-                "x": 1.0,
-                "y": 1.0,
-                "z": 1.0
-              },
-              "Enable": true
-            },
-            {
-              "@type": "MOD.Core.SpriteGUIRendererComponent",
-              "AnimClipPlayType": 0,
-              "EndFrameIndex": 2147483647,
-              "IgnoreMapLayerCheck": false,
-              "ImageRUID": {
-                "DataId": "4fea64a3307cda641809ad8be0d4890b"
-              },
-              "LocalPosition": {
-                "x": 0.0,
-                "y": 0.0
-              },
-              "LocalScale": {
-                "x": 1.0,
-                "y": 1.0
-              },
-              "MaterialId": "",
-              "OrderInLayer": 0,
-              "OverrideSorting": false,
-              "PlayRate": 1.0,
-              "PreserveSprite": 0,
-              "SortingLayer": "UI",
-              "StartFrameIndex": 0,
-              "Color": {
-                "r": 0.11,
-                "g": 0.13,
-                "b": 0.18,
-                "a": 1.0
-              },
-              "DropShadow": false,
-              "DropShadowAngle": 120.0,
-              "DropShadowColor": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 0.72
-              },
-              "DropShadowDistance": 3.0,
-              "FillAmount": 1.0,
-              "FillCenter": true,
-              "FillClockWise": true,
-              "FillMethod": 0,
-              "FillOrigin": 0,
-              "FlipX": false,
-              "FlipY": false,
-              "FrameColumn": 1,
-              "FrameRate": 0,
-              "FrameRow": 1,
-              "Outline": false,
-              "OutlineColor": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 1.0
-              },
-              "OutlineWidth": 3.0,
-              "RaycastTarget": false,
-              "Type": 0,
-              "Enable": true
-            }
-          ],
-          "@version": 1
-        }
-      },
-      {
-        "id": "4af0517b-71cd-4839-bdbe-5b43df8a4927",
-        "path": "/ui/PausePopupGroup/Content/Window/Title",
-        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.TextComponent",
-        "jsonString": {
-          "name": "Title",
-          "path": "/ui/PausePopupGroup/Content/Window/Title",
-          "nameEditable": true,
-          "enable": true,
-          "visible": true,
-          "localize": true,
-          "displayOrder": 0,
-          "pathConstraints": "/////",
           "revision": 0,
           "origin": {
             "type": "Model",
@@ -836,19 +691,19 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 360.0,
-                "y": -65.0
+                "x": 375.0,
+                "y": 145.0
               },
               "OffsetMin": {
-                "x": -360.0,
-                "y": -155.0
+                "x": -375.0,
+                "y": 55.0
               },
               "Pivot": {
                 "x": 0.5,
                 "y": 0.5
               },
               "RectSize": {
-                "x": 720.0,
+                "x": 750.0,
                 "y": 90.0
               },
               "UIMode": 1,
@@ -860,24 +715,30 @@
               "UIVersion": 2,
               "anchoredPosition": {
                 "x": 0.0,
-                "y": -110.0
+                "y": 100.0
+              },
+              "Rotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
               },
               "Position": {
                 "x": 0.0,
-                "y": -110.0,
+                "y": 100.0,
                 "z": 0.0
               },
               "QuaternionRotation": {
                 "x": 0.0,
                 "y": 0.0,
                 "z": 0.0,
-                "w": 1.0
+                "w": -1.0
               },
               "Scale": {
                 "x": 1.0,
                 "y": 1.0,
                 "z": 1.0
               },
+              "ZRotation": 0.0,
               "Enable": true
             },
             {
@@ -957,17 +818,17 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
                 "r": 1.0,
                 "g": 1.0,
                 "b": 1.0,
                 "a": 1.0
               },
-              "FontSize": 60,
+              "FontSize": 100,
               "IgnoreMapLayerCheck": false,
               "IsLocalizationKey": false,
-              "MaxSize": 72,
+              "MaxSize": 100,
               "MinSize": 10,
               "OrderInLayer": 0,
               "OutlineColor": {
@@ -1003,17 +864,17 @@
       },
       {
         "id": "1710c66f-03be-427c-bdc9-d4db7edf3924",
-        "path": "/ui/PausePopupGroup/Content/Window/ContinueBtn",
+        "path": "/ui/PausePopupGroup/Content/ContinueBtn",
         "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.TextComponent",
         "jsonString": {
           "name": "ContinueBtn",
-          "path": "/ui/PausePopupGroup/Content/Window/ContinueBtn",
+          "path": "/ui/PausePopupGroup/Content/ContinueBtn",
           "nameEditable": true,
           "enable": true,
           "visible": true,
           "localize": true,
-          "displayOrder": 1,
-          "pathConstraints": "/////",
+          "displayOrder": 2,
+          "pathConstraints": "////",
           "revision": 0,
           "origin": {
             "type": "Model",
@@ -1038,12 +899,12 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": -30.0,
-                "y": 155.0
+                "x": 352.97,
+                "y": -50.43
               },
               "OffsetMin": {
-                "x": -350.0,
-                "y": 25.0
+                "x": 32.97,
+                "y": -180.43
               },
               "Pivot": {
                 "x": 0.5,
@@ -1061,25 +922,31 @@
               },
               "UIVersion": 2,
               "anchoredPosition": {
-                "x": -190.0,
-                "y": 90.0
+                "x": 192.97,
+                "y": -115.43
+              },
+              "Rotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
               },
               "Position": {
-                "x": -190.0,
-                "y": 90.0,
+                "x": 192.97,
+                "y": -115.43,
                 "z": 0.0
               },
               "QuaternionRotation": {
                 "x": 0.0,
                 "y": 0.0,
                 "z": 0.0,
-                "w": 1.0
+                "w": -1.0
               },
               "Scale": {
                 "x": 1.0,
                 "y": 1.0,
                 "z": 1.0
               },
+              "ZRotation": 0.0,
               "Enable": true
             },
             {
@@ -1088,7 +955,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "4fea64a3307cda641809ad8be0d4890b"
+                "DataId": "fa0d0f6b76684130b5b0524a35c54fab"
               },
               "LocalPosition": {
                 "x": 0.0,
@@ -1106,9 +973,9 @@
               "SortingLayer": "UI",
               "StartFrameIndex": 0,
               "Color": {
-                "r": 0.16,
-                "g": 0.5,
-                "b": 0.32,
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
                 "a": 1.0
               },
               "DropShadow": false,
@@ -1211,9 +1078,9 @@
               "DropShadowDistance": 3.0,
               "Font": 0,
               "FontColor": {
-                "r": 1.0,
-                "g": 1.0,
-                "b": 1.0,
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
                 "a": 1.0
               },
               "FontSize": 40,
@@ -1236,7 +1103,7 @@
               "Overflow": 0,
               "OverrideSorting": false,
               "Padding": {
-                "left": 0,
+                "left": 60,
                 "right": 0,
                 "top": 0,
                 "bottom": 0
@@ -1254,18 +1121,100 @@
         }
       },
       {
-        "id": "dff9d5a2-55fe-485e-95ba-04415eef3a64",
-        "path": "/ui/PausePopupGroup/Content/Window/LobbyBtn",
-        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.TextComponent",
+        "id": "c09b4482-0d2e-4c26-ad09-dc1a06496ed9",
+        "path": "/ui/PausePopupGroup/Content/ContinueBtn/UISprite",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent",
         "jsonString": {
-          "name": "LobbyBtn",
-          "path": "/ui/PausePopupGroup/Content/Window/LobbyBtn",
+          "name": "UISprite",
+          "path": "/ui/PausePopupGroup/Content/ContinueBtn/UISprite",
           "nameEditable": true,
           "enable": true,
           "visible": true,
           "localize": true,
-          "displayOrder": 2,
+          "displayOrder": 0,
           "pathConstraints": "/////",
+          "revision": 1,
+          "origin": {
+            "type": "Model",
+            "entry_id": "uisprite",
+            "sub_entity_id": null,
+            "root_entity_id": "c09b4482-0d2e-4c26-ad09-dc1a06496ed9",
+            "replaced_model_id": null
+          },
+          "modelId": "uisprite",
+          "@components": [
+            {
+              "@type": "MOD.Core.UITransformComponent",
+              "AlignmentOption": 1,
+              "AnchorsMax": {
+                "x": 0.0,
+                "y": 0.5
+              },
+              "AnchorsMin": {
+                "x": 0.0,
+                "y": 0.5
+              },
+              "MobileOnly": false,
+              "OffsetMax": {
+                "x": 90.0,
+                "y": 30.0
+              },
+              "OffsetMin": {
+                "x": 30.0,
+                "y": -30.0
+              },
+              "Pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "RectSize": {
+                "x": 60.0,
+                "y": 60.0
+              },
+              "UIMode": 1,
+              "UIVersion": 2,
+              "anchoredPosition": {
+                "x": 60.0,
+                "y": 0.0
+              },
+              "Position": {
+                "x": -100.0,
+                "y": 0.0,
+                "z": 0.0
+              },
+              "QuaternionRotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+              },
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.SpriteGUIRendererComponent",
+              "ImageRUID": {
+                "DataId": "5b8c03eef3c34ea2973d7155c1124996"
+              },
+              "OverrideSorting": false,
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
+      },
+      {
+        "id": "dff9d5a2-55fe-485e-95ba-04415eef3a64",
+        "path": "/ui/PausePopupGroup/Content/LobbyBtn",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.TextComponent",
+        "jsonString": {
+          "name": "LobbyBtn",
+          "path": "/ui/PausePopupGroup/Content/LobbyBtn",
+          "nameEditable": true,
+          "enable": true,
+          "visible": true,
+          "localize": true,
+          "displayOrder": 3,
+          "pathConstraints": "////",
           "revision": 0,
           "origin": {
             "type": "Model",
@@ -1290,12 +1239,12 @@
               },
               "MobileOnly": false,
               "OffsetMax": {
-                "x": 350.0,
-                "y": 155.0
+                "x": -58.2100067,
+                "y": -50.43
               },
               "OffsetMin": {
-                "x": 30.0,
-                "y": 25.0
+                "x": -378.210022,
+                "y": -180.43
               },
               "Pivot": {
                 "x": 0.5,
@@ -1313,25 +1262,31 @@
               },
               "UIVersion": 2,
               "anchoredPosition": {
-                "x": 190.0,
-                "y": 90.0
+                "x": -218.21,
+                "y": -115.43
+              },
+              "Rotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
               },
               "Position": {
-                "x": 190.0,
-                "y": 90.0,
+                "x": -218.21,
+                "y": -115.43,
                 "z": 0.0
               },
               "QuaternionRotation": {
                 "x": 0.0,
                 "y": 0.0,
                 "z": 0.0,
-                "w": 1.0
+                "w": -1.0
               },
               "Scale": {
                 "x": 1.0,
                 "y": 1.0,
                 "z": 1.0
               },
+              "ZRotation": 0.0,
               "Enable": true
             },
             {
@@ -1340,7 +1295,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "4fea64a3307cda641809ad8be0d4890b"
+                "DataId": "7e0ce0c75fed4eba9a8ec318e0ecdb8a"
               },
               "LocalPosition": {
                 "x": 0.0,
@@ -1358,9 +1313,9 @@
               "SortingLayer": "UI",
               "StartFrameIndex": 0,
               "Color": {
-                "r": 0.4,
-                "g": 0.22,
-                "b": 0.24,
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
                 "a": 1.0
               },
               "DropShadow": false,
@@ -1461,11 +1416,11 @@
                 "a": 0.72
               },
               "DropShadowDistance": 3.0,
-              "Font": 0,
+              "Font": 1,
               "FontColor": {
-                "r": 1.0,
-                "g": 1.0,
-                "b": 1.0,
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
                 "a": 1.0
               },
               "FontSize": 40,
@@ -1488,7 +1443,7 @@
               "Overflow": 0,
               "OverrideSorting": false,
               "Padding": {
-                "left": 0,
+                "left": 50,
                 "right": 0,
                 "top": 0,
                 "bottom": 0
@@ -1499,6 +1454,88 @@
               "UseConstraintX": false,
               "UseConstraintY": false,
               "UseOutLine": false,
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
+      },
+      {
+        "id": "be5c787d-23b8-48a8-a654-bbfc4fa2320a",
+        "path": "/ui/PausePopupGroup/Content/LobbyBtn/UISprite",
+        "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent",
+        "jsonString": {
+          "name": "UISprite",
+          "path": "/ui/PausePopupGroup/Content/LobbyBtn/UISprite",
+          "nameEditable": true,
+          "enable": true,
+          "visible": true,
+          "localize": true,
+          "displayOrder": 0,
+          "pathConstraints": "/////",
+          "revision": 1,
+          "origin": {
+            "type": "Model",
+            "entry_id": "uisprite",
+            "sub_entity_id": null,
+            "root_entity_id": "be5c787d-23b8-48a8-a654-bbfc4fa2320a",
+            "replaced_model_id": null
+          },
+          "modelId": "uisprite",
+          "@components": [
+            {
+              "@type": "MOD.Core.UITransformComponent",
+              "AlignmentOption": 1,
+              "AnchorsMax": {
+                "x": 0.0,
+                "y": 0.5
+              },
+              "AnchorsMin": {
+                "x": 0.0,
+                "y": 0.5
+              },
+              "MobileOnly": false,
+              "OffsetMax": {
+                "x": 90.0,
+                "y": 30.0
+              },
+              "OffsetMin": {
+                "x": 30.0,
+                "y": -30.0
+              },
+              "Pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "RectSize": {
+                "x": 60.0,
+                "y": 60.0
+              },
+              "UIMode": 1,
+              "UIVersion": 2,
+              "anchoredPosition": {
+                "x": 60.0,
+                "y": 0.0
+              },
+              "Position": {
+                "x": -100.0,
+                "y": 0.0,
+                "z": 0.0
+              },
+              "QuaternionRotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+              },
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.SpriteGUIRendererComponent",
+              "ImageRUID": {
+                "DataId": "cfd1acd04b834bd8829d334b4ce3ea02"
+              },
+              "OverrideSorting": false,
               "Enable": true
             }
           ],
