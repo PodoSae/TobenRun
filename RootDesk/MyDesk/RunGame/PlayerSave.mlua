@@ -1262,27 +1262,6 @@ method void ApplyBlessToPlayer(Entity player, string userId)
 	log("[PlayerSave] applied bless to " .. tostring(player.Name) .. " user=" .. tostring(userId))
 end
 
-@ExecSpace("ServerOnly")
-method integer LookupReward(string stage, boolean isClear)
-	-- Reward amount from the StageReward dataset (clear vs fail column), 0 if missing.
-	local ds = _DataService:GetTable("StageReward")
-	if ds == nil then
-		return 0
-	end
-	local row = ds:FindRow("stage", stage)
-	if row == nil then
-		return 0
-	end
-	local key = "fail"
-	if isClear then
-		key = "clear"
-	end
-	local v = tonumber(row:GetItem(key))
-	if v == nil then
-		return 0
-	end
-	return math.floor(v)
-end
 
 @ExecSpace("Server")
 method void SaveStageScore(string stage, integer score)
@@ -1311,7 +1290,8 @@ end
 
 @ExecSpace("Server")
 method void GrantStageReward(string stage, boolean isClear)
-	-- Game end → grant data-driven gold (StageReward dataset), persist, sync + notify client.
+	-- Game end → grant data-driven reward. 반복 클리어=매번 메소+토벤코인, 최초 클리어=firstCoin 보너스 추가.
+	-- StageReward 컬럼: meso, coin, firstCoin, fail. c_<stage>=1(클리어 영속 플래그)로 최초/반복을 구분한다.
 	local userId = senderUserId
 	if userId == nil or userId == "" then
 		return
@@ -1320,33 +1300,60 @@ method void GrantStageReward(string stage, boolean isClear)
 		return
 	end
 	local data = self:LoadUser(userId)
-	local amount = self:LookupReward(stage, isClear)
+	local wasCleared = tonumber(data["c_" .. stage]) == 1
+	local isFirst = isClear and (wasCleared == false)
+
+	-- StageReward 행에서 보상 조회. 클리어만 지급(실패=재화 없음, 몬스터 사냥 보상만). 최초/반복 각각 메소+토벤코인.
+	local meso = 0
+	local coin = 0
+	if isClear then
+		local ds = _DataService:GetTable("StageReward")
+		if ds ~= nil then
+			local row = ds:FindRow("stage", stage)
+			if row ~= nil then
+				if isFirst then
+					meso = tonumber(row:GetItem("firstMeso")) or 0
+					coin = tonumber(row:GetItem("firstCoin")) or 0
+				else
+					meso = tonumber(row:GetItem("repeatMeso")) or 0
+					coin = tonumber(row:GetItem("repeatCoin")) or 0
+				end
+			end
+		end
+	end
+	meso = math.floor(meso)
+	coin = math.floor(coin)
+
+	-- 지급: 메소→gold, 토벤코인→coin.
 	local dirty = false
-	if amount > 0 then
-		data.gold = (data.gold or 0) + amount
+	if meso > 0 then
+		data.gold = (data.gold or 0) + meso
+		dirty = true
+	end
+	if coin > 0 then
+		data.coin = (data.coin or 0) + coin
 		dirty = true
 	end
 	-- Sequential unlock: mark this stage cleared (goal reached) so the next stage opens.
-	if isClear then
-		local ck = "c_" .. stage
-		if tonumber(data[ck]) ~= 1 then
-			data[ck] = 1
-			dirty = true
-		end
+	if isClear and (wasCleared == false) then
+		data["c_" .. stage] = 1
+		dirty = true
 	end
 	if dirty then
 		self:Persist(userId)
 	end
 	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
-	self:ShowRewardClient(amount, userId)
-	log("[PlayerSave] reward stage=" .. tostring(stage) .. " clear=" .. tostring(isClear) .. " +" .. tostring(amount) .. " gold=" .. tostring(data.gold))
+	self:ShowRewardClient(meso, coin, isFirst, userId)
+	log("[PlayerSave] reward stage=" .. tostring(stage) .. " clear=" .. tostring(isClear) .. " first=" .. tostring(isFirst)
+		.. " meso+" .. tostring(meso) .. " coin+" .. tostring(coin)
+		.. " gold=" .. tostring(data.gold) .. " coin=" .. tostring(data.coin))
 end
 
 @ExecSpace("Client")
-method void ShowRewardClient(integer amount)
-	-- Show the earned reward on the result panel.
-	if _RunGameHud ~= nil then
-		_RunGameHud:ShowReward(amount)
+method void ShowRewardClient(integer meso, integer coin, boolean isFirst)
+	-- Route the earned reward to the result screen (지급된 메소/토벤코인 + 최초 클리어 여부).
+	if _ResultUI ~= nil then
+		_ResultUI:ShowReward(meso, coin, isFirst)
 	end
 end
 

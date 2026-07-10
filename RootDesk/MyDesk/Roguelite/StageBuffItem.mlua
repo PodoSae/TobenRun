@@ -38,6 +38,13 @@ script StageBuffItem extends Component
     @Delta(0.1)
     property number PickupRadius = 0.9
 
+    -- magnet 전용: 코인 흡입 반경(월드유닛). MagnetBuff.StartMagnetClient에 전달된다. 다른 kind는 무시.
+    @DisplayName("자석 흡입 반경(월드유닛)")
+    @MinValue(1)
+    @MaxValue(15)
+    @Delta(0.5)
+    property number Range = 4.5
+
     @DisplayName("획득 이펙트 RUID")
     @Description("먹었을 때 재생할 이펙트. 비우면 없음")
     property string PickupEffectRUID = ""
@@ -120,7 +127,7 @@ script StageBuffItem extends Component
             else
                 log_warning("[StageBuffItem] player has no script.PlayerHealth — buff not applied")
             end
-        else
+        elseif kind == "attack" or kind == "attackspeed" or kind == "pierce" then
             -- 공격 계열 버프(attack/attackspeed/pierce) → PowerStrike
             ---@type PowerStrike
             local ps = player:GetComponent("script.PowerStrike")
@@ -135,6 +142,57 @@ script StageBuffItem extends Component
             else
                 log_warning("[StageBuffItem] player has no script.PowerStrike — buff not applied")
             end
+        elseif kind == "slowsword" or kind == "dotsword" then
+            -- 슬로우검/도트검 → PowerStrike 스테이지 버프. 이후 검기 명중 시 몬스터가 감속/도트를 스스로 적용한다.
+            ---@type PowerStrike
+            local ps = player:GetComponent("script.PowerStrike")
+            if ps ~= nil then
+                if kind == "slowsword" then
+                    ps:AddStageSlowSword()
+                else
+                    ps:AddStageDotSword()
+                end
+            else
+                log_warning("[StageBuffItem] player has no script.PowerStrike — sword buff not applied")
+            end
+        elseif kind == "hitbuff" then
+            -- 타수(다단히트) → PowerStrike 스테이지 버프. 이후 한 번 발동에 검기를 여러 발 발사해 타격수 증가.
+            ---@type PowerStrike
+            local ps = player:GetComponent("script.PowerStrike")
+            if ps ~= nil then
+                ps:AddStageHit()
+            else
+                log_warning("[StageBuffItem] player has no script.PowerStrike — hit buff not applied")
+            end
+        elseif kind == "invincible" then
+            -- 무적 → PlayerHealth 무적(획득 시 InvincibleDuration초 1회성, 이후 소멸).
+            ---@type PlayerHealth
+            local hp = player:GetComponent("script.PlayerHealth")
+            if hp ~= nil then
+                hp:StartInvincible()
+            else
+                log_warning("[StageBuffItem] player has no script.PlayerHealth — invincible not applied")
+            end
+        elseif kind == "ultgauge" then
+            -- 궁극기 게이지 물약 → 즉시 게이지 획득. amount = 퍼센트(예: 10 → MaxGauge의 10%).
+            ---@type UltimateSkill
+            local ult = player:GetComponent("script.UltimateSkill")
+            if ult ~= nil then
+                ult:AddGauge(ult.MaxGauge * (amount / 100))
+            else
+                log_warning("[StageBuffItem] player has no script.UltimateSkill — ult gauge not applied")
+            end
+        elseif kind == "magnet" then
+            -- 자석 → 소유 클라의 MagnetBuff(@Logic, ClientOnly)를 시작(서버→소유 클라 Client RPC).
+            -- amount = 지속(초), Range = 코인 흡입 반경.
+            local pc = player.PlayerComponent
+            if _MagnetBuff ~= nil and pc ~= nil then
+                _MagnetBuff:StartMagnetClient(amount, self.Range, pc.UserId)
+            else
+                log_warning("[StageBuffItem] MagnetBuff logic or PlayerComponent missing — magnet not started")
+            end
+        else
+            log_warning("[StageBuffItem] unknown BuffKind: " .. tostring(kind))
         end
 
         self:PlayPickupEffect(self.Entity.TransformComponent.WorldPosition)

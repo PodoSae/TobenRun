@@ -42,11 +42,15 @@ script ObstacleHitboxDebug extends Component
 
         local hw = 0.6
         local hh = 0.6
+        local ox = 0
+        local oy = 0
         ---@type Obstacle
         local ob = self.Entity:GetComponent("script.Obstacle")
         if ob ~= nil then
             hw = ob.HitHalfWidth
             hh = ob.HitHalfHeight
+            ox = ob.HitOffsetX
+            oy = ob.HitOffsetY
         end
 
         local ps = self.Entity.TransformComponent.Scale
@@ -54,10 +58,13 @@ script ObstacleHitboxDebug extends Component
         local psy = math.abs(ps.y)
         if psx <= 0 then psx = 1 end
         if psy <= 0 then psy = 1 end
+        -- 자식은 부모 스케일을 상속하므로, 월드 오프셋을 로컬로 되돌리려면 부호 있는 부모 스케일로 나눈다.
+        local sgx = ps.x ~= 0 and ps.x or 1
+        local sgy = ps.y ~= 0 and ps.y or 1
 
         local t = self.hitBox.TransformComponent
         if t ~= nil then
-            t.Position = Vector3(0, 0, 0)
+            t.Position = Vector3(ox / sgx, oy / sgy, 0)
             t.Scale = Vector3((2 * hw) / (unit * psx), (2 * hh) / (unit * psy), 1)
         end
         local sr = self.hitBox.SpriteRendererComponent

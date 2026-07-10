@@ -13,10 +13,11 @@ script RunGhost extends Component
 
 	-- Slide pose: when the player is sliding at the moment this ghost is dropped, the spawner
 	-- (RunSpeedEffect.SpawnGhostServer) sets this to true on the server. @Sync so every client's
-	-- RunGhost poses the ghost as CROUCH (+ vertical squash) to match the sliding player, instead of
-	-- the default running pose. Keep CrouchSquashY equal to Slide.squashY so ghost & player match.
+	-- RunGhost poses the ghost as CROUCH to match the sliding player, instead of the default running pose.
 	@Sync property boolean Crouch = false
-	property number CrouchSquashY = 0.55
+	-- (미사용) 슬라이드 플레이어의 Y스케일 스쿼시가 제거되어 고스트도 스쿼시하지 않는다. ApplyPose는 이 값을 쓰지 않음.
+	-- 슬라이드 플레이어에 다시 스쿼시를 넣게 되면 ApplyPose에서 이 값을 되살려 본체와 맞춘다.
+	property number CrouchSquashY = 1.0
 
 	-- Equipped GAME item RUIDs, set by the spawner (RunSpeedEffect.SpawnGhostServer) so the ghost matches
 	-- the running player: DefaultEquipUserId clones the ACCOUNT coord, then these overlay the equipped
@@ -35,6 +36,9 @@ script RunGhost extends Component
 
 	property AvatarRendererComponent renderer = nil
 	property number life = 0
+	-- 스폰 직후 첫 프레임에 모델 기본 아바타(발가벗은 토벤머리)가 노출되는 것을 막기 위한 가드. OnBeginPlay에서
+	-- alpha 0(투명)으로 숨겨두고, 코디/장비가 반영된 뒤(첫 OnUpdate) 외형을 재적용하고 나서야 StartAlpha로 드러낸다.
+	property boolean revealed = false
 	-- Base (unsquashed) scale captured once so ApplyPose can set an ABSOLUTE squashed scale
 	-- (idempotent — safe to call from both OnBeginPlay and OnSyncProperty without stacking squash).
 	property Vector3 baseScale = Vector3(1, 1, 1)
@@ -48,7 +52,8 @@ script RunGhost extends Component
 
 		self.renderer = self.Entity.AvatarRendererComponent
 		if isvalid(self.renderer) then
-			self.renderer:SetAlpha(self.StartAlpha)
+			-- 첫 프레임 발가벗은 기본 아바타 노출 방지: 외형 적용 전까지 완전 투명. reveal은 첫 OnUpdate에서.
+			self.renderer:SetAlpha(0)
 		end
 
 		local transform = self.Entity.TransformComponent
@@ -141,10 +146,11 @@ script RunGhost extends Component
 		-- and a squashed Y scale (matches the sliding player); otherwise the running WALK pose at full
 		-- scale. Absolute scale write (from baseScale) makes repeated calls idempotent.
 		local actionState = MapleAvatarBodyActionState.Walk
+		-- 슬라이드 플레이어가 더 이상 Y스케일을 찌그러뜨리지 않으므로(Slide에서 스쿼시 제거됨) 고스트도 스쿼시하지 않는다.
+		-- 슬라이드 고스트는 crouch '포즈 애니메이션'만 쓰고 스케일은 원본 유지 → 본체와 외형 일치.
 		local squash = 1.0
 		if self.Crouch then
 			actionState = MapleAvatarBodyActionState.Crouch
-			squash = self.CrouchSquashY
 		end
 
 		local ev = BodyActionStateChangeEvent()
@@ -176,6 +182,15 @@ script RunGhost extends Component
 		-- Linearly fades the ghost's alpha to 0 over Duration.
 		if not self:IsClient() then return end
 		if not isvalid(self.renderer) then return end
+
+		-- 첫 프레임: OnBeginPlay에서 적용한 코디/장비가 이제 렌더에 반영됐으므로, 외형을 한 번 더 적용(뒤늦게 도착한
+		-- @Sync 대비)하고 나서 비로소 드러낸다. 이렇게 스폰~적용 사이의 발가벗은 기본 아바타 한 프레임을 숨긴다.
+		if not self.revealed then
+			self:ApplyLook()
+			self.revealed = true
+			self.renderer:SetAlpha(self.StartAlpha)
+			return
+		end
 
 		self.life = self.life + delta
 		local a = self.StartAlpha * (1 - self.life / self.Duration)

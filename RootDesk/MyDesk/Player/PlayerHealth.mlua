@@ -17,6 +17,12 @@ script PlayerHealth extends Component
     property number invulnTime = 0.7
     property number invulnRemain = 0
 
+    -- 무적 아이템(획득 시 InvincibleDuration초 1회성 완전 무적, 피해 무시). 위의 invulnTime(피격 후 짧은 무적)과는 별개.
+    @DisplayName("무적 아이템 지속(초)")
+    property number InvincibleDuration = 5.0
+    -- 무적 종료 시각(ServerElapsedSeconds 기준, 0=비활성). @Sync — 클라 HUD가 remain = invincibleEnd - ServerElapsedSeconds로 표시.
+    @HideFromInspector @Sync property number invincibleEnd = 0
+
     -- ── 로그라이트 스테이지 체력 버프(모두 transient, RunGameHud가 스테이지마다 ResetStageHealthBuffs로 초기화) ──
     -- 스테이지를 벗어나면 효과 소멸. 서버 권위.
     @HideFromInspector property number baseMaxHp = 0            -- 최초 MaxHp 스냅샷(최대체력 버프 복원 기준)
@@ -121,6 +127,7 @@ script PlayerHealth extends Component
         self.CurrentHp = self.MaxHp
         self.dead = false
         self.invulnRemain = 0
+        self.invincibleEnd = 0
         local wp = self.Entity.TransformComponent.WorldPosition
         self.respawnX = wp.x
         self.respawnY = wp.y
@@ -133,6 +140,10 @@ script PlayerHealth extends Component
         -- Ticks down the post-hit invulnerability window.
         if self.invulnRemain > 0 then
             self.invulnRemain = self.invulnRemain - delta
+        end
+        -- 무적 아이템 만료: 종료 시각이 지나면 @Sync 값을 0으로 되돌려 HUD 아이콘을 끈다.
+        if self.invincibleEnd > 0 and _UtilLogic.ServerElapsedSeconds >= self.invincibleEnd then
+            self.invincibleEnd = 0
         end
         -- 로그라이트 체력 재생: 스테이지 재생 버프가 있으면 매 프레임 회복(사망 아닐 때, MaxHp까지).
         if self.stageRegenPerSec > 0 and not self.dead and self.CurrentHp < self.MaxHp then
@@ -194,6 +205,8 @@ script PlayerHealth extends Component
         if self.dead then return end
         if amount <= 0 then return end
         if self.invulnRemain > 0 then return end
+        -- 무적 아이템 지속 중이면 모든 피해 무시(보호막보다 우선, 충전 소모 없음).
+        if self.invincibleEnd > 0 and _UtilLogic.ServerElapsedSeconds < self.invincibleEnd then return end
 
         -- 로그라이트 보호막: 충전이 있으면 이 피격을 완전 무효화하고 충전 1 소모(피해/경직 없음). invuln을 걸어 한 번의
         -- 피격이 충전 1개만 소모하도록 한다(다프레임 접촉 방지).
@@ -213,6 +226,10 @@ script PlayerHealth extends Component
         -- A2 방어력: 최종 피해 = 받은 피해 − 방어력(최소 1). 모든 피해 경로가 여기로 모이므로 균일 적용 (기획 §4.2).
         amount = self:ApplyDefense(amount)
         self.CurrentHp = self.CurrentHp - amount
+        -- 이번 판 피격 수 +1(무적/실드로 막힌 피격은 위에서 이미 반환되므로, 실제 피해를 받은 경우만 집계). 결과창 목표 판정용.
+        ---@type RunStats
+        local rsHit = self.Entity:GetComponent("script.RunStats")
+        if rsHit ~= nil then rsHit:AddHit() end
         log("[PlayerHealth] TakeDamage " .. tostring(amount) .. " -> HP=" .. tostring(self.CurrentHp))
 
         -- Hit feedback: damage number + spark on all clients, camera shake on the hit player only.
@@ -229,6 +246,14 @@ script PlayerHealth extends Component
             -- A1 피격 경직: 이동정지 + 입력잠금 (기획 §5.1/§6.2). 사망 시엔 부활 팝업이 정지를 담당하므로 제외.
             self:ApplyStunToPlayer()
         end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void StartInvincible()
+        -- 무적 아이템 획득: InvincibleDuration초 동안 완전 무적. 종료 시각을 @Sync해 HUD 아이콘(우상단)을 구동한다.
+        -- 이미 무적 중이면 새 종료 시각으로 갱신(연장/리프레시).
+        self.invincibleEnd = _UtilLogic.ServerElapsedSeconds + self.InvincibleDuration
+        log("[PlayerHealth] StartInvincible for " .. tostring(self.InvincibleDuration) .. "s -> end=" .. tostring(self.invincibleEnd))
     end
 
     @ExecSpace("ServerOnly")

@@ -83,6 +83,10 @@ script DoubleJump extends Component
 		-- identical to PlayerController's ground-jump keys so every jump key also double-jumps
 		-- (previously Up jumped on the ground but did NOT double-jump — the inconsistency is fixed here).
 		if pressed == KeyboardKey.Space or pressed == KeyboardKey.UpArrow or pressed == KeyboardKey.W then
+			-- 보스 인트로(경고) 등 입력 잠금 중이면 더블점프 무시(PlayerController.inputLocked 공유).
+			---@type PlayerController
+			local pc = self.Entity:GetComponent("script.PlayerController")
+			if pc ~= nil and pc.inputLocked then return end
 			self:TryDoubleJump()
 		end
 	end
