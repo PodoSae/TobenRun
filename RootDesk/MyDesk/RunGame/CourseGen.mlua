@@ -73,6 +73,15 @@ property string invincibleRuid = "52616cd70c2943c5b632ec687dd2a452"
 property string hitBuffRuid = "66cccfa4ee3846ea9fa3e7e641be771a"
 @DisplayName("기본 바닥 타일 RUID")
 property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
+@DisplayName("발판(플랫폼) 스프라이트 RUID")
+@Description("Spawn,platform,x,y 로 배치하는 밟는 발판의 스프라이트")
+property string platformRuid = "2b73e2c6c05143a192ea6d1a08966349"
+@DisplayName("발판 너비(월드유닛)")
+@Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
+property number platformWidth = 3.0
+@DisplayName("발판 두께(월드유닛)")
+@Description("발판 시각 스프라이트의 세로 두께(작을수록 얇음). 윗면은 항상 배치 y에 맞춰진다")
+property number platformThickness = 0.4
 @DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
 property number monsterYOff = 1.0
 @DisplayName("장애물 안착 높이 보정")
@@ -436,7 +445,7 @@ end
 @ExecSpace("ServerOnly")
 method boolean IsCourseEntity(string nm)
 	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_" }
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_" }
 	for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
@@ -464,6 +473,19 @@ method void BuildCourse(string stage, Entity map)
 		else
 			table.insert(cmds, r)
 		end
+	end
+	-- 낙사 사망선 내리기: 기본(UseCustomBound=false) 맵 영역 하단이 바닥 바로 아래라, 구덩이에 빠지면 커스텀
+	-- 리스폰(RunGameHud.FallIntoGap, floorY-0.5에서 발동)보다 엔진 네이티브 out-of-bounds 사망이 먼저 선점한다.
+	-- MapComponent를 커스텀 바운드로 바꾸고 하단 y를 floorY보다 훨씬 아래(-30)로 내려, 플레이어가 floorY-0.5를
+	-- 통과할 때 FallIntoGap이 먼저 되돌리도록 한다(네이티브 사망은 안전망으로만 남는다). X는 엔드리스 러너가 잘리지
+	-- 않도록 매우 넓게 잡는다. LeftBottom/RightTop/UseCustomBound는 @Sync라 서버(BuildCourse)에서 세팅→전 클라 전파.
+	-- 문서: MapComponent.UseCustomBound "Works only when TileMapMode is MapleTile" — 이 맵이 MapleTile(0)이라 유효.
+	if isvalid(map) and map.MapComponent ~= nil then
+		local mc = map.MapComponent
+		mc.UseCustomBound = true
+		mc.LeftBottom = Vector2(-100000, cfg.floorY - 30)
+		mc.RightTop = Vector2(1000000, cfg.floorY + 1000)
+		log("[CourseGen] custom map bound: fall death y=" .. tostring(cfg.floorY - 30) .. " (floorY=" .. tostring(cfg.floorY) .. ")")
 	end
 	-- Stage background (Set,bg,<templateRUID>). BackgroundComponent lives on the map's "Background"
 	-- child entity and is @Sync, so applying it here (server) propagates to every client. Stages with
@@ -1002,6 +1024,41 @@ method void CmdSpawn(Entity map, table cfg, table c)
 	-- A monster type (MonsterTable id) → spawn the sjy NormalMonster model. Its in-model MonsterUnit
 	-- reads stats/sprite from MonsterTable by MonsterId (default "normal"), patrols on the foothold, and
 	-- deals contact damage to PlayerHealth server-side. Spawn above the floor so gravity settles it.
+	-- Standable PLATFORM (밟는 발판): 플레이어가 더블점프로 올라설 수 있는 공중 발판. p2=x, p3=y(바닥 위 높이).
+	-- 충돌은 runfloor의 CustomFootholdComponent 수평 라인(바닥과 동일 방식), 시각은 runprop 스프라이트.
+	-- MapleTile 풋홀드라 아래에서 점프해 통과한 뒤 윗면에 착지한다(원웨이 플랫폼).
+	if kind == "platform" then
+		local surfaceY = cfg.floorY + (yGiven or 0)   -- 발판 윗면 = 플레이어가 서는 높이
+		local pruid = self.platformRuid
+		if pruid == nil or pruid == "" then pruid = self.defaultTileRuid end
+		local ptw = 1.0
+		local pth = 1.0
+		local psp = _ResourceService:LoadSpriteAndWait(pruid)
+		if psp ~= nil and psp.PixelPerUnit > 0 then
+			ptw = psp.Width / psp.PixelPerUnit
+			pth = psp.Height / psp.PixelPerUnit
+		end
+		if ptw < 0.2 then ptw = 1.0 end
+		if pth < 0.2 then pth = 1.0 end
+		local phalfW = self.platformWidth * 0.5
+		-- 시각: 윗면이 surfaceY에 오도록 중심을 두께 절반만큼 내리고, 가로=platformWidth, 세로=platformThickness로 스케일.
+		local pvy = surfaceY - self.platformThickness * 0.5
+		local pvis = self:SpawnProp(map, "Platform_" .. tostring(math.floor(x)), x, pvy, pruid)
+		if isvalid(pvis) then
+			pvis.TransformComponent.Scale = Vector3(self.platformWidth / ptw, self.platformThickness / pth, 1)
+		end
+		-- 충돌 풋홀드: surfaceY에 수평 라인(밟고 설 수 있음). 이름 접두어 Foothold_ 는 재빌드 시 정리된다.
+		local pfh = _SpawnService:SpawnByModelId("runfloor", "Foothold_platform_" .. tostring(math.floor(x)), Vector3(0, 0, 0), map)
+		if isvalid(pfh) then
+			local pcf = pfh.CustomFootholdComponent
+			if pcf ~= nil then
+				pcf.edgeLists:Add({ Vector2(x - phalfW, surfaceY), Vector2(x + phalfW, surfaceY) })
+			end
+			local pspr = pfh.SpriteRendererComponent
+			if pspr ~= nil then pspr.Enable = false end
+		end
+		return
+	end
 	if self:IsMonster(kind) then
 		local my = cfg.floorY + self.monsterYOff
 		if yGiven ~= nil then
