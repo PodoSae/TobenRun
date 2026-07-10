@@ -99,6 +99,10 @@ script PlayerHealth extends Component
     -- guaranteed a real, proven resource to render.
     property string HitSkinRUID = "6ba67548f43f48f29eb23dafd0766383"
 
+    -- 체력 회복 시 캐릭터에 1회 재생하는 이펙트(회복 물약 등). 비우면 없음.
+    @DisplayName("체력 회복 이펙트 RUID")
+    property string healEffectRUID = "e81f0ba3f2b545d7895b98b1cf9be879"
+
     -- 보호막 오라: stageShieldCharges > 0인 동안 플레이어를 감싸 루프 재생되는 이펙트(animationclip). 보호막이
     -- 생기면(0→>0) 붙이고, 마지막 충전이 소진되거나 스테이지 리셋 시 제거한다.
     @DisplayName("보호막 오라 이펙트 RUID")
@@ -327,6 +331,7 @@ script PlayerHealth extends Component
         if amount <= 0 then return end
         if self.CurrentHp >= self.MaxHp then return end
         self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + amount)
+        self:PlayHealEffect()
     end
 
     @ExecSpace("ServerOnly")
@@ -336,7 +341,17 @@ script PlayerHealth extends Component
         if self.dead then return end
         if amount <= 0 then return end
         self.CurrentHp = math.min(self.MaxHp, self.CurrentHp + amount)
+        self:PlayHealEffect()
         log("[PlayerHealth] instant heal +" .. tostring(amount) .. " -> HP=" .. tostring(self.CurrentHp))
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayHealEffect()
+        -- 체력 회복 시 캐릭터에 1회 재생하는 이펙트(전 클라). ServerOnly 힐 메서드에서 호출 → Multicast로 전 클라 재생.
+        if self.healEffectRUID == "" then return end
+        local e = self.Entity
+        if not isvalid(e) then return end
+        _EffectService:PlayEffectAttached(self.healEffectRUID, e, Vector3(0, 0.5, 0), 0, Vector3(1, 1, 1), false)
     end
 
     @ExecSpace("ServerOnly")
