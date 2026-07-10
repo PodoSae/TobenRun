@@ -331,6 +331,14 @@ script UltimateSkill extends Component
         self:AddGauge(self.DistanceGaugeGain)
     end
 
+    @ExecSpace("Server")
+    method void RequestFillGaugeFull()
+        -- 튜토리얼 전용: 궁극기 게이지를 즉시 완충해 플레이어가 R로 발동을 체험하게 한다(클라 TutorialManager가 호출).
+        if self.Active then return end
+        self.Gauge = self.MaxGauge
+        log("[UltimateSkill] tutorial: gauge filled full")
+    end
+
     @ExecSpace("ServerOnly")
     method void SetAutoFillPaused(boolean paused)
         -- Pause/resume the time-based gauge fill. MushmomBoss pauses it for the duration of the boss fight
@@ -396,6 +404,10 @@ script UltimateSkill extends Component
         if _UserService.LocalPlayer == self.Entity then
             self.gravityReleased = false
             self:ApplyBoost()
+            -- 궁극기 발동 순간 전체화면 스킬 컷씬(스피릿 칼리버) 재생(본인 화면만).
+            if _UltCutscene ~= nil then
+                _UltCutscene:Play()
+            end
         end
         log("[UltimateSkill] ultimate start (client) local=" .. tostring(_UserService.LocalPlayer == self.Entity))
     end

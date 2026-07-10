@@ -726,6 +726,9 @@ method void OnEquipClick(ButtonClickEvent event)
 	if _EquipScreen ~= nil then
 		_EquipScreen:OnOpen()
 	end
+	if _TutorialManager ~= nil then
+		_TutorialManager:NotifyLobby("equip_open")
+	end
 	log("[ScreenFlow] -> Equip")
 end
 
@@ -756,6 +759,9 @@ method void OnBlessClick(ButtonClickEvent event)
 		bless.Enable = true
 	end
 	self:FillBlessScreen()
+	if _TutorialManager ~= nil then
+		_TutorialManager:NotifyLobby("bless_open")
+	end
 	log("[ScreenFlow] -> Blessing")
 end
 
@@ -1036,6 +1042,9 @@ method void OnBlessLevelUpClick(ButtonClickEvent event)
 	if _PlayerSave ~= nil then
 		_PlayerSave:LevelUpBless()
 	end
+	if _TutorialManager ~= nil then
+		_TutorialManager:NotifyLobby("bless_levelup")
+	end
 	log("[ScreenFlow] bless level-up requested")
 end
 
@@ -1044,6 +1053,9 @@ method void OnBlessUpgradeClick(ButtonClickEvent event)
 	-- Request a 축복 효과 강화 for the selected effect; server checks/spends 포인트 then resyncs.
 	if _PlayerSave ~= nil and self.blessSelected ~= nil and self.blessSelected ~= "" then
 		_PlayerSave:LevelUpEffect(self.blessSelected)
+	end
+	if _TutorialManager ~= nil then
+		_TutorialManager:NotifyLobby("bless_effect")
 	end
 	log("[ScreenFlow] bless effect up requested: " .. tostring(self.blessSelected))
 end
@@ -1255,6 +1267,11 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnStageSelectOpenClick(ButtonClickEvent event)
+	-- 튜토리얼 3막 진입 시점(combat_start)이면 스테이지 선택 대신 전투 훈련 코스로 바로 들어간다.
+	if _TutorialManager ~= nil and _TutorialManager:TryStartCombat() then
+		log("[ScreenFlow] start -> tutorial combat act")
+		return
+	end
 	-- Lobby → StageSelect screen (map selection).
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = false
@@ -1307,6 +1324,28 @@ method void OnBackClick(ButtonClickEvent event)
 end
 
 @ExecSpace("ClientOnly")
+method void HideAllScreens()
+	-- 모든 아웃게임 화면(타이틀/로비/스테이지선택 + 서브 화면)을 숨긴다. 튜토리얼이 첫 접속 시 로비를 거치지 않고
+	-- 곧바로 스테이지로 들어갈 때, 인게임 위에 UI 화면이 남지 않도록 사용한다.
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
+	end
+	for _, path in ipairs({ "/ui/EquipGroup", "/ui/BlessGroup", "/ui/ShopGroup", "/ui/SettingsGroup", "/ui/EquipPopupGroup" }) do
+		local g = _EntityService:GetEntityByPath(path)
+		if isvalid(g) then
+			g.Enable = false
+		end
+	end
+	log("[ScreenFlow] HideAllScreens")
+end
+
+@ExecSpace("ClientOnly")
 method void ShowLobby()
 	-- Show the lobby screen (called after a run ends from the result panel).
 	if isvalid(self.titleRoot) then
@@ -1319,6 +1358,10 @@ method void ShowLobby()
 		self.lobbyRoot.Enable = true
 	end
 	self:RefreshSavedUI()
+	-- 튜토리얼 2막: 로비로 돌아오면 현재 로비 스텝 안내를 띄우게 알림.
+	if _TutorialManager ~= nil then
+		_TutorialManager:OnReturnToLobby()
+	end
 	log("[ScreenFlow] ShowLobby")
 end
 

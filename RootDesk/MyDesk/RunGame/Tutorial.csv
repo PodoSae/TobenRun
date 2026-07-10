@@ -1,0 +1,16 @@
+﻿order,ctx,text,doneWhen,gate,trigX,target,stage
+1,game,위로 스와이프하여 점프하세요!,JUMP,1,8,,0-0
+2,game,아래로 슬라이드하여 지나가세요!,SLIDE,1,14,,0-0
+3,game,달리면서 코인을 획득하세요!,coin,0,,,0-0
+4,game,결승선까지 달려가세요!,clear,0,,,0-0
+5,lobby,장비 창을 열어보세요,equip_open,0,,/ui/LobbyGroup/EquipBtn,
+6,lobby,해금된 히어로 무기를 눌러 장착하세요,weapon_equip,0,,/ui/EquipGroup/InvPanel/Cell_0|/ui/EquipPopupGroup/Panel/EquipBtn,
+7,lobby,토벤 레벨을 올려보세요 (메소 사용),toben_levelup,0,,/ui/EquipGroup/TobenPanel/LevelUpBtn,
+8,lobby,토벤 스탯을 찍어보세요 (포인트 사용),toben_stat,0,,/ui/EquipGroup/TobenPanel/Row_attack/UpBtn,
+9,lobby,뒤로 가기를 눌러 로비로 나간 뒤 축복 창을 열어보세요,bless_open,0,,/ui/EquipGroup/BackBtn|/ui/LobbyGroup/BlessBtn,
+10,lobby,토벤코인으로 축복 레벨을 올려보세요,bless_levelup,0,,/ui/BlessGroup/EffectList/LevelUpBtn,
+11,lobby,효과를 선택하고 포인트로 강화해보세요,bless_effect,0,,/ui/BlessGroup/EffectList/Row_pierce|/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn,
+12,lobby,뒤로 가기 후 '모험 시작'을 눌러 전투 훈련으로!,combat_start,0,,/ui/BlessGroup/BackBtn|/ui/LobbyGroup/StartBtn,
+13,game,적이 나타나면 자동으로 검기를 발사합니다!,reach,0,11,,0-1
+14,game,궁극기 게이지 완충! R 키로 궁극기를 사용하세요!,ultimate,0,12,,0-1
+15,game,보스를 처치하세요!,boss_clear,0,,,0-1

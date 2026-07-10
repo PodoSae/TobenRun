@@ -1,0 +1,13 @@
+﻿cmd,p1,p2,p3
+Set,floorY,0,
+Set,length,40,
+Set,goal,34,
+Set,speed,2,
+Set,tile,55b80c636aa242b6add9c1eb2808a9d1,
+Set,bgm,96caf11b323447fd829582091b364995,
+Set,bg,794ad8421e2543d8a6d2c70307637450,
+Spawn,obstacle,10,
+Spawn,obstacle,16,1.4
+Spawn,coin,20,
+Spawn,coin,22,
+Spawn,coin,24,
