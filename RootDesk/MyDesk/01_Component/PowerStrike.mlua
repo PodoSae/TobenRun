@@ -403,7 +403,7 @@ script PowerStrike extends SkillComponent
 
         -- 검기 1발 발사. 타수(제자리 다단히트) 아이템은 발사 수를 늘리지 않고, 명중한 적이 자기 쪽에서 stageExtraHits만큼
         -- 추가 타격(짧은 버스트)을 받는다(MonsterUnit/MushmomBoss 처리) → 발사 파이프라인은 그대로 1발.
-        self:FireBeam(direction, effectiveDamage, 0)
+        self:FireBeam(direction, effectiveDamage, 0, 0, false)
 
         -- 공격 애니메이션: 발사 간격(쿨다운)에 맞춰 ATTACK 배율을 갱신한 뒤 전 클라에서 스윙 재생. 이동 복귀는 컨트롤러가 처리.
         if self.PlayAttackAnimation then
@@ -418,7 +418,7 @@ script PowerStrike extends SkillComponent
             local d = direction
             local dmg = effectiveDamage
             _TimerService:SetTimerOnce(function()
-                self:FireBeam(d, dmg, 0)
+                self:FireBeam(d, dmg, 0, 0, false)
             end, 0.09)
         end
 
@@ -434,11 +434,31 @@ script PowerStrike extends SkillComponent
     end
 
     @ExecSpace("ServerOnly")
-    method void FireBeam(number direction, number damage, number lag)
+    method void FireFinisherBeams(integer count, number interval)
+        -- 궁극기 컷씬 피니셔: 앞(+1)으로 검기를 count발 연속 발사한다(첫 발 즉시, 나머지는 interval 간격). 각 검기는
+        -- 관통을 크게 높여(앞의 몬스터 전부 통과) 그룹을 일괄 타격하고, 감지/데미지/자동 데미지숫자/피격이펙트/처치
+        -- 크레딧은 평소 검기 파이프라인 그대로다. UltimateSkill.RequestCutsceneFinisher가 호출(서버).
+        if count <= 0 then return end
+        if interval == nil or interval < 0 then interval = 0.09 end
+        local dmg = self:GetEffectiveDamage()
+        local pierce = 99   -- 앞의 몬스터 전부 관통(그룹 일괄 타격)
+        self:FireBeam(1, dmg, 0, pierce, true)
+        for i = 1, count - 1 do
+            local delay = interval * i
+            _TimerService:SetTimerOnce(function()
+                self:FireBeam(1, dmg, 0, pierce, true)
+            end, delay)
+        end
+        log("[PowerStrike] finisher beams x" .. tostring(count) .. " dmg=" .. tostring(dmg))
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FireBeam(number direction, number damage, number lag, integer pierceOverride, boolean invisible)
         -- Acquires a pooled (or fresh) beam and launches it in the facing direction. The beam owns its
         -- own flight/hit config (Speed, MaxLifetime, hitbox, AttackInfo); PowerStrike supplies only the
         -- spawn point, direction, and stat-scaled damage. `lag`(월드유닛)만큼 뒤에서 출발시켜 다단히트를 순차로 만든다.
         -- lag 미지정 호출(예: 타격수 추가 발사) 대비 nil 가드 — nil이면 뒤 오프셋 없이 0으로 발사.
+        -- pierceOverride(선택): >0이면 관통 수를 이 값으로 강제(궁극기 피니셔가 앞의 몬스터 전부를 통과시키려 사용).
         if lag == nil then lag = 0 end
 
         local beam = self:AcquireBeam()
@@ -459,12 +479,15 @@ script PowerStrike extends SkillComponent
 
         -- 관통 수 = 기본 + 스테이지 관통 버프(정수) + 축복[무기관통]. 검기가 이 수만큼 서로 다른 적을 통과한 뒤 소멸.
         local pierce = self.BasePierce + math.floor(self.stagePierceBonus) + self:GetBlessPierce()
+        if pierceOverride ~= nil and pierceOverride > 0 then pierce = pierceOverride end
         if pierce < 1 then pierce = 1 end
 
         local wp = self.Entity.TransformComponent.WorldPosition
         -- 다단히트: lag만큼 진행 방향 반대(뒤)에서 출발 → 추가 검기가 적에 조금 늦게 닿아 순차 타격이 된다.
         local startPos = Vector3(wp.x + direction * (self.BeamForwardOffset - lag), wp.y + self.BeamVerticalOffset, wp.z)
-        beam:Launch(startPos, direction, damage, pierce)
+        -- 투명 검기(피니셔)는 invisible=true로 전달 → SwordBeam이 @Sync Hidden으로 클라에 전파해 렌더러를 끈다.
+        -- 히트 판정/데미지/데미지숫자/피격이펙트는 그대로.
+        beam:Launch(startPos, direction, damage, pierce, invisible == true)
     end
 
     @ExecSpace("ServerOnly")
@@ -521,6 +544,7 @@ script PowerStrike extends SkillComponent
         -- Server-side auto-fire gate (SkillManager calls only when off cooldown). Hold fire until the
         -- startup grace has elapsed (map fully loaded), then fire only when a monster is within range.
         if self._T.ready ~= true then return false end
+        if _GamePause ~= nil and _GamePause.Paused then return false end   -- 일시정지 중 검기 미발동
         -- 궁극기(돌진) 중에는 일반공격(검기) 미발동. Independent guard at the fire gate so the beam is blocked even
         -- if SkillManager's own ult ref ever fails; lazily resolved so a one-shot lookup miss can't disable it.
         if self.ult == nil then self.ult = self.Entity:GetComponent("script.UltimateSkill") end

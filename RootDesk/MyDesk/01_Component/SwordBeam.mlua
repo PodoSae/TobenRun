@@ -33,6 +33,11 @@ script SwordBeam extends Component
     -- separate Multicast SFX (different channel → desync). OnSyncProperty (client) plays the swing on each bump.
     @Sync property integer launchSeq = 0
 
+    -- 투명 검기(궁극기 피니셔): true면 스프라이트를 숨긴다. 서버측 renderer.Enable 변경은 클라 렌더링에 반영되지
+    -- 않으므로(클라 가시성은 복제 transform으로 결정), @Sync로 확실히 전파하고 클라 OnSyncProperty에서
+    -- renderer.Enable = not Hidden으로 적용한다. transform과 같은 복제 채널이라 발사 즉시 동기화된다.
+    @Sync property boolean Hidden = false
+
     -- Max travel distance (world units) from the LAUNCH POINT before the beam recycles. This is RELATIVE to
     -- where it was fired — not a fixed world rectangle. The runner scrolls the player rightward with no bound,
     -- so the old fixed BoundMaxX (=90, map01's tile edge) made every beam spawn already out-of-bounds and
@@ -60,10 +65,13 @@ script SwordBeam extends Component
     end
 
     @ExecSpace("ServerOnly")
-    method void Launch(Vector3 startPos, number dir, number damage, integer pierce)
+    method void Launch(Vector3 startPos, number dir, number damage, integer pierce, boolean invisible)
         -- Activates a pooled (or fresh) beam: position it, aim it along dir (+1 right / -1 left),
         -- set its damage, and make it visible. Movement and hit detection are server-authoritative.
         -- `pierce` = how many DISTINCT enemies it may pass through before recycling (1 = die on first hit).
+        -- `invisible` = 투명 검기(궁극기 피니셔). @Sync Hidden으로 전파돼 클라가 렌더러를 끈다(히트/데미지는 그대로).
+        if invisible == nil then invisible = false end
+        self.Hidden = invisible
         self._T.fired = true
         self._T.lifetime = 0
         self._T.dirX = (dir >= 0) and 1 or -1
@@ -86,7 +94,7 @@ script SwordBeam extends Component
         local renderer = self.Entity.SpriteRendererComponent
         if renderer ~= nil then
             renderer.FlipX = self._T.dirX < 0
-            renderer.Enable = true
+            renderer.Enable = not invisible
         end
 
         ---@type SwordBeamAttack
@@ -104,6 +112,7 @@ script SwordBeam extends Component
     method void OnUpdate(number delta)
         -- Server-authoritative flight loop: move, hit-test, then recycle on hit / lifetime / out-of-map.
         if self._T.fired ~= true then return end
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 정지
 
         self._T.lifetime = self._T.lifetime + delta
         if self._T.lifetime >= self.MaxLifetime then
@@ -170,12 +179,18 @@ script SwordBeam extends Component
 
     @ExecSpace("ClientOnly")
     method void OnSyncProperty(string name, any value)
-        -- Client hook: when the synced launch counter bumps, the beam just launched on THIS client's view —
-        -- play the swing SFX now so it lands with the beam's appearance. value>0 skips the initial 0-state sync.
+        -- Client hook: 발사(launchSeq) 또는 투명여부(Hidden)가 동기화되면 이 클라에서 검기 가시성을 적용한다. 서버측
+        -- renderer.Enable 변경은 클라에 반영 보장이 안 되므로, @Sync Hidden을 근거로 클라가 렌더러를 직접 토글한다.
+        -- 스윙 SFX는 보이는 검기일 때만(투명 검기=무음), 발사와 같은 채널(@Sync)이라 검기 등장과 싱크가 맞는다.
         if name == "launchSeq" and value > 0 then
-            if _SoundManager ~= nil then
+            local rend = self.Entity.SpriteRendererComponent
+            if rend ~= nil then rend.Enable = not self.Hidden end
+            if _SoundManager ~= nil and not self.Hidden then
                 _SoundManager:PlaySwordSwing()
             end
+        elseif name == "Hidden" then
+            local rend = self.Entity.SpriteRendererComponent
+            if rend ~= nil then rend.Enable = not self.Hidden end
         end
     end
 

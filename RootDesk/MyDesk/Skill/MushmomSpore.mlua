@@ -70,6 +70,7 @@ script MushmomSpore extends Component
     method void OnUpdate(number delta)
         -- Server-authoritative flight loop: move, hit-test vs players, recycle on hit / lifetime / out-of-map.
         if self._T.fired ~= true then return end
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 정지
 
         self._T.lifetime = self._T.lifetime + delta
         if self._T.lifetime >= self.MaxLifetime then

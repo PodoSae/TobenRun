@@ -33,7 +33,7 @@
             "$type": "MODNativeType",
             "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": "fefd1f3f6ad7471f9ed6f4506684acc8"
+          "Value": "1c08f3335f8b4b7f913ff8af131e1c28"
         },
         {
           "TargetType": "MOD.Core.SpriteRendererComponent",
@@ -64,7 +64,7 @@
             "$type": "MOD.Core.MODVector3, MOD.Core",
             "x": -0.4,
             "y": 0.5,
-            "z": 1
+            "z": 1.0
           }
         },
         {
@@ -76,10 +76,10 @@
           },
           "Value": {
             "$type": "MOD.Core.MODQuaternion, MOD.Core",
-            "x": 0,
-            "y": 0,
-            "z": 0,
-            "w": 1
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
           }
         },
         {
@@ -164,6 +164,33 @@
             "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
           "Value": true
+        },
+        {
+          "TargetType": "MOD.Core.DamageSkinSettingComponent",
+          "Name": "Enable",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": true
+        },
+        {
+          "TargetType": "script.SwordBeam",
+          "Name": "OwnerEntity",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "MOD.Core.MODEntity, MOD.Core, Version=26.5.0.0, Culture=neutral, PublicKeyToken=null"
+          },
+          "Value": null
+        },
+        {
+          "TargetType": "script.SwordBeamAttack",
+          "Name": "InstakillChance",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0.0
         }
       ],
       "EventLinks": [],

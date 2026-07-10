@@ -1,0 +1,15 @@
+@Logic
+script GamePause extends Logic
+
+    -- 전역 일시정지 플래그(서버 권위, @Sync). 몬스터/보스/장애물/투사체/스폰이 각자 OnUpdate 최상단에서 이 값을
+    -- 읽어 정지한다. PausePopup(클라)이 SetPaused로 토글한다. 단일 플레이 기준의 전역 정지(멀티면 전원에게 적용됨).
+    @Sync property boolean Paused = false
+
+    @ExecSpace("Server")
+    method void SetPaused(boolean paused)
+        -- 클라(PausePopup) → 서버: 전역 정지 토글. @Sync라 서버 무버들이 즉시 읽고, 전 클라에도 전파된다.
+        self.Paused = paused
+        log("[GamePause] Paused=" .. tostring(paused))
+    end
+
+end
