@@ -20,10 +20,20 @@ script UltCutsceneHud extends Logic
     property number FlashTime = 0.12
     @DisplayName("암전 최대 알파")
     property number DarkAlpha = 0.72
+    @DisplayName("정지 지연(초)")
+    @Description("R 발동 후 러너를 멈추기까지의 지연. 암전이 페이드되는 동안 잠깐 더 달려 급정거가 어색하지 않게 한다")
+    @MinValue(0)
+    @MaxValue(1)
+    @Delta(0.05)
+    property number FreezeDelay = 0.15
 
     property boolean playing = false
     property number t = 0
     property any pendingPlayer = nil
+    -- 타임라인(암전/플래시) 종료 여부. Finish 후 true → OnUpdate가 타임라인을 다시 처리해 Finish를 매 프레임 재호출하는
+    -- 것을 막는다. playing은 재입력 가드로 컷신 종료(MarkFinished)까지 true 유지하므로, 이 별도 플래그가 없으면
+    -- t>=total이 계속 참이라 OnUpdate가 매 프레임 Finish→UltCutscene:Play를 재실행해 컷신이 프레임0에서 계속 재시작된다.
+    property boolean timelineDone = false
 
     method void OnBeginPlay()
         -- 시작 시 컷씬 숨김.
@@ -38,6 +48,20 @@ script UltCutsceneHud extends Logic
         end
     end
 
+    method void MarkFinished()
+        -- 전체화면 컷신(UltCutscene)이 종료 처리(재개+피니셔+발동)를 마치면 호출된다 — 재입력 재진입 가드(playing) 해제.
+        self.playing = false
+    end
+
+    method void FreezeRunner()
+        -- FreezeDelay 경과 후 러너 전진 + 입력 정지(보스 인트로/부활 팝업과 동일 메커니즘). 컷신이 아직 재생 중일 때만.
+        if not self.playing then return end
+        if _RunGameHud ~= nil then
+            _RunGameHud:SetRunnerActive(false)
+            _RunGameHud:LockPlayerInput(true)
+        end
+    end
+
     method void Play(Entity player)
         -- 궁극기 발동 직전 컷씬 시작. player = 컷씬 후 발동할 플레이어. 재생 중이면 무시(중복 방지).
         if not self:IsClient() then return end
@@ -46,12 +70,11 @@ script UltCutsceneHud extends Logic
         self.playing = true
         self.pendingPlayer = player
         self.t = 0
+        self.timelineDone = false
 
-        -- 러너 전진 + 입력 정지(보스 인트로/부활 팝업과 동일 메커니즘 재사용).
-        if _RunGameHud ~= nil then
-            _RunGameHud:SetRunnerActive(false)
-            _RunGameHud:LockPlayerInput(true)
-        end
+        -- 러너/입력 정지를 FreezeDelay 만큼 늦춘다: 암전이 페이드되는 동안 캐릭터가 잠깐 더 달리다 멈추게 해서
+        -- 급정거가 눈에 띄지 않게 한다(멈추는 순간이 어둠에 가려짐).
+        _TimerService:SetTimer(self, self.FreezeRunner, self.FreezeDelay, false)
 
         -- 초기 알파(암전/플래시).
         if isvalid(self.dark) then self.dark.Color = Color(0, 0, 0, 0) end
@@ -64,6 +87,7 @@ script UltCutsceneHud extends Logic
         -- 타임라인: 암전 페이드인 → 이펙트 홀드 → 플래시 → 종료.
         if not self:IsClient() then return end
         if not self.playing then return end
+        if self.timelineDone then return end   -- 타임라인 종료 후엔 Finish 재호출 방지(playing은 재입력 가드로 유지됨)
         self.t = self.t + delta
         local total = self.DarkInTime + self.HoldTime + self.FlashTime
 
@@ -99,23 +123,34 @@ script UltCutsceneHud extends Logic
     end
 
     method void Finish()
-        -- 컷씬 종료: 숨김 + 러너 재개 + 궁극기 발동.
-        self.playing = false
+        -- 암전/플래시 타임라인 종료: 그 오버레이만 숨기고, 러너는 계속 '정지' 상태로 둔 채 전체화면 스킬 컷신
+        -- (UltCutscene)을 재생한다. 캐릭터는 컷신 동안 움직이지 않는다. 컷신이 "끝날 때" UltCutscene.EndCutscene가
+        -- 러너 재개 + 투명 검기 피니셔 + 돌진 발동을 한 번에 수행한다. (컷신 리소스가 없으면 폴백으로 여기서 즉시 처리.)
+        self.timelineDone = true   -- OnUpdate가 이 Finish를 매 프레임 재호출하지 않게 표시(컷신 재재생 방지)
         self:HideGroup()
-        if _RunGameHud ~= nil then
-            _RunGameHud:SetRunnerActive(true)
-            _RunGameHud:LockPlayerInput(false)
-        end
-        local p = self.pendingPlayer
-        self.pendingPlayer = nil
-        if isvalid(p) then
-            ---@type UltimateSkill
-            local ult = p:GetComponent("script.UltimateSkill")
-            if ult ~= nil then
-                ult:RequestActivate()
+        if _UltCutscene ~= nil then
+            -- playing을 유지(전체화면 컷신 종료 시 UltCutscene가 MarkFinished로 해제)해 컷신 동안 R 재입력 재진입을 막는다.
+            _UltCutscene:Play()
+            log("[UltCutsceneHud] finish -> play fullscreen cutscene (runner stays frozen)")
+        else
+            -- 폴백: 전체화면 컷신이 없으면 곧바로 러너 재개 + 피니셔 + 돌진 발동.
+            self.playing = false
+            if _RunGameHud ~= nil then
+                _RunGameHud:SetRunnerActive(true)
+                _RunGameHud:LockPlayerInput(false)
             end
+            local p = self.pendingPlayer
+            if isvalid(p) then
+                ---@type UltimateSkill
+                local ult = p:GetComponent("script.UltimateSkill")
+                if ult ~= nil then
+                    ult:RequestCutsceneFinisher()
+                    ult:RequestActivate()
+                end
+            end
+            log("[UltCutsceneHud] finish -> no cutscene, immediate activate")
         end
-        log("[UltCutsceneHud] finish -> activate")
+        self.pendingPlayer = nil
     end
 
 end

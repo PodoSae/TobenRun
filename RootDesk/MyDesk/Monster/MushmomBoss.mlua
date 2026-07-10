@@ -522,6 +522,7 @@ script MushmomBoss extends Component
     method void OnUpdate(number delta)
         -- Drives facing, the skill scheduler, 몸박 (contact) damage, and the body-slam charge / groggy states.
         if self.dead then return end
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 정지
 
         -- 도트검 도트 + 타수 다단히트: 보스 상태와 무관하게 매 프레임 틱. 등장 연출 중엔 아직 걸릴 수 없다.
         self:DotTick(delta)

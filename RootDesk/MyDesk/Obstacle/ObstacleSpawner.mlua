@@ -37,6 +37,7 @@ script ObstacleSpawner extends Component
     @ExecSpace("ServerOnly")
     method void OnUpdate(number delta)
         -- Counts down and spawns an obstacle when the timer elapses.
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 스폰 정지
         self.countdown = self.countdown - delta
         if self.countdown > 0 then return end
         self.countdown = self:NextInterval()

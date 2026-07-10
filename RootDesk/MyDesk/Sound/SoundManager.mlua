@@ -35,6 +35,9 @@ script SoundManager extends Logic
 	-- client only (see PlayerHealth.ShakeCameraOnHit). Centralized here so it can be swapped in one place.
 	property string playerHurtSoundRUID = "2c8167a0cb714642a2ab82855a1c2bab"
 
+	-- 궁극기 컷씬 SFX — 궁극기 발동 컷씬(UltCutscene)이 재생되는 동안 루프로 재생, 컷씬 종료 시 정지한다.
+	property string ultCutsceneSoundRUID = "d5d01265f53f47f8867440d18c249a9c"
+
 	-- ── BGM (background music) ──
 	-- BGM is a SINGLE-track channel in _SoundService: PlayBGM replaces whatever is currently playing,
 	-- and calling it again with the SAME id restarts the track from 0. So we remember the current track
@@ -109,6 +112,18 @@ script SoundManager extends Logic
 		-- Stops the looping boss-intro warning alarm started by StartBossWarning.
 		if self.bossWarningSoundRUID == "" then return end
 		_SoundService:StopSound(self.bossWarningSoundRUID)
+	end
+
+	method void StartUltCutscene()
+		-- 궁극기 컷씬 사운드 — 컷씬 재생 동안 LOOP. 컷씬 종료 시 StopUltCutscene으로 정지.
+		if self.ultCutsceneSoundRUID == "" then return end
+		_SoundService:PlayLoopSound(self.ultCutsceneSoundRUID, self.sfxVolume)
+	end
+
+	method void StopUltCutscene()
+		-- StartUltCutscene으로 시작한 루프 사운드를 정지.
+		if self.ultCutsceneSoundRUID == "" then return end
+		_SoundService:StopSound(self.ultCutsceneSoundRUID)
 	end
 
 	method void PlayBossWarningOnce()

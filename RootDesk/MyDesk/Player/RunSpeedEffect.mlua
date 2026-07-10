@@ -58,12 +58,12 @@ script RunSpeedEffect extends Component
 	property integer ghostCount = 0
 
 	-- ───────── Speed lines (스스슥, ambient) ─────────
-	property string speedLineRUID = "df03296854a442e0843e03761af114fe"
+	property string speedLineRUID = "6426cb107145439dbb07cd3460728ae0"
 	-- Base seconds between lines; shortened automatically as the run speed climbs.
 	property number speedLineInterval = 0.13
 	property number speedLineAlpha = 0.55
-	property number speedLineScaleMin = 0.8
-	property number speedLineScaleMax = 1.8
+	property number speedLineScaleMin = 0.16
+	property number speedLineScaleMax = 0.36
 	-- Horizontal spawn band relative to the player (negative = behind, positive = ahead). Lines
 	-- placed ahead are overtaken by the camera and flick past, selling the "rushing by" feel.
 	property number lineAheadMin = -3.0

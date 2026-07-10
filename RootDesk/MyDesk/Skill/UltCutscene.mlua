@@ -14,6 +14,14 @@ property string ClipRuid = "e39d820087c340ec850bf9b23bb49638"
 property number FallbackHideSec = 5.0
 property any endHandler = nil
 
+-- 이번 재생이 끝날 때 투명 검기 피니셔를 쏴야 하는지(1회 가드). Play에서 true, EndCutscene에서 소비.
+-- 애니메이션 종료 이벤트가 여러 번 오거나(루프) 폴백과 겹쳐도 피니셔는 정확히 1회만 발사된다.
+property boolean finisherPending = false
+
+-- 돌진 지속 동안 전체화면 Fx 오버레이를 다른 애니메이션(대시 연출)으로 재사용 중인지. true면 OnAnimEnd가 컷신을
+-- 종료 처리하지 않고 루프를 유지한다(대시가 끝날 때 StopDashFull이 명시적으로 숨긴다).
+property boolean dashFullMode = false
+
 method void OnBeginPlay()
 	-- 클립 RUID를 적용하고, 애니메이션 종료 이벤트를 구독한 뒤 오버레이를 숨긴다.
 	local fx = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup/Fx")
@@ -37,15 +45,79 @@ method void Play()
 	if isvalid(root) then
 		root.Enable = true
 	end
-	-- 폴백: 종료 이벤트가 없어도 일정 시간 뒤 숨긴다.
-	_TimerService:SetTimer(self, self.Hide, self.FallbackHideSec, false)
+	-- 이번 재생 종료 시 투명 검기 피니셔 발사 예약.
+	self.finisherPending = true
+	-- 폴백: 종료 이벤트가 없어도 일정 시간 뒤 종료 처리(숨김 + 피니셔).
+	_TimerService:SetTimer(self, self.EndCutscene, self.FallbackHideSec, false)
+	-- 컷씬 사운드 루프 재생(EndCutscene에서 정지).
+	if _SoundManager ~= nil then
+		_SoundManager:StartUltCutscene()
+	end
 	log("[UltCutscene] play")
 end
 
 @ExecSpace("ClientOnly")
 method void OnAnimEnd(SpriteGUIAnimPlayerEndEvent event)
-	-- 애니메이션 1회 재생이 끝나면 자동으로 숨긴다.
+	-- 돌진 전체화면 오버레이 재생 중이면 루프 유지(숨기지 않음). 그 외(발동 직전 스킬 컷신)엔 컷신 종료 처리.
+	if self.dashFullMode then return end
+	self:EndCutscene()
+end
+
+method void PlayDashFull(string ruid)
+	-- 돌진 지속 동안 전체화면 Fx 오버레이에 ruid 애니메이션을 재생(루프)한다. 이 시점엔 발동 직전 컷신이 이미 끝나
+	-- 오버레이가 비어 있어 충돌하지 않는다. UltimateSkill.StartDashClient(소유 클라)가 호출.
+	if ruid == nil or ruid == "" then return end
+	self.dashFullMode = true
+	local fx = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup/Fx")
+	if isvalid(fx) and fx.SpriteGUIRendererComponent ~= nil then
+		fx.SpriteGUIRendererComponent.AnimClipPlayType = SpriteAnimClipPlayType.Loop
+		fx.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid)
+	end
+	local root = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup")
+	if isvalid(root) then
+		root.Enable = true
+	end
+	log("[UltCutscene] dash full-screen overlay on")
+end
+
+method void StopDashFull()
+	-- 돌진 종료: 전체화면 오버레이 숨김 + 모드 해제. 다음 발동 직전 컷신 Play()가 Fx.ImageRUID를 컷신 클립으로 원복한다.
+	self.dashFullMode = false
 	self:Hide()
+	log("[UltCutscene] dash full-screen overlay off")
+end
+
+method void EndCutscene()
+	-- 컷신 종료(애니메이션 종료 이벤트 또는 폴백 타이머): 오버레이를 숨기고, 컷신 동안 멈춰 있던 러너/입력을 재개한 뒤
+	-- 투명 검기 피니셔 발사 + 궁극기 돌진 발동을 1회 수행한다. 이렇게 해야 캐릭터가 컷신 도중엔 정지해 있다가 컷신이
+	-- 끝난 다음부터 움직인다. finisherPending 가드로 종료가 여러 번 트리거돼도(루프/폴백 중복) 정확히 한 번만 실행.
+	self:Hide()
+	-- 컷씬 종료: 컷씬 루프 사운드 정지.
+	if _SoundManager ~= nil then
+		_SoundManager:StopUltCutscene()
+	end
+	if not self.finisherPending then return end
+	self.finisherPending = false
+	-- 컷신 동안 정지시켰던 러너/입력을 이 시점에 재개(캐릭터는 여기서부터 움직인다).
+	if _RunGameHud ~= nil then
+		_RunGameHud:SetRunnerActive(true)
+		_RunGameHud:LockPlayerInput(false)
+	end
+	-- 컷신 재생을 트리거한 UltCutsceneHud의 재입력 가드(playing)를 해제한다.
+	if _UltCutsceneHud ~= nil then
+		_UltCutsceneHud:MarkFinished()
+	end
+	-- 이 컷신은 궁극기 소유자(로컬 플레이어)에게만 재생되므로 LocalPlayer의 UltimateSkill로 발사/발동(→ 서버 RPC).
+	local player = _UserService.LocalPlayer
+	if isvalid(player) then
+		---@type UltimateSkill
+		local ult = player:GetComponent("script.UltimateSkill")
+		if ult ~= nil then
+			ult:RequestCutsceneFinisher()
+			ult:RequestActivate()
+		end
+	end
+	log("[UltCutscene] end -> resume + finisher + activate")
 end
 
 method void Hide()
