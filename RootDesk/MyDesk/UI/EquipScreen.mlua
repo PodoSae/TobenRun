@@ -342,12 +342,18 @@ method void OnTobenLevelUp()
 	if _PlayerSave ~= nil then
 		_PlayerSave:LevelUpToben()
 	end
+	if _TutorialManager ~= nil then
+		_TutorialManager:NotifyLobby("toben_levelup")
+	end
 end
 
 method void OnTobenStatUp(string statId)
 	-- 토벤 스탯 강화 요청(포인트 지불).
 	if _PlayerSave ~= nil then
 		_PlayerSave:LevelUpTobenStat(statId)
+	end
+	if _TutorialManager ~= nil then
+		_TutorialManager:NotifyLobby("toben_stat")
 	end
 end
 
@@ -913,12 +919,17 @@ method void OnPopupEquip()
 	else
 		self.equipped[d.slot] = id
 		_PlayerSave:EquipGear(d.slot, id)
+		-- 튜토리얼: 무기 장착 스텝 완료 알림.
+		if d.slot == "weapon" and _TutorialManager ~= nil then
+			_TutorialManager:NotifyLobby("weapon_equip")
+		end
 	end
 	self:RefreshSlots()
 	self:RefreshInventory()
 	self:ApplyAppearance()
 	self:RefreshStats()
-	self:RefreshPopup()
+	-- 장착/해제 후 팝업을 닫는다(장착하면 팝업이 남아 화면을 가리지 않도록).
+	self:ClosePopup()
 end
 
 method void OnPopupAct()

@@ -905,6 +905,10 @@ method void Clear()
 		end
 	end
 	self:ShowResult("골인! CLEAR", self.score, true)
+	-- 튜토리얼 스테이지 클리어를 매니저에 알림(히어로 해금+재화 지급 + 2막 전환은 매니저가 처리).
+	if _TutorialManager ~= nil then
+		_TutorialManager:OnStageCleared(self.curStage)
+	end
 	log("[RunGameHud] Clear score=" .. tostring(self.score))
 end
 
@@ -916,7 +920,8 @@ method void ShowResult(string title, integer score, boolean isClear)
 		rewardEnt.TextComponent.Text = ""
 	end
 	-- Persist this stage's score (server keeps the best) + grant data-driven gold reward.
-	if self.curStage ~= "" and _PlayerSave ~= nil then
+	-- 튜토리얼 스테이지("0-0"/"0-1")는 일반 점수저장/보상을 건너뛴다 — 보상은 TutorialManager가 처리.
+	if self.curStage ~= "" and self.curStage ~= "0-0" and self.curStage ~= "0-1" and _PlayerSave ~= nil then
 		_PlayerSave:SaveStageScore(self.curStage, score)
 		_PlayerSave:SetLocalStageBest(self.curStage, score)
 		_PlayerSave:GrantStageReward(self.curStage, isClear)

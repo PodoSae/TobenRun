@@ -1,0 +1,70 @@
+@Logic
+@ExecSpace("ClientOnly")
+script UltCutscene extends Logic
+
+-- 궁극기 발동 시 전체화면을 덮는 스킬 컷씬(스피릿 칼리버) 재생 컨트롤러(클라 전용 @Logic).
+-- UltimateSkill.StartDashClient(소유 클라)에서 _UltCutscene:Play()를 호출한다. 애니메이션이 끝나면
+-- (SpriteGUIAnimPlayerEndEvent) 자동으로 숨기고, 혹시 이벤트가 안 오면 폴백 타이머로도 숨긴다.
+
+@DisplayName("스킬 이펙트 애니메이션클립 RUID")
+@Description("궁극기 발동 시 전체화면에 1회 재생할 애니메이션클립. 기본=스피릿 칼리버")
+property string ClipRuid = "e39d820087c340ec850bf9b23bb49638"
+@DisplayName("폴백 자동 숨김 시간(초)")
+@Description("애니메이션 종료 이벤트가 오지 않을 때 강제로 숨기는 시간. 클립이 끝나기 전 잘리지 않게 넉넉히(정확한 숨김은 종료 이벤트가 담당)")
+property number FallbackHideSec = 5.0
+property any endHandler = nil
+
+method void OnBeginPlay()
+	-- 클립 RUID를 적용하고, 애니메이션 종료 이벤트를 구독한 뒤 오버레이를 숨긴다.
+	local fx = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup/Fx")
+	if isvalid(fx) then
+		if fx.SpriteGUIRendererComponent ~= nil and self.ClipRuid ~= nil and self.ClipRuid ~= "" then
+			fx.SpriteGUIRendererComponent.ImageRUID = DataRef(self.ClipRuid)
+		end
+		self.endHandler = fx:ConnectEvent(SpriteGUIAnimPlayerEndEvent, self.OnAnimEnd)
+	end
+	self:Hide()
+	log("[UltCutscene] ready")
+end
+
+method void Play()
+	-- 궁극기 발동 시 호출: 전체화면 컷씬을 프레임0부터 1회 재생. ImageRUID를 다시 넣어 재생을 처음부터 재시작한다.
+	local fx = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup/Fx")
+	if isvalid(fx) and fx.SpriteGUIRendererComponent ~= nil and self.ClipRuid ~= nil and self.ClipRuid ~= "" then
+		fx.SpriteGUIRendererComponent.ImageRUID = DataRef(self.ClipRuid)
+	end
+	local root = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup")
+	if isvalid(root) then
+		root.Enable = true
+	end
+	-- 폴백: 종료 이벤트가 없어도 일정 시간 뒤 숨긴다.
+	_TimerService:SetTimer(self, self.Hide, self.FallbackHideSec, false)
+	log("[UltCutscene] play")
+end
+
+@ExecSpace("ClientOnly")
+method void OnAnimEnd(SpriteGUIAnimPlayerEndEvent event)
+	-- 애니메이션 1회 재생이 끝나면 자동으로 숨긴다.
+	self:Hide()
+end
+
+method void Hide()
+	-- 컷씬 오버레이 숨김.
+	local root = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup")
+	if isvalid(root) then
+		root.Enable = false
+	end
+end
+
+method void OnEndPlay()
+	-- 이벤트 구독 해제.
+	if self.endHandler ~= nil then
+		local fx = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup/Fx")
+		if isvalid(fx) then
+			fx:DisconnectEvent(SpriteGUIAnimPlayerEndEvent, self.endHandler)
+		end
+		self.endHandler = nil
+	end
+end
+
+end

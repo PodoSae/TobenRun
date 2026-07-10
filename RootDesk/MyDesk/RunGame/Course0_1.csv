@@ -1,0 +1,10 @@
+﻿cmd,p1,p2,p3
+Set,floorY,0,
+Set,speed,3,
+Set,length,16,
+Set,goal,boss,
+Set,tile,55b80c636aa242b6add9c1eb2808a9d1,
+Set,bgm,96caf11b323447fd829582091b364995,
+Set,bg,794ad8421e2543d8a6d2c70307637450,
+Spawn,normal,6,
+Spawn,normal,9,

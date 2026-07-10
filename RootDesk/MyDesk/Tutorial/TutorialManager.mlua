@@ -1,0 +1,510 @@
+@Logic
+@ExecSpace("ClientOnly")
+script TutorialManager extends Logic
+
+-- 신규 유저 온보딩 튜토리얼(클라 전용 @Logic — 로비↔스테이지 맵 전환을 넘어 유지되어야 하므로 맵 컴포넌트가 아닌 Logic).
+-- 흐름: 1막(인게임) 점프→슬라이드→코인→골인  →  클리어 보상(히어로 해금+재화)  →  2막(아웃게임) 장비창→무기장착
+--       →토벤 레벨업→토벤 스탯→축복창→축복 레벨업→축복 효과. 진행 상태는 PlayerSave(tut_step/tut_done)에 저장.
+--
+-- 인게임 게이트: 점프/슬라이드는 물리 장애물 대신 "러너 멈춤 → 안내 → 입력 대기 → 재개"로 가르친다.
+--   러너 정지(SetRunnerActive(false)=speedMultiplier 0)여도 점프(IsOnGround 기반)/슬라이드(InputService 폴링)는
+--   정상 동작·감지되므로, PlayerStateMachine.CurrentState 폴링으로 JUMP/SLIDE 전이를 잡는다.
+--
+-- 훅(외부에서 이 매니저를 호출):
+--   PlayerSave.ReceiveMyData  -> OnSaveLoaded()      (세이브 도착 시 신규 여부 판정 후 시작)
+--   RunGameHud.Clear          -> OnStageCleared(stage)
+--   ScreenFlow.ShowLobby      -> OnReturnToLobby()
+--   ScreenFlow / EquipScreen 버튼 핸들러 -> NotifyLobby("equip_open" / "weapon_equip" / "toben_levelup" /
+--                                            "toben_stat" / "bless_open" / "bless_levelup" / "bless_effect")
+
+property any steps = nil            -- 정렬된 스텝 리스트: { order, ctx, text, doneWhen, gate, trigX }
+property integer curOrder = 0       -- 현재 스텝 order (0=미시작)
+property boolean active = false     -- 튜토리얼 진행 중
+property boolean started = false    -- 이번 세션에서 시작됨(중복 시작 방지)
+property string tutorialStage = "0-0"
+property string tutorialMap = "RunStage"
+property boolean gateResolved = false   -- 현재 게이트 스텝의 입력을 감지했는지
+property boolean gateArmed = false       -- 게이트가 무장됐는지(플레이어가 착지해 RUN 상태를 최소 1회 거친 뒤에만 입력 인정)
+property boolean ultFilled = false        -- 궁극기 스텝에서 게이지 완충을 1회만 요청하기 위한 플래그
+property string dbgHolePath = ""         -- 디버그: 스포트라이트 대상이 바뀔 때만 로그하기 위한 추적
+property boolean rewardGranted = false  -- 클리어 보상 1회만 지급
+property any skipHandler = nil
+property any dbgKeyHandler = nil         -- 디버그: T키로 튜토리얼 리셋(테스트용, 제거 가능)
+-- 가이드 캐릭터 스프라이트 RUID(인스펙터에서 교체 가능). 좌측에 나타나 안내한다. 기본=메이플 안내 NPC.
+@DisplayName("가이드 캐릭터 스프라이트 RUID")
+property string GuideCharRuid = "9acda499ced243c88759e13347a3e2f5"
+
+method void OnBeginPlay()
+	-- 스텝 정의 로드 + 건너뛰기 버튼 연결 + 오버레이 숨김. 시작은 세이브 도착(OnSaveLoaded)까지 대기.
+	self:LoadSteps()
+	local skip = _EntityService:GetEntityByPath("/ui/TutorialGroup/SkipBtn")
+	if isvalid(skip) then
+		self.skipHandler = skip:ConnectEvent(ButtonClickEvent, self.OnSkipClick)
+	end
+	-- 디버그: T키 = 계정을 신규(튜토리얼 시작) 상태로 리셋하고 즉시 튜토리얼을 다시 시작(테스트 편의, 제거 가능).
+	self.dbgKeyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnDebugKey)
+	self:HideOverlay()
+	local cnt = 0
+	if self.steps ~= nil then cnt = #self.steps end
+	log("[TutorialManager] OnBeginPlay steps=" .. tostring(cnt))
+end
+
+@ExecSpace("ClientOnly")
+method void OnDebugKey(KeyDownEvent event)
+	-- 디버그 리셋: T키를 누르면 PlayerSave를 신규 상태로 되돌리고, 매니저 플래그를 초기화한다. 서버가
+	-- 리셋을 저장하면 ReceiveMyData -> OnSaveLoaded가 다시 호출되어(아래 started=false 때문에) 튜토리얼이 새로 시작된다.
+	if event.key ~= KeyboardKey.T then return end
+	self.started = false
+	self.active = false
+	self.rewardGranted = false
+	self.gateResolved = false
+	self.curOrder = 0
+	if _PlayerSave ~= nil then
+		_PlayerSave:ResetTutorial()
+	end
+	log("[TutorialManager] DEBUG reset requested (T)")
+end
+
+method void LoadSteps()
+	-- Tutorial 데이터셋의 각 행을 스텝으로 읽어 order 순으로 정렬.
+	self.steps = {}
+	local ds = _DataService:GetTable("Tutorial")
+	if ds == nil then
+		log_warning("[TutorialManager] Tutorial dataset not found")
+		return
+	end
+	local n = ds:GetRowCount()
+	for i = 1, n do
+		local row = ds:GetRow(i)
+		if row ~= nil then
+			local order = math.floor(tonumber(row:GetItem("order")) or 0)
+			table.insert(self.steps, {
+				order = order,
+				ctx = row:GetItem("ctx"),
+				text = row:GetItem("text"),
+				doneWhen = row:GetItem("doneWhen"),
+				gate = (tonumber(row:GetItem("gate")) or 0) == 1,
+				trigX = tonumber(row:GetItem("trigX")),
+				target = row:GetItem("target"),
+				stage = row:GetItem("stage"),
+			})
+		end
+	end
+	table.sort(self.steps, function(a, b) return a.order < b.order end)
+end
+
+method any StepByOrder(integer order)
+	-- order에 해당하는 스텝(없으면 nil).
+	if self.steps == nil then return nil end
+	for _, s in ipairs(self.steps) do
+		if s.order == order then return s end
+	end
+	return nil
+end
+
+method void OnSaveLoaded()
+	-- 세이브 도착 시 1회: 완료/그랜드파더면 스킵, 아니면 저장된 스텝부터 시작(1막/2막 분기).
+	if self.started then return end
+	if _PlayerSave == nil then return end
+	if _PlayerSave:IsTutorialDone() then
+		self.active = false
+		log("[TutorialManager] tutorial already done -> skip")
+		return
+	end
+	self.started = true
+	self.active = true
+	self.curOrder = _PlayerSave:GetTutStep()
+	if self.curOrder < 1 then self.curOrder = 1 end
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil then
+		self:Finish()
+		return
+	end
+	log("[TutorialManager] start at step " .. tostring(self.curOrder) .. " ctx=" .. tostring(step.ctx))
+	if step.ctx == "game" then
+		self:EnterGameAct()
+	else
+		self:EnterLobbyAct()
+	end
+end
+
+method void EnterGameAct()
+	-- 인게임 막 진입(1막 0-0 또는 3막 0-1): 화면을 숨기고 현재 스텝의 stage 코스로 진입 후 안내 표시.
+	self.gateResolved = false
+	self.gateArmed = false
+	self.ultFilled = false
+	local stage = self:CurStageForStep()
+	if _ScreenFlow ~= nil then
+		_ScreenFlow:HideAllScreens()
+	end
+	if _RunGameHud ~= nil then
+		_RunGameHud:GoToStage(stage, self.tutorialMap)
+	end
+	self:ShowStepOverlay()
+end
+
+method string CurStageForStep()
+	-- 현재 스텝의 stage(0-0/0-1). 비었으면 기본 튜토리얼 스테이지(0-0).
+	local step = self:StepByOrder(self.curOrder)
+	if step ~= nil and step.stage ~= nil and step.stage ~= "" then
+		return step.stage
+	end
+	return self.tutorialStage
+end
+
+method boolean TryStartCombat()
+	-- ScreenFlow.OnStageSelectOpenClick가 호출: 튜토리얼 combat_start 스텝이면 스테이지 선택 대신 전투 훈련(0-1) 진입.
+	-- 처리했으면 true(호출측은 스테이지 선택을 열지 않는다).
+	if not self.active then return false end
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil or step.doneWhen ~= "combat_start" then return false end
+	log("[TutorialManager] combat_start intercepted -> Course0_1")
+	self:AdvanceStep()      -- -> 첫 전투 스텝(13, game, 0-1)
+	self:EnterGameAct()     -- stage=0-1 코스로 진입
+	return true
+end
+
+method void EnterLobbyAct()
+	-- 2막 진입(재접속으로 로비 스텝부터 시작하는 경우): 로비를 보이고 현재 스텝 안내 표시.
+	if _ScreenFlow ~= nil then
+		_ScreenFlow:ShowLobby()
+	end
+	self:ShowStepOverlay()
+end
+
+method void OnUpdate(number delta)
+	-- 인게임 스텝만 매 프레임 처리: 게이트(점프/슬라이드)는 러너를 멈춘 채 입력 대기, 코인은 획득 감지.
+	if not self.active then return end
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil then return end
+	-- 스포트라이트(구멍)를 대상 버튼 위치에 매 프레임 정렬한다(화면 전환/스크롤 대응). 오버레이가 보일 때만.
+	local ovr = _EntityService:GetEntityByPath("/ui/TutorialGroup")
+	if isvalid(ovr) and ovr.Enable then
+		self:ApplyDim(step)
+	end
+	if step.ctx ~= "game" then return end
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then return end
+	if player.CurrentMapName ~= self.tutorialMap then return end
+
+	-- 코인 스텝: RunGameHud.coinScore가 오르면 획득으로 간주.
+	if step.doneWhen == "coin" then
+		if _RunGameHud ~= nil and _RunGameHud.coinScore > 0 then
+			self:AdvanceStep()
+		end
+		return
+	end
+
+	-- 도달(reach) 스텝: 자동공격 시연 등 — 러너는 멈추지 않고 달리며, trigX까지 진행하면 완료(다음 스텝으로).
+	if step.doneWhen == "reach" then
+		local trig = step.trigX
+		local px = player.TransformComponent.WorldPosition.x
+		if trig == nil or px >= trig then
+			self:AdvanceStep()
+		end
+		return
+	end
+
+	-- 궁극기(ultimate) 스텝: trigX에 도달하면 러너를 멈추고 게이지를 완충(1회)한 뒤 R 입력(UltimateSkill.Active) 대기.
+	if step.doneWhen == "ultimate" then
+		local trig = step.trigX
+		local px = player.TransformComponent.WorldPosition.x
+		if trig == nil or px >= trig then
+			local body = player.RigidbodyComponent
+			local grounded = (body ~= nil and body:IsOnGround())
+			---@type UltimateSkill
+			local ult = player:GetComponent("script.UltimateSkill")
+			if grounded and not self.gateArmed then
+				self.gateArmed = true
+				if _RunGameHud ~= nil then
+					_RunGameHud:SetRunnerActive(false)
+				end
+				if ult ~= nil and not self.ultFilled then
+					self.ultFilled = true
+					ult:RequestFillGaugeFull()
+				end
+			end
+			if self.gateArmed and ult ~= nil and ult.Active then
+				self.gateResolved = true
+				if _RunGameHud ~= nil then
+					_RunGameHud:SetRunnerActive(true)
+				end
+				self:AdvanceStep()
+			end
+		end
+		return
+	end
+
+	-- 게이트 스텝(점프/슬라이드): 러너가 trigX(장애물 2유닛 앞)에 도달하면 그 자리에 멈춰 세워 입력을 강제한다.
+	-- trigX 이전에는 자유 주행(스폰 낙하의 RUN->JUMP는 trigX 앞이라 무시됨). 착지(IsOnGround)+RUN에서만 무장해
+	-- 스폰 낙하 오탐을 막고, 목표 상태(JUMP/SLIDE) 전이를 감지하면 재개 → 러너가 바로 앞 장애물을 넘/밑으로 통과.
+	if step.gate and not self.gateResolved then
+		local trig = step.trigX
+		local px = player.TransformComponent.WorldPosition.x
+		if trig == nil or px >= trig then
+			---@type PlayerStateMachine
+			local fsm = player:GetComponent("script.PlayerStateMachine")
+			local body = player.RigidbodyComponent
+			if fsm ~= nil then
+				local st = fsm.CurrentState
+				local grounded = (body ~= nil and body:IsOnGround())
+				if st == "RUN" and grounded then
+					self.gateArmed = true
+					if _RunGameHud ~= nil then
+						_RunGameHud:SetRunnerActive(false)
+					end
+				end
+				if self.gateArmed and st == step.doneWhen then
+					self.gateResolved = true
+					if _RunGameHud ~= nil then
+						_RunGameHud:SetRunnerActive(true)
+					end
+					self:AdvanceStep()
+				end
+			end
+		end
+	end
+	-- clear 스텝은 RunGameHud:Clear()가 OnStageCleared로 알린다(여기서 처리하지 않음).
+end
+
+method void OnStageCleared(string stage)
+	-- RunGameHud:Clear()가 호출. 현재 스텝에 따라 분기:
+	--   1막(0-0) clear  → 히어로 해금+재화 지급 후 2막(로비) 첫 스텝으로. 결과창이 떠 있어 오버레이는 숨기고,
+	--                      로비 복귀(OnReturnToLobby)에서 2막 안내를 띄운다.
+	--   3막(0-1) boss_clear → 튜토리얼 완료.
+	if not self.active then return end
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil then return end
+	if step.doneWhen == "clear" then
+		if not self.rewardGranted then
+			self.rewardGranted = true
+			if _PlayerSave ~= nil then
+				_PlayerSave:GrantTutorialClear()
+			end
+		end
+		self.curOrder = self.curOrder + 1
+		if _PlayerSave ~= nil then
+			_PlayerSave:SetTutStep(self.curOrder)
+		end
+		self:HideOverlay()
+		log("[TutorialManager] act1 cleared -> lobby act at step " .. tostring(self.curOrder))
+		return
+	end
+	if step.doneWhen == "boss_clear" then
+		self:HideOverlay()
+		self:Finish()
+		log("[TutorialManager] act3 boss cleared -> tutorial complete")
+		return
+	end
+end
+
+method void OnReturnToLobby()
+	-- 로비 화면으로 돌아왔을 때: 현재 스텝이 로비 스텝이면 안내를 표시.
+	if not self.active then return end
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil then return end
+	if step.ctx == "lobby" then
+		self:ShowStepOverlay()
+	end
+end
+
+method void NotifyLobby(string action)
+	-- 로비/장비/축복 버튼 핸들러가 호출: 현재 로비 스텝의 완료조건과 일치하면 전진.
+	if not self.active then return end
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil or step.ctx ~= "lobby" then return end
+	if step.doneWhen == action then
+		log("[TutorialManager] lobby action '" .. tostring(action) .. "' matched step " .. tostring(self.curOrder))
+		self:AdvanceStep()
+	end
+end
+
+method void AdvanceStep()
+	-- 다음 스텝으로 전진 + 저장. 다음이 없으면 종료.
+	local nextOrder = self.curOrder + 1
+	self.curOrder = nextOrder
+	self.gateResolved = false
+	self.gateArmed = false
+	self.ultFilled = false
+	if _PlayerSave ~= nil then
+		_PlayerSave:SetTutStep(nextOrder)
+	end
+	local step = self:StepByOrder(nextOrder)
+	if step == nil then
+		self:Finish()
+		return
+	end
+	log("[TutorialManager] -> step " .. tostring(nextOrder) .. " (" .. tostring(step.doneWhen) .. ")")
+	self:ShowStepOverlay()
+end
+
+method void ShowStepOverlay()
+	-- 현재 스텝 안내 표시: 전체 검정 딤 + 좌측 가이드 캐릭터 + 우측 말풍선 문구. 딤은 raycast=off라 대상 버튼
+	-- 클릭을 막지 않는다(시각적 어둡기만). 딤 진하기는 맥락별로 조절(인게임은 플랫포밍이 보이게 옅게, 로비는 진하게).
+	local step = self:StepByOrder(self.curOrder)
+	if step == nil then return end
+	local root = _EntityService:GetEntityByPath("/ui/TutorialGroup")
+	if isvalid(root) then
+		root.Enable = true
+	end
+	-- 가이드 캐릭터 스프라이트(RUID 적용).
+	local guide = _EntityService:GetEntityByPath("/ui/TutorialGroup/Guide")
+	if isvalid(guide) and guide.SpriteGUIRendererComponent ~= nil and self.GuideCharRuid ~= nil and self.GuideCharRuid ~= "" then
+		guide.SpriteGUIRendererComponent.ImageRUID = DataRef(self.GuideCharRuid)
+	end
+	-- 딤/스포트라이트(대상 버튼만 뚫기).
+	self:ApplyDim(step)
+	-- 안내 문구.
+	local txt = _EntityService:GetEntityByPath("/ui/TutorialGroup/Speech/Text")
+	if isvalid(txt) and txt.TextComponent ~= nil then
+		txt.TextComponent.Text = step.text
+	end
+	log("[TutorialManager] show step " .. tostring(self.curOrder) .. ": " .. tostring(step.text))
+end
+
+method void ApplyDim(any step)
+	-- 4방향 딤 스트립을 배치해 화면을 어둡게 하되, step.target(로비 버튼)이 있으면 그 버튼 영역만 뚫는다(스포트라이트).
+	-- target은 '|'로 구분한 여러 후보 경로일 수 있다(1차 클릭 대상 → 팝업/선택 후 버튼 순). 매 프레임 현재 화면에
+	-- 실제로 활성(EnabledInHierarchy=조상까지 켜짐)인 '마지막' 후보를 골라 구멍을 낸다 → 팝업이 뜨면 그 버튼으로 이동.
+	local alpha = 0.62
+	if step.ctx == "game" then
+		alpha = 0.42
+	end
+	local cx = 0
+	local cy = 0
+	local hw = 0
+	local hh = 0
+	local chosen = nil
+	local chosenPath = ""
+	if step.target ~= nil and step.target ~= "" then
+		for p in string.gmatch(step.target, "[^|]+") do
+			local tgt = _EntityService:GetEntityByPath(p)
+			if isvalid(tgt) and tgt.UITransformComponent ~= nil and tgt.EnabledInHierarchy then
+				chosen = tgt
+				chosenPath = p
+			end
+		end
+	end
+	if chosen ~= nil then
+		local root = _EntityService:GetEntityByPath("/ui/TutorialGroup")
+		if isvalid(root) and root.UITransformComponent ~= nil then
+			local corners = chosen.UITransformComponent:GetWorldCorners()
+			if corners ~= nil and #corners >= 4 then
+				local minx = nil
+				local maxx = nil
+				local miny = nil
+				local maxy = nil
+				for i = 1, #corners do
+					local c = corners[i]
+					local lp = root.UITransformComponent:ToLocalPoint(Vector3(c.x, c.y, 0))
+					if minx == nil then
+						minx = lp.x
+						maxx = lp.x
+						miny = lp.y
+						maxy = lp.y
+					else
+						if lp.x < minx then minx = lp.x end
+						if lp.x > maxx then maxx = lp.x end
+						if lp.y < miny then miny = lp.y end
+						if lp.y > maxy then maxy = lp.y end
+					end
+				end
+				local pad = 16
+				cx = (minx + maxx) / 2
+				cy = (miny + maxy) / 2
+				hw = (maxx - minx) / 2 + pad
+				hh = (maxy - miny) / 2 + pad
+			end
+		end
+	end
+	-- 대상(후보)이 바뀔 때만 디버그 로그(팝업 버튼으로 이동했는지 확인용).
+	if chosenPath ~= self.dbgHolePath then
+		self.dbgHolePath = chosenPath
+		log("[TutorialManager] spotlight target -> '" .. tostring(chosenPath) .. "'")
+	end
+	self:SetSpotlight(cx, cy, hw, hh, alpha)
+end
+
+method void SetSpotlight(number cx, number cy, number hw, number hh, number alpha)
+	-- 구멍 사각형 [cx±hw, cy±hh]를 남기고 상/하/좌/우 스트립으로 화면을 덮는다. hw=hh=0이면 구멍 없음(전체 딤).
+	local HX = 960
+	local HY = 540
+	local x1 = cx - hw
+	local x2 = cx + hw
+	local y1 = cy - hh
+	local y2 = cy + hh
+	-- 상단: y ∈ [y2, HY], 전체 폭.
+	self:PlaceStrip("DimTop", 0, (y2 + HY) / 2, 2 * HX, HY - y2, alpha)
+	-- 하단: y ∈ [-HY, y1], 전체 폭.
+	self:PlaceStrip("DimBottom", 0, (-HY + y1) / 2, 2 * HX, y1 + HY, alpha)
+	-- 좌측: x ∈ [-HX, x1], y ∈ [y1, y2].
+	self:PlaceStrip("DimLeft", (-HX + x1) / 2, cy, x1 + HX, y2 - y1, alpha)
+	-- 우측: x ∈ [x2, HX], y ∈ [y1, y2].
+	self:PlaceStrip("DimRight", (x2 + HX) / 2, cy, HX - x2, y2 - y1, alpha)
+end
+
+method void PlaceStrip(string name, number cx, number cy, number w, number h, number alpha)
+	-- 한 스트립을 (cx,cy) 중심, w×h 크기로 배치. 기준 크기 100×100 스프라이트를 UIScale로 늘린다(RectSize 런타임
+	-- 변경 대신 검증된 UIScale 사용). 폭/높이가 0 이하면 숨긴다.
+	local e = _EntityService:GetEntityByPath("/ui/TutorialGroup/" .. name)
+	if isvalid(e) == false or e.UITransformComponent == nil then
+		return
+	end
+	if w <= 0 or h <= 0 then
+		e.Enable = false
+		return
+	end
+	e.Enable = true
+	e.UITransformComponent.anchoredPosition = Vector2(cx, cy)
+	e.UITransformComponent.UIScale = Vector3(w / 100, h / 100, 1)
+	if e.SpriteGUIRendererComponent ~= nil then
+		e.SpriteGUIRendererComponent.Color = Color(0, 0, 0, alpha)
+	end
+end
+
+method void HideOverlay()
+	-- 안내 오버레이 숨김.
+	local root = _EntityService:GetEntityByPath("/ui/TutorialGroup")
+	if isvalid(root) then
+		root.Enable = false
+	end
+end
+
+method void OnSkipClick(ButtonClickEvent event)
+	-- 건너뛰기: 진행 중 러너가 멈춰 있을 수 있으니 재개 후 종료.
+	log("[TutorialManager] skipped by user")
+	if _RunGameHud ~= nil then
+		_RunGameHud:SetRunnerActive(true)
+	end
+	self:Finish()
+end
+
+method void Finish()
+	-- 튜토리얼 종료: 완료 저장 + 오버레이 숨김.
+	self.active = false
+	if _PlayerSave ~= nil then
+		_PlayerSave:CompleteTutorial()
+	end
+	self:HideOverlay()
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage("튜토리얼 완료!")
+	end
+	log("[TutorialManager] finished")
+end
+
+method void OnEndPlay()
+	-- 건너뛰기 버튼 + 디버그 키 구독 해제.
+	if self.skipHandler ~= nil then
+		local skip = _EntityService:GetEntityByPath("/ui/TutorialGroup/SkipBtn")
+		if isvalid(skip) then
+			skip:DisconnectEvent(ButtonClickEvent, self.skipHandler)
+		end
+		self.skipHandler = nil
+	end
+	if self.dbgKeyHandler ~= nil then
+		_InputService:DisconnectEvent(KeyDownEvent, self.dbgKeyHandler)
+		self.dbgKeyHandler = nil
+	end
+end
+
+end

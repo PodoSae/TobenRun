@@ -115,43 +115,74 @@ end
 
 @ExecSpace("ServerOnly")
 method void EnsureStarterEquip(string userId)
-	-- 장비는 무기(해금식)만 관리. 방어구(장갑/상의/하의)는 외형 기본값으로 배경에서만 유지(UI 비노출).
-	-- 무기는 "히어로"만 해금 + 장착. 기존 유저의 옛 무기(Weapon 데이터셋에 없는 id)는 히어로로 마이그레이션.
+	-- 계정 최초 판정 + 튜토리얼 상태 초기화. 신규 계정은 튜토리얼 시작 상태(재화 0·무기 미장착·히어로 잠금)로,
+	-- 기존 유저는 튜토리얼을 건너뛰도록(그랜드파더) 세팅한다. 스타터/무기 보장 로직은 튜토리얼 완료 계정에만 적용.
 	local data = self:LoadUser(userId)
 	local changed = false
-	-- 첫 로그인: 스타터 방어구(외형용) 장착 + 히어로 무기 장착.
-	if data["eq_weapon"] == nil then
-		data["eq_glove"] = "starter_glove"
-		data["eq_coat"] = "starter_coat"
-		data["eq_pants"] = "starter_pants"
-		data["own_starter_glove"] = 1
-		data["own_starter_coat"] = 1
-		data["own_starter_pants"] = 1
-		data["eq_weapon"] = "hero"
+
+	-- 튜토리얼 상태 최초 판정(계정당 1회): tut_done이 아직 없으면 신규/기존을 구분해 초기화.
+	if data["tut_done"] == nil then
+		if data["eq_weapon"] == nil then
+			-- 신규 계정 → 튜토리얼 시작 상태. 재화 0, 무기·방어구 미장착(계정 기본 외형), 히어로 잠금.
+			-- eq_weapon을 ""(의도적 미장착)로 둬서 아래 스타터 지급 조건(== nil)이 다시 걸리지 않게 한다.
+			data["eq_weapon"] = ""
+			data["eq_glove"] = ""
+			data["eq_coat"] = ""
+			data["eq_pants"] = ""
+			data.gold = 0
+			data.coin = 0
+			data["wown_hero"] = 0
+			data["wg_hero"] = 1
+			data["tut_step"] = 0
+			data["tut_done"] = 0
+			log("[PlayerSave] new account -> tutorial start state for " .. tostring(userId))
+		else
+			-- 기존 유저 → 튜토리얼 건너뜀(그랜드파더). 보유 장비/재화 유지.
+			data["tut_step"] = 999
+			data["tut_done"] = 1
+			log("[PlayerSave] existing account -> tutorial grandfathered for " .. tostring(userId))
+		end
 		changed = true
 	end
-	-- 히어로 해금 보장 + 등급 기본 1.
-	if data["wown_hero"] == nil or math.floor(data["wown_hero"] or 0) == 0 then
-		data["wown_hero"] = 1
-		changed = true
+
+	-- 튜토리얼 완료(또는 그랜드파더) 계정에만 기존 스타터/히어로 보장 로직 적용. 튜토리얼 진행 중(tut_done=0)
+	-- 계정은 건드리지 않아 무기 잠금/재화 0 상태가 유지된다(히어로는 클리어 시 GrantTutorialClear로 해금).
+	if math.floor(data["tut_done"] or 0) == 1 then
+		-- 첫 로그인 스타터 지급(레거시 경로): 아직 무기 슬롯 키가 없으면 스타터+히어로 지급.
+		if data["eq_weapon"] == nil then
+			data["eq_glove"] = "starter_glove"
+			data["eq_coat"] = "starter_coat"
+			data["eq_pants"] = "starter_pants"
+			data["own_starter_glove"] = 1
+			data["own_starter_coat"] = 1
+			data["own_starter_pants"] = 1
+			data["eq_weapon"] = "hero"
+			changed = true
+		end
+		-- 히어로 해금 보장 + 등급 기본 1.
+		if data["wown_hero"] == nil or math.floor(data["wown_hero"] or 0) == 0 then
+			data["wown_hero"] = 1
+			changed = true
+		end
+		if data["wg_hero"] == nil then
+			data["wg_hero"] = 1
+			changed = true
+		end
+		-- 옛 무기(Weapon 데이터셋에 없는 id) 장착 상태면 히어로로 교체. 빈 문자열("")=의도적 해제라 유지.
+		local eqw = data["eq_weapon"]
+		if eqw ~= nil and eqw ~= "" and self:IsWeaponId(eqw) == false then
+			data["eq_weapon"] = "hero"
+			changed = true
+		end
+		if data.coin == nil then
+			data.coin = 50
+			changed = true
+		end
 	end
-	if data["wg_hero"] == nil then
-		data["wg_hero"] = 1
-		changed = true
-	end
-	-- 옛 무기(Weapon 데이터셋에 없는 id) 장착 상태면 히어로로 교체. 빈 문자열("")=의도적 해제라 유지.
-	local eqw = data["eq_weapon"]
-	if eqw ~= nil and eqw ~= "" and self:IsWeaponId(eqw) == false then
-		data["eq_weapon"] = "hero"
-		changed = true
-	end
-	if data.coin == nil then
-		data.coin = 50
-		changed = true
-	end
+
 	if changed then
 		self:Persist(userId)
-		log("[PlayerSave] ensure starter/weapon equip for " .. tostring(userId))
+		log("[PlayerSave] ensure starter/tutorial state for " .. tostring(userId))
 	end
 end
 
@@ -205,8 +236,14 @@ method void ReceiveMyData(string json)
 	if data.toben_lv == nil then
 		data.toben_lv = 1
 	end
+	if data["tut_step"] == nil then
+		data["tut_step"] = 0
+	end
+	if data["tut_done"] == nil then
+		data["tut_done"] = 0
+	end
 	self.clientData = data
-	log("[PlayerSave] client received save data gold=" .. tostring(data.gold))
+	log("[PlayerSave] client received save data gold=" .. tostring(data.gold) .. " tut_step=" .. tostring(data["tut_step"]) .. " tut_done=" .. tostring(data["tut_done"]))
 	if _ScreenFlow ~= nil then
 		_ScreenFlow:RefreshSavedUI()
 	end
@@ -217,6 +254,10 @@ method void ReceiveMyData(string json)
 		if lp ~= nil and isvalid(lp) then
 			_RunGameHud:ApplyEquippedGear(lp)
 		end
+	end
+	-- 세이브가 도착했으니 튜토리얼 매니저에 알림 → 신규 계정이면 첫 접속 자동 진입, 아니면 스킵(내부에서 1회 판정).
+	if _TutorialManager ~= nil then
+		_TutorialManager:OnSaveLoaded()
 	end
 end
 
@@ -1410,6 +1451,174 @@ method void SetLocalStageBest(string stage, integer score)
 	if score > prev then
 		self.clientData[k] = score
 	end
+end
+
+-- ===== 튜토리얼 진행 상태 (계정 영구) =====
+
+method integer GetTutStep()
+	-- 클라: 현재 튜토리얼 스텝(order). 0=미시작, 1..N=진행, 999=완료/건너뜀.
+	if self.clientData == nil or self.clientData["tut_step"] == nil then
+		return 0
+	end
+	return math.floor(self.clientData["tut_step"])
+end
+
+method boolean IsTutorialDone()
+	-- 클라: 튜토리얼 완료(또는 그랜드파더) 여부.
+	if self.clientData == nil then
+		return false
+	end
+	return math.floor(self.clientData["tut_done"] or 0) == 1
+end
+
+@ExecSpace("Server")
+method void SetTutStep(integer step)
+	-- 스텝 전진 저장(변경 시에만 persist). 클라 캐시도 resync해 다음 스텝을 읽게 한다.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if math.floor(data["tut_step"] or 0) ~= step then
+		data["tut_step"] = step
+		self:Persist(userId)
+		self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+		log("[PlayerSave] tut_step -> " .. tostring(step) .. " for " .. tostring(userId))
+	end
+end
+
+@ExecSpace("Server")
+method void GrantTutorialClear()
+	-- 튜토리얼 스테이지 클리어 보상: 히어로 무기 해금 + 메소 100 지급(2막 토벤 레벨업 1회 비용). 장착은 2막에서 유저가 직접.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	if math.floor(data["wown_hero"] or 0) == 0 then
+		data["wown_hero"] = 1
+	end
+	if data["wg_hero"] == nil then
+		data["wg_hero"] = 1
+	end
+	-- 메소 100(토벤 레벨업 1회) + 토벤코인 5(축복 레벨업 1회) 지급 → 2막에서 딱 소진되게.
+	data.gold = (data.gold or 0) + 100
+	data.coin = (data.coin or 0) + 5
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("히어로 무기 해금! 메소 100 · 토벤코인 5 획득", userId)
+	log("[PlayerSave] tutorial clear grant: hero unlocked + 100 meso + 5 coin for " .. tostring(userId))
+end
+
+@ExecSpace("Server")
+method void CompleteTutorial()
+	-- 튜토리얼 종료(모든 스텝 완료 또는 건너뛰기): 이후 재접속에서 다시 시작되지 않게 tut_done=1로 확정.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	data["tut_done"] = 1
+	data["tut_step"] = 999
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	log("[PlayerSave] tutorial completed for " .. tostring(userId))
+end
+
+@ExecSpace("Server")
+method void ResetTutorial()
+	-- 디버그/테스트: 계정을 완전 신규 상태로 되돌린다. 재화 0 + 장착/보유 장비(무기 소유·등급, 방어구 소유,
+	-- 강화레벨) 전부 초기화 + 토벤 레벨·스탯 + 축복 레벨·효과까지 리셋. 스테이지 최고기록/클리어는 유지.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	-- 재화.
+	data.gold = 0
+	data.coin = 0
+	-- 장착 슬롯 해제.
+	data["eq_weapon"] = ""
+	data["eq_glove"] = ""
+	data["eq_coat"] = ""
+	data["eq_pants"] = ""
+	-- 무기: 모든 무기 잠금(wown_*=0) + 등급 1(wg_*=1). Weapon 데이터셋의 모든 id 순회.
+	local wds = _DataService:GetTable("Weapon")
+	if wds ~= nil then
+		for i = 1, wds:GetRowCount() do
+			local row = wds:GetRow(i)
+			if row ~= nil then
+				local wid = row:GetItem("id")
+				if wid ~= nil and wid ~= "" then
+					data["wown_" .. wid] = 0
+					data["wg_" .. wid] = 1
+				end
+			end
+		end
+	end
+	-- 방어구/장비 아이템: 소유 해제(own_*=nil). EquipItem 데이터셋의 모든 id 순회.
+	local eds = _DataService:GetTable("EquipItem")
+	if eds ~= nil then
+		for i = 1, eds:GetRowCount() do
+			local row = eds:GetRow(i)
+			if row ~= nil then
+				local id = row:GetItem("id")
+				if id ~= nil and id ~= "" then
+					data["own_" .. id] = nil
+				end
+			end
+		end
+	end
+	-- 상점 아이템 강화 레벨 초기화(lv_*=nil). ShopItem 데이터셋의 모든 id 순회.
+	local sds = _DataService:GetTable("ShopItem")
+	if sds ~= nil then
+		for i = 1, sds:GetRowCount() do
+			local row = sds:GetRow(i)
+			if row ~= nil then
+				local id = row:GetItem("id")
+				if id ~= nil and id ~= "" then
+					data["lv_" .. id] = nil
+				end
+			end
+		end
+	end
+	-- 토벤 레벨/스탯.
+	data["toben_lv"] = 1
+	local tds = _DataService:GetTable("TobenStat")
+	if tds ~= nil then
+		for i = 1, tds:GetRowCount() do
+			local row = tds:GetRow(i)
+			if row ~= nil then
+				local sid = row:GetItem("id")
+				if sid ~= nil and sid ~= "" then
+					data["tp_" .. sid] = 0
+				end
+			end
+		end
+	end
+	-- 축복 레벨/효과.
+	data["bless_lv"] = 1
+	local beds = _DataService:GetTable("BlessEffect")
+	if beds ~= nil then
+		for i = 1, beds:GetRowCount() do
+			local row = beds:GetRow(i)
+			if row ~= nil then
+				local eid = row:GetItem("id")
+				if eid ~= nil and eid ~= "" then
+					data["be_" .. eid] = 0
+				end
+			end
+		end
+	end
+	-- 히어로 잠금 + 튜토리얼 처음부터.
+	data["wown_hero"] = 0
+	data["wg_hero"] = 1
+	data["tut_step"] = 0
+	data["tut_done"] = 0
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("계정을 신규 상태로 초기화했습니다", userId)
+	log("[PlayerSave] tutorial reset (full fresh wipe) for " .. tostring(userId))
 end
 
 end
