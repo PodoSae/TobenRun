@@ -1,1 +1,164 @@
-{"Id":"","GameId":"","EntryKey":"map://bosstestmap","ContentType":"x-mod/map","Content":"","Usage":0,"UsePublish":1,"UseService":0,"CoreVersion":"26.5.0.0","StudioVersion":"0.1.0.0","DynamicLoading":0,"ContentProto":{"Use":"Binary","Entities":[{"id":"0ca0b217-aa1f-49cc-8af3-9520ef486509","path":"/maps/BossTestMap","componentNames":"MOD.Core.MapComponent,MOD.Core.FootholdComponent","jsonString":{"name":"BossTestMap","path":"/maps/BossTestMap","nameEditable":true,"enable":true,"visible":true,"localize":false,"displayOrder":0,"pathConstraints":"//","revision":3,"modelId":null,"@components":[{"@type":"MOD.Core.MapComponent","IsInstanceMap":false,"TileMapMode":0,"Enable":true},{"@type":"MOD.Core.FootholdComponent","FootholdsByLayer":{"1":[{"Length":430,"NextFootholdId":0,"PreviousFootholdId":0,"groupID":1,"layer":1,"sortingLayerName":"MapLayer0","attribute":{"walk":1,"force":0,"drag":1,"isBlockVertical":false,"isDynamic":false,"isCustomFoothold":false,"inertiaOption":0},"OwnerId":"650cf925-3c99-400c-950e-96236c78baa8","Id":1,"StartPoint":{"x":-10,"y":0},"EndPoint":{"x":420,"y":0},"Variance":{"x":1,"y":0}}]},"Enable":true}],"@version":1}},{"id":"8bf1a1c8-bd60-4702-8305-1e6662275b7e","path":"/maps/BossTestMap/Background","componentNames":"MOD.Core.BackgroundComponent","jsonString":{"name":"Background","path":"/maps/BossTestMap/Background","nameEditable":false,"enable":true,"visible":true,"localize":false,"displayOrder":0,"pathConstraints":"///","revision":2,"modelId":null,"@components":[{"@type":"MOD.Core.BackgroundComponent","TemplateRUID":"794ad8421e2543d8a6d2c70307637450","Type":1,"Enable":true}],"@version":1}},{"id":"9a3ea953-9c12-4ac9-b703-e3d179398832","path":"/maps/BossTestMap/MapleMapLayer","componentNames":"MOD.Core.MapLayerComponent","jsonString":{"name":"MapleMapLayer","path":"/maps/BossTestMap/MapleMapLayer","nameEditable":false,"enable":true,"visible":true,"localize":false,"displayOrder":1,"pathConstraints":"///","revision":2,"origin":{"type":"Model","entry_id":"maplemaplayer","sub_entity_id":null,"root_entity_id":null,"replaced_model_id":null},"modelId":"maplemaplayer","@components":[{"@type":"MOD.Core.MapLayerComponent","IsVisible":true,"LayerSortOrder":0,"Locked":false,"MapLayerName":"Layer1","Thumbnail":"","Enable":true}],"@version":1}},{"id":"650cf925-3c99-400c-950e-96236c78baa8","path":"/maps/BossTestMap/TileMap","componentNames":"MOD.Core.TransformComponent,MOD.Core.TileMapComponent","jsonString":{"name":"TileMap","path":"/maps/BossTestMap/TileMap","nameEditable":false,"enable":true,"visible":true,"localize":false,"displayOrder":2,"pathConstraints":"///","revision":3,"origin":{"type":"Model","entry_id":"tilemap","sub_entity_id":null,"root_entity_id":null,"replaced_model_id":null},"modelId":"tilemap","@components":[{"@type":"MOD.Core.TransformComponent","Position":{"x":-0.225,"y":-0.15,"z":1000},"QuaternionRotation":{"x":0,"y":0,"z":0,"w":1},"Enable":true},{"@type":"MOD.Core.TileMapComponent","IsOddGridPosition":false,"SortingLayer":"MapLayer0","TileMapVersion":1,"TileSetRUID":{"DataId":"0cb48999533e4102b25ecf7c77f4af77"},"Tiles":[],"Enable":true}],"@version":1}}]}}
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "map://bosstestmap",
+  "ContentType": "x-mod/map",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Binary",
+    "Entities": [
+      {
+        "id": "0ca0b217-aa1f-49cc-8af3-9520ef486509",
+        "path": "/maps/BossTestMap",
+        "componentNames": "MOD.Core.MapComponent,MOD.Core.FootholdComponent",
+        "jsonString": {
+          "name": "BossTestMap",
+          "path": "/maps/BossTestMap",
+          "nameEditable": true,
+          "enable": true,
+          "visible": true,
+          "localize": false,
+          "displayOrder": 0,
+          "pathConstraints": "//",
+          "revision": 3,
+          "modelId": null,
+          "@components": [
+            {
+              "@type": "MOD.Core.MapComponent",
+              "IsInstanceMap": false,
+              "TileMapMode": 0,
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.FootholdComponent",
+              "FootholdsByLayer": {},
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
+      },
+      {
+        "id": "8bf1a1c8-bd60-4702-8305-1e6662275b7e",
+        "path": "/maps/BossTestMap/Background",
+        "componentNames": "MOD.Core.BackgroundComponent",
+        "jsonString": {
+          "name": "Background",
+          "path": "/maps/BossTestMap/Background",
+          "nameEditable": false,
+          "enable": true,
+          "visible": true,
+          "localize": false,
+          "displayOrder": 0,
+          "pathConstraints": "///",
+          "revision": 2,
+          "modelId": null,
+          "@components": [
+            {
+              "@type": "MOD.Core.BackgroundComponent",
+              "TemplateRUID": "794ad8421e2543d8a6d2c70307637450",
+              "Type": 1,
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
+      },
+      {
+        "id": "9a3ea953-9c12-4ac9-b703-e3d179398832",
+        "path": "/maps/BossTestMap/MapleMapLayer",
+        "componentNames": "MOD.Core.MapLayerComponent",
+        "jsonString": {
+          "name": "MapleMapLayer",
+          "path": "/maps/BossTestMap/MapleMapLayer",
+          "nameEditable": false,
+          "enable": true,
+          "visible": true,
+          "localize": false,
+          "displayOrder": 1,
+          "pathConstraints": "///",
+          "revision": 2,
+          "origin": {
+            "type": "Model",
+            "entry_id": "maplemaplayer",
+            "sub_entity_id": null,
+            "root_entity_id": null,
+            "replaced_model_id": null
+          },
+          "modelId": "maplemaplayer",
+          "@components": [
+            {
+              "@type": "MOD.Core.MapLayerComponent",
+              "IsVisible": true,
+              "LayerSortOrder": 0,
+              "Locked": false,
+              "MapLayerName": "Layer1",
+              "Thumbnail": "",
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
+      },
+      {
+        "id": "650cf925-3c99-400c-950e-96236c78baa8",
+        "path": "/maps/BossTestMap/TileMap",
+        "componentNames": "MOD.Core.TransformComponent,MOD.Core.TileMapComponent",
+        "jsonString": {
+          "name": "TileMap",
+          "path": "/maps/BossTestMap/TileMap",
+          "nameEditable": false,
+          "enable": true,
+          "visible": true,
+          "localize": false,
+          "displayOrder": 2,
+          "pathConstraints": "///",
+          "revision": 3,
+          "origin": {
+            "type": "Model",
+            "entry_id": "tilemap",
+            "sub_entity_id": null,
+            "root_entity_id": null,
+            "replaced_model_id": null
+          },
+          "modelId": "tilemap",
+          "@components": [
+            {
+              "@type": "MOD.Core.TransformComponent",
+              "Position": {
+                "x": -0.225,
+                "y": -0.15,
+                "z": 1000.0
+              },
+              "QuaternionRotation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+              },
+              "Enable": true
+            },
+            {
+              "@type": "MOD.Core.TileMapComponent",
+              "IsOddGridPosition": false,
+              "SortingLayer": "MapLayer0",
+              "TileMapVersion": 1,
+              "TileSetRUID": {
+                "DataId": "0cb48999533e4102b25ecf7c77f4af77"
+              },
+              "Tiles": [],
+              "Enable": true
+            }
+          ],
+          "@version": 1
+        }
+      }
+    ]
+  }
+}
