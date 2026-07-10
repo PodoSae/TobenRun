@@ -13,6 +13,9 @@ script RunGameHud extends Logic
 property number goalMargin = 2.0
 @DisplayName("추락 재드롭 여유")
 property number fallDropMargin = 2.0
+-- 구덩이에 빠지면 마지막으로 밟은 땅에서 이만큼 뒤(월드유닛)로 되돌려 세운다(구덩이 앞 재시도 + 점프 활주로).
+@DisplayName("구덩이 부활 뒤로물림")
+property number gapRespawnBack = 3.0
 
 property number lastGroundedX = 0
 
@@ -22,7 +25,10 @@ property Entity progressFill = "e0c5255c-5d64-4a00-a646-26fc75c6e869"
 property Entity progressText = "2aad731c-6936-4da9-aabe-98f98371ae33"
 property Entity gameOverPanel = "133f65c0-d55e-41f2-b3f2-1ae708139b40"
 property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
-property Entity restartButton = "27d7a562-4150-42d1-8716-a3bab2ccc588"
+-- 새 결과창(ResultGroup)의 로비 버튼. 옛 팝업 버튼 대신 여기로 연결한다.
+property Entity restartButton = "98cbe450-196b-46a5-96a1-c66b380b4df7"
+-- 새 결과창(ResultGroup)의 '다음 스테이지' 버튼.
+property Entity nextStageButton = "c281d540-2a2b-4eb8-8682-1896ef4338cd"
 property Entity resultTitle = "77cc9c1c-ff74-4d20-a62d-d96614f6ce8d"
 -- PopupGroup root (DefaultShow=false → must be enabled for any child to render)
 -- and the generic confirm backdrop that shares the group (hidden so it never overlays the result).
@@ -30,6 +36,7 @@ property Entity popupGroup = "fb7a3b06-7026-4590-8efe-bb33416dd8f9"
 property Entity confirmBack = "e25e8e41-5cb9-4fae-8dc0-ea7dca85a91d"
 
 property any restartHandler = nil
+property any nextStageHandler = nil
 
 property boolean started = false
 property boolean isAlive = false
@@ -122,6 +129,9 @@ method void OnBeginPlay()
 	end
 	if isvalid(self.restartButton) then
 		self.restartHandler = self.restartButton:ConnectEvent(ButtonClickEvent, self.OnGoLobbyClick)
+	end
+	if isvalid(self.nextStageButton) then
+		self.nextStageHandler = self.nextStageButton:ConnectEvent(ButtonClickEvent, self.OnNextStageClick)
 	end
 	self:SetScore(0)
 	log("[RunGameHud] OnBeginPlay wired")
@@ -248,25 +258,32 @@ end
 
 @ExecSpace("ClientOnly")
 method void FallIntoGap()
-	-- The runner walked off a foothold edge into a real gap. RE-DROP from above the screen onto solid
-	-- floor just past the gap so the fall reads as a fall and the run keeps going.
-	-- (HP penalty is owned by sjy PlayerHealth; gap damage wiring is a later polish step.)
-	local rx = self.lastGroundedX + 3.0
+	-- 구덩이에 빠지면 직전 땅으로 되돌려 세운다 — 구덩이를 넘겨주지 않고 앞에서 다시 시도. 러너 물리상 IsOnGround가
+	-- 잘 안 잡혀 lastGroundedX가 스폰 근처에 머물 수 있으므로, 떨어진 x가 속한 구덩이(gapZone)의 시작 x1(=구덩이 앞
+	-- 땅 가장자리)을 기준으로 되돌린다. 못 찾으면 lastGroundedX로 폴백. 가장자리에 정확히 서면 자동 러너가 또 떨어지니
+	-- gapRespawnBack만큼 뒤로 물려 점프 활주로를 준다. (HP 페널티는 아직 미연결.)
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false or player.MovementComponent == nil then
+		return
+	end
+	local fx = player.TransformComponent.WorldPosition.x
+	local edge = self.lastGroundedX
 	if self.gapZones ~= nil then
 		for _, g in ipairs(self.gapZones) do
-			if g.x2 > self.lastGroundedX - 0.5 then
-				rx = g.x2 + 1.5
+			if fx >= g.x1 - 1.0 and fx <= g.x2 + 1.0 then
+				edge = g.x1
 				break
 			end
 		end
 	end
-	-- Drop in from high above the visible screen; gravity carries the runner down onto the floor.
-	local player = _UserService.LocalPlayer
-	if isvalid(player) and player.MovementComponent ~= nil then
-		player.MovementComponent:Stop()
-		player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY + 6.0))
+	local rx = edge - self.gapRespawnBack
+	if rx < self.spawnX then
+		rx = self.spawnX
 	end
-	log("[RunGameHud] fell into gap, re-drop from above at x=" .. tostring(rx))
+	-- 스폰 높이(spawnY = floorY+1)로 세워 중력이 바로 그 땅에 안착시킨다(초기 스폰과 동일).
+	player.MovementComponent:Stop()
+	player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY))
+	log("[RunGameHud] fell into gap fx=" .. string.format("%.1f", fx) .. " -> respawn x=" .. string.format("%.1f", rx))
 end
 
 @ExecSpace("ClientOnly")
@@ -423,6 +440,8 @@ method void OnArriveMap(Entity player)
 	self.spawnX = sx
 	self.spawnY = sy
 	self.bestX = sx
+	-- 구덩이 부활 기준점을 스테이지 시작값으로 리셋(이전 판의 값이 남지 않도록).
+	self.lastGroundedX = sx
 	self.ultGaugeLastX = sx
 	self.score = 0
 	self.coinScore = 0
@@ -902,35 +921,33 @@ method void ShowResult(string title, integer score, boolean isClear)
 		_PlayerSave:SetLocalStageBest(self.curStage, score)
 		_PlayerSave:GrantStageReward(self.curStage, isClear)
 	end
-	-- Reveal the result panel with a title (clear / game over) and final score.
-	if isvalid(self.resultTitle) then
-		self.resultTitle.TextComponent.Text = title
-		if isClear then
-			self.resultTitle.TextComponent.FontColor = Color(0.40, 1.00, 0.55, 1.0)
-		else
-			self.resultTitle.TextComponent.FontColor = Color(1.00, 0.35, 0.35, 1.0)
-		end
-	end
-	-- PopupGroup is DefaultShow=false: enabling only the child renders nothing.
-	-- Show the group root (and reset its alpha), and hide the shared confirm backdrop.
-	if isvalid(self.popupGroup) then
-		self.popupGroup.Enable = true
-		if self.popupGroup.CanvasGroupComponent ~= nil then
-			self.popupGroup.CanvasGroupComponent.GroupAlpha = 1
-		end
-	end
+	-- 옛 결과창(PopupGroup/RunGameOver)은 새 ResultGroup(별 목표)으로 대체됨 → 더 이상 띄우지 않는다.
+	-- 점수 저장/보상 지급(위)은 유지하고, 화면 표시는 아래 _ResultUI:Show가 담당한다.
 	if isvalid(self.confirmBack) then
 		self.confirmBack.Enable = false
-	end
-	if isvalid(self.gameOverPanel) then
-		self.gameOverPanel.Enable = true
 	end
 	-- Result window is up → re-enable the click-burst effect.
 	if _ClickBurstFx ~= nil then
 		_ClickBurstFx:SetActive(true)
 	end
-	-- Animate the score counting up from 0 (연출).
-	self:StartScoreAnim(score)
+
+	-- 새 결과창(별 목표) 표시. 이번 판 실적(킬/피격/보스)은 로컬 플레이어 RunStats(@Sync)에서 읽는다.
+	if _ResultUI ~= nil then
+		local kills = 0
+		local hits = 0
+		local bossKilled = false
+		local lp = _UserService.LocalPlayer
+		if isvalid(lp) then
+			---@type RunStats
+			local rs = lp:GetComponent("script.RunStats")
+			if rs ~= nil then
+				kills = rs.Kills
+				hits = rs.HitsTaken
+				bossKilled = rs.BossKilled
+			end
+		end
+		_ResultUI:Show(self.curStage, isClear, kills, hits, score, bossKilled)
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -1022,6 +1039,10 @@ end
 @ExecSpace("ClientOnly")
 method void OnGoLobbyClick(ButtonClickEvent event)
 	-- Result panel button → hide result, reset to waiting, and return to the lobby.
+	-- 새 결과창(ResultGroup)을 닫는다.
+	if _ResultUI ~= nil then
+		_ResultUI:Hide()
+	end
 	if isvalid(self.gameOverPanel) then
 		self.gameOverPanel.Enable = false
 	end
@@ -1056,11 +1077,35 @@ method void OnGoLobbyClick(ButtonClickEvent event)
 end
 
 @ExecSpace("ClientOnly")
+method void OnNextStageClick(ButtonClickEvent event)
+	-- Result 버튼 → 결과창 닫고 다음 스테이지로 진행(방금 클리어했으므로 다음 스테이지는 해금 상태).
+	if _ResultUI ~= nil then
+		_ResultUI:Hide()
+	end
+	-- 런 중에는 클릭버스트 숨김(로비 진입 시 다시 켜짐).
+	if _ClickBurstFx ~= nil then
+		_ClickBurstFx:SetActive(false)
+	end
+	if self.scoreAnimTimer ~= 0 then
+		_TimerService:ClearTimer(self.scoreAnimTimer)
+		self.scoreAnimTimer = 0
+	end
+	if _ScreenFlow ~= nil then
+		_ScreenFlow:GoToNextStage(self.curStage)
+	end
+	log("[RunGameHud] result -> next stage from " .. tostring(self.curStage))
+end
+
+@ExecSpace("ClientOnly")
 method void OnEndPlay()
 	-- Release the result-panel button subscription.
 	if isvalid(self.restartButton) and self.restartHandler ~= nil then
 		self.restartButton:DisconnectEvent(ButtonClickEvent, self.restartHandler)
 		self.restartHandler = nil
+	end
+	if isvalid(self.nextStageButton) and self.nextStageHandler ~= nil then
+		self.nextStageButton:DisconnectEvent(ButtonClickEvent, self.nextStageHandler)
+		self.nextStageHandler = nil
 	end
 	if self.scoreAnimTimer ~= 0 then
 		_TimerService:ClearTimer(self.scoreAnimTimer)

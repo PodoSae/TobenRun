@@ -287,7 +287,7 @@ script UltimateSkill extends Component
         -- R activates the ultimate for the local player only (server validates the gauge).
         if _UserService.LocalPlayer ~= self.Entity then return end
         if event.key == KeyboardKey.R then
-            self:RequestActivate()
+            self:RequestActivateFromInput()
             return
         end
         -- Jumping during the ultimate re-applies gravity (점프하면 다시 중력 적용). Jump keys across the runner:
@@ -298,6 +298,20 @@ script UltimateSkill extends Component
                 or event.key == KeyboardKey.LeftAlt) then
             self:ReleaseGravityLock()
             self:RequestReleaseGravity()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void RequestActivateFromInput()
+        -- R키 / 모바일 궁극기 버튼 공통 진입점. 게이지 full & 비활성일 때만: 컷씬(있으면) 재생 → 종료 시 RequestActivate로
+        -- 실제 발동. Gauge는 @Sync라 클라가 값을 알 수 있어 여기서 미리 거른다(불필요한 컷씬 방지). 로컬 플레이어만.
+        if _UserService.LocalPlayer ~= self.Entity then return end
+        if self.Active then return end
+        if self.Gauge < self.MaxGauge then return end
+        if _UltCutsceneHud ~= nil then
+            _UltCutsceneHud:Play(self.Entity)
+        else
+            self:RequestActivate()
         end
     end
 

@@ -223,9 +223,18 @@ script PlayerController extends Component
 		if self.stunRemaining > 0 then return end   -- 경직 중 점프 불가 (A1)
 		if self.inputLocked then return end          -- 보스 인트로(경고) 등 컷신 중 점프 불가
 		if event.key == KeyboardKey.Space or event.key == KeyboardKey.UpArrow or event.key == KeyboardKey.W then
-			if self.body ~= nil and self.body:IsOnGround() then
-				self.body:AddForce(Vector2(self.jumpFwdForce, self.jumpForce))
-			end
+			self:RequestJump()
+		end
+	end
+
+	@ExecSpace("ClientOnly")
+	method void RequestJump()
+		-- 지상 점프 공개 진입점(키/모바일 버튼 공통). 지상일 때만 위+앞 임펄스. 경직/입력잠금 중엔 무시.
+		if _UserService.LocalPlayer ~= self.Entity then return end
+		if self.stunRemaining > 0 then return end
+		if self.inputLocked then return end
+		if self.body ~= nil and self.body:IsOnGround() then
+			self.body:AddForce(Vector2(self.jumpFwdForce, self.jumpForce))
 		end
 	end
 

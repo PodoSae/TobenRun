@@ -418,7 +418,7 @@ script PowerStrike extends SkillComponent
             local d = direction
             local dmg = effectiveDamage
             _TimerService:SetTimerOnce(function()
-                self:FireBeam(d, dmg)
+                self:FireBeam(d, dmg, 0)
             end, 0.09)
         end
 
@@ -438,6 +438,9 @@ script PowerStrike extends SkillComponent
         -- Acquires a pooled (or fresh) beam and launches it in the facing direction. The beam owns its
         -- own flight/hit config (Speed, MaxLifetime, hitbox, AttackInfo); PowerStrike supplies only the
         -- spawn point, direction, and stat-scaled damage. `lag`(월드유닛)만큼 뒤에서 출발시켜 다단히트를 순차로 만든다.
+        -- lag 미지정 호출(예: 타격수 추가 발사) 대비 nil 가드 — nil이면 뒤 오프셋 없이 0으로 발사.
+        if lag == nil then lag = 0 end
+
         local beam = self:AcquireBeam()
         if beam == nil then
             log("[PowerStrike] Could not acquire a beam")

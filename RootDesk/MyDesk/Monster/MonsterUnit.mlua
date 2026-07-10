@@ -287,11 +287,23 @@ script MonsterUnit extends Component
         -- Marks dead, credits meso to the attacker's owner, then removes the monster entity.
         if self.dead then return end
         self.dead = true
+        self:DisableHitTarget()   -- 사망 즉시 히트 수신 차단(딜레이 중 추가 피격·데미지숫자 방지)
         self:GrantMeso(attacker)
         self:GrantUltGauge(attacker)
         log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' died")
         -- Small delay so the killing-blow damage number can render before the entity is removed.
         self.Entity:Destroy(0.4)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void DisableHitTarget()
+        -- 사망 순간 히트 수신(HitComponent)을 꺼서, 제거 딜레이(Destroy 0.4s) 동안 날아오는 추가 검기가 이 몬스터를
+        -- 히트 대상으로 잡지 않게 한다. 이렇게 하면 죽은 뒤 데미지 숫자가 다시 뜨거나(살아있는 것처럼 보임) 관통 검기가
+        -- 시체에 막히는 일이 없다. HandleHitEvent의 dead 가드는 HP만 막을 뿐 엔진의 히트 판정/데미지스킨은 못 막으므로 필요.
+        local hit = self.Entity.HitComponent
+        if isvalid(hit) then
+            hit.Enable = false
+        end
     end
 
     @ExecSpace("ServerOnly")
@@ -310,6 +322,10 @@ script MonsterUnit extends Component
             log("[MonsterUnit] Granted " .. tostring(self.MesoReward) .. " meso to "
                 .. tostring(beam.OwnerEntity.Name))
         end
+        -- 이번 판 처치 수 +1(결과창 목표 판정용).
+        ---@type RunStats
+        local rs = beam.OwnerEntity:GetComponent("script.RunStats")
+        if rs ~= nil then rs:AddKill() end
     end
 
     @ExecSpace("ServerOnly")
@@ -440,6 +456,7 @@ script MonsterUnit extends Component
         -- 검기 엔티티가 아닌 소스(도트/다단히트)로 처치: 크레딧(메소+궁극기 게이지)을 소유 플레이어에게 직접 지급.
         if self.dead then return end
         self.dead = true
+        self:DisableHitTarget()   -- 사망 즉시 히트 수신 차단(딜레이 중 추가 피격·데미지숫자 방지)
         if isvalid(owner) then
             ---@type PlayerWallet
             local wallet = owner:GetComponent("script.PlayerWallet")
@@ -447,6 +464,9 @@ script MonsterUnit extends Component
             ---@type UltimateSkill
             local ult = owner:GetComponent("script.UltimateSkill")
             if ult ~= nil then ult:AddGauge(ult.KillGaugeGain) end
+            ---@type RunStats
+            local rs = owner:GetComponent("script.RunStats")
+            if rs ~= nil then rs:AddKill() end
         end
         log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' died (dot/burst)")
         self.Entity:Destroy(0.4)

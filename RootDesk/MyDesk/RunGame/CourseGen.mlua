@@ -400,6 +400,14 @@ method void ResetStageBuffsOnMap(Entity map)
 			if hp ~= nil then
 				hp:ResetStageHealthBuffs()
 			end
+			-- 이번 판 실적(킬/피격/보스) 집계 초기화. 없으면 런타임 부착(DefaultPlayer.model 편집 불가).
+			local rs = user:GetComponent("script.RunStats")
+			if rs == nil then rs = user:AddComponent("script.RunStats") end
+			if rs ~= nil then
+				---@type RunStats
+				local rsc = rs
+				rsc:ResetRun()
+			end
 			-- 축복(계정 영구) 재적용: 스테이지 리셋 직후 이 플레이어의 축복 효과 6종을 캐릭터 컴포넌트에 (재)주입한다.
 			-- 스테이지 버프와 달리 리셋 대상이 아니므로, 리셋 이후에 넘겨줘야 이번 판 시작부터 효과가 살아있다.
 			local plc = user.PlayerComponent

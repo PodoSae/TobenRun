@@ -51,17 +51,20 @@ script PlayerHudUI extends Logic
         -- 자석: 클라 @Logic의 남은 시간 사용.
         if _MagnetBuff ~= nil then
             self:SetBuffIcon(self.buffMagnetGroup, self.buffMagnetFill, self.buffMagnetText,
-                _MagnetBuff.remain, _MagnetBuff.activeDuration)
+                _MagnetBuff.remain or 0, _MagnetBuff.activeDuration or 1)
         end
 
-        local now = _UtilLogic.ServerElapsedSeconds
+        -- 서버 경과시간. 클라 초기화 타이밍에 nil일 수 있으니 0으로 폴백.
+        local now = _UtilLogic.ServerElapsedSeconds or 0
 
         -- 무적: PlayerHealth의 @Sync 종료 시각 - 서버 경과시간 = 남은 시간.
+        -- @Sync 값은 첫 프레임에 아직 도착 전이라 nil일 수 있으므로 반드시 nil가드 후 비교한다(LEA-2004 방지).
         ---@type PlayerHealth
         local hp = player:GetComponent("script.PlayerHealth")
         if hp ~= nil then
-            local invRemain = (hp.invincibleEnd > 0) and (hp.invincibleEnd - now) or 0
-            self:SetBuffIcon(self.buffInvincibleGroup, self.buffInvincibleFill, self.buffInvincibleText, invRemain, hp.InvincibleDuration)
+            local invEnd = hp.invincibleEnd or 0
+            local invRemain = (invEnd > 0) and (invEnd - now) or 0
+            self:SetBuffIcon(self.buffInvincibleGroup, self.buffInvincibleFill, self.buffInvincibleText, invRemain, hp.InvincibleDuration or 1)
         end
 
         -- 슬로우검/도트검: PowerStrike의 @Sync 만료 시각 - 서버 경과시간 = 남은 시간.
@@ -73,12 +76,16 @@ script PlayerHudUI extends Logic
             self:SetBuffIcon(self.buffHitGroup, self.buffHitFill, self.buffHitText, 0, 1)
             return
         end
-        local slowRemain = (ps.buffSlowEnd > 0) and (ps.buffSlowEnd - now) or 0
-        local dotRemain = (ps.buffDotEnd > 0) and (ps.buffDotEnd - now) or 0
-        local hitRemain = (ps.buffHitEnd > 0) and (ps.buffHitEnd - now) or 0
-        self:SetBuffIcon(self.buffSlowGroup, self.buffSlowFill, self.buffSlowText, slowRemain, ps.SlowBuffDuration)
-        self:SetBuffIcon(self.buffDotGroup, self.buffDotFill, self.buffDotText, dotRemain, ps.DotBuffDuration)
-        self:SetBuffIcon(self.buffHitGroup, self.buffHitFill, self.buffHitText, hitRemain, ps.HitBuffDuration)
+        -- 여기도 @Sync 값이라 첫 프레임 nil 가능 → or 0 / or 1 폴백.
+        local slowEnd = ps.buffSlowEnd or 0
+        local dotEnd = ps.buffDotEnd or 0
+        local hitEnd = ps.buffHitEnd or 0
+        local slowRemain = (slowEnd > 0) and (slowEnd - now) or 0
+        local dotRemain = (dotEnd > 0) and (dotEnd - now) or 0
+        local hitRemain = (hitEnd > 0) and (hitEnd - now) or 0
+        self:SetBuffIcon(self.buffSlowGroup, self.buffSlowFill, self.buffSlowText, slowRemain, ps.SlowBuffDuration or 1)
+        self:SetBuffIcon(self.buffDotGroup, self.buffDotFill, self.buffDotText, dotRemain, ps.DotBuffDuration or 1)
+        self:SetBuffIcon(self.buffHitGroup, self.buffHitFill, self.buffHitText, hitRemain, ps.HitBuffDuration or 1)
     end
 
     method void SetBuffIcon(Entity group, SpriteGUIRendererComponent fill, TextComponent text, number remain, number duration)

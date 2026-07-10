@@ -1177,6 +1177,48 @@ method string PrevStage(string stage)
 	return ""
 end
 
+method string NextStage(string stage)
+	-- The stage immediately after `stage` in StageList ("" = last stage or not found).
+	local list = self:StageList()
+	for i = 1, #list do
+		if list[i] == stage then
+			if i < #list then
+				return list[i + 1]
+			end
+			return ""
+		end
+	end
+	return ""
+end
+
+@ExecSpace("ClientOnly")
+method void GoToNextStage(string curStage)
+	-- 결과창 '다음 스테이지' 버튼 진입점. 방금 curStage를 클리어했으므로 다음 스테이지는 해금 상태 →
+	-- 잠금 체크 없이 바로 진입(맵은 모든 스테이지 공용 "RunStage"). 다음이 없으면 로비로 복귀.
+	local nextStage = self:NextStage(curStage)
+	if nextStage == "" then
+		if _UIToast ~= nil then
+			_UIToast:ShowMessage("마지막 스테이지를 클리어했습니다!")
+		end
+		self:ShowLobby()
+		log("[ScreenFlow] no next stage after " .. tostring(curStage) .. " -> lobby")
+		return
+	end
+	if isvalid(self.stageSelectRoot) then
+		self.stageSelectRoot.Enable = false
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
+	end
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = false
+	end
+	if _RunGameHud ~= nil then
+		_RunGameHud:GoToStage(nextStage, "RunStage")
+	end
+	log("[ScreenFlow] next stage " .. tostring(curStage) .. " -> " .. tostring(nextStage))
+end
+
 method string AbbreviateNumber(number value)
 	-- Compact currency formatting so long balances stay inside the pill:
 	--   950 -> "950", 12300 -> "12.3K", 4500000 -> "4.5M", 1200000000 -> "1.2B", 3.4e12 -> "3.4T".

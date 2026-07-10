@@ -1669,6 +1669,20 @@ script MushmomBoss extends Component
         -- Boss fight over: resume normal gauge fill (paused=false).
         self:SetPlayersGaugeAutoFill(false)
         self:GrantMeso(attacker)
+        -- 이번 판 보스 처치 표시(맵의 모든 플레이어 RunStats). 결과창 별 목표 판정용.
+        local bmap = self.Entity.CurrentMap
+        if isvalid(bmap) and bmap.MapComponent ~= nil then
+            local busers = _UserService:GetUsersByMapComponent(bmap.MapComponent)
+            if busers ~= nil then
+                for i, bu in ipairs(busers) do
+                    if isvalid(bu) then
+                        ---@type RunStats
+                        local brs = bu:GetComponent("script.RunStats")
+                        if brs ~= nil then brs:SetBossKilled() end
+                    end
+                end
+            end
+        end
         self:SetSprite(self.DieRUID)
         log("[MushmomBoss] died")
         self.Entity:Destroy(1.0)

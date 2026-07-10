@@ -15,8 +15,41 @@ script Obstacle extends Component
     @Sync property number HitHalfWidth = 0.6
     @Sync property number HitHalfHeight = 0.6
     -- Contact box = sprite footprint * this fraction. <1 trims it inside the sprite so a near-miss past the
-    -- visible edge does not hit.
+    -- visible edge does not hit. (AutoSizeHit=true일 때만 사용.)
     property number HitFairness = 0.8
+
+    -- 히트박스 산출 방식. true = 스프라이트 텍스처×Scale로 자동(원점 중심, 기존 방식 — spike/obstacle 등 정렬이
+    -- 맞는 장애물용). false = 아래 수동 값(HitWidth/Height/HitNudge)으로 명시 지정 — 스프라이트 피벗이 그림 중심과
+    -- 어긋나는 경우(예: 몹 스프라이트=발밑 피벗)에 데미지 박스를 눈으로 맞추기 위해 사용한다.
+    @DisplayName("히트박스 자동크기")
+    property boolean AutoSizeHit = true
+    -- 수동 모드(AutoSizeHit=false)에서 데미지 박스의 전체 폭/높이(월드유닛, 스케일과 무관한 절대값).
+    @DisplayName("히트박스 폭(수동)")
+    property number HitWidth = 1.0
+    @DisplayName("히트박스 높이(수동)")
+    property number HitHeight = 1.0
+
+    -- 접촉 박스 중심 오프셋(월드유닛, 엔티티 원점 기준). 자동 모드에서는 아래 HitNudge와 동일, 수동 모드에서도 HitNudge를
+    -- 그대로 쓴다. @Sync로 클라 디버그 오버레이도 같은 위치에 그린다.
+    @Sync property number HitOffsetX = 0
+    @Sync property number HitOffsetY = 0
+    -- 히트박스 중심을 엔티티 원점에서 옮기는 값(월드유닛). 몹 스프라이트처럼 원점이 발밑이면 HitNudgeY로 그림 중심까지 올린다.
+    @DisplayName("히트박스 중심 X")
+    property number HitNudgeX = 0
+    @DisplayName("히트박스 중심 Y")
+    property number HitNudgeY = 0
+
+    -- 슬라이드 회피 지원(천장 스파이크용). true면 CheckHit이 플레이어를 '발~머리' 세로 구간으로 보고 스파이크 세로범위와
+    -- 겹치는지로 판정한다. 슬라이드 중이면 머리높이(top)가 SlideHeight로 낮아져 높은 스파이크 밑을 통과한다(MushmomSpore와
+    -- 동일 패턴). false(기본)면 기존 '발밑 점 vs 박스' 판정 — spike/obstacle 등 다른 장애물은 무영향.
+    @DisplayName("슬라이드 회피 지원")
+    property boolean RespectSlide = false
+    -- 서 있을 때 플레이어 몸통 높이(발 원점 위로, 월드유닛). 이 높이가 스파이크 세로범위에 닿으면 피격.
+    @DisplayName("플레이어 키(서 있을 때)")
+    property number PlayerHeight = 1.2
+    -- 슬라이드 중 플레이어 머리 높이(월드유닛). 이 값보다 위에 있는 스파이크는 통과. PlayerHeight보다 작아야 회피가 성립.
+    @DisplayName("플레이어 키(슬라이드)")
+    property number SlideHeight = 0.4
     -- Safety auto-despawn after this many seconds.
     property number Lifetime = 12.0
 
@@ -62,10 +95,22 @@ script Obstacle extends Component
 
     @ExecSpace("ServerOnly")
     method void AutoSizeHitbox()
-        -- Sizes the contact box to this entity's rendered sprite: (px / PixelPerUnit) * Transform.Scale,
-        -- trimmed by HitFairness. Runs on the server; @Sync sends the result to the client overlay. The
-        -- sprite + scale are baked into each obstacle .model, so the box matches the image with no per-type
-        -- data. LoadSpriteAndWait blocks until the sprite is ready, so this is safe at OnBeginPlay.
+        -- 데미지 박스의 크기(HitHalfWidth/Height)와 중심 오프셋(HitOffsetX/Y)을 정한다. @Sync로 클라 디버그 오버레이에 전달.
+        -- 중심 오프셋은 두 모드 공통으로 HitNudge(인스펙터에서 지정한 값)를 쓴다 — 원점이 그림 중심과 다를 때 눈으로 맞춘다.
+        self.HitOffsetX = self.HitNudgeX
+        self.HitOffsetY = self.HitNudgeY
+
+        if not self.AutoSizeHit then
+            -- 수동 모드: 인스펙터의 절대 폭/높이(월드유닛)를 그대로 사용. 스프라이트 피벗/여백에 영향받지 않는다.
+            self.HitHalfWidth = self.HitWidth * 0.5
+            self.HitHalfHeight = self.HitHeight * 0.5
+            log("[Obstacle] hitbox MANUAL size=" .. string.format("%.2fx%.2f", self.HitWidth, self.HitHeight)
+                .. " center=(" .. string.format("%.2f,%.2f", self.HitOffsetX, self.HitOffsetY) .. ")")
+            return
+        end
+
+        -- 자동 모드: 스프라이트 텍스처 footprint * Transform.Scale * HitFairness, 원점 중심(오프셋=HitNudge).
+        -- LoadSpriteAndWait는 로드 완료까지 블록하므로 OnBeginPlay에서 안전. (spike/obstacle 등 정렬이 맞는 타입용.)
         local spr = self.Entity.SpriteRendererComponent
         if spr == nil then return end
         local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
@@ -73,6 +118,8 @@ script Obstacle extends Component
         local sc = self.Entity.TransformComponent.Scale
         self.HitHalfWidth = (sp.Width / sp.PixelPerUnit) * math.abs(sc.x) * 0.5 * self.HitFairness
         self.HitHalfHeight = (sp.Height / sp.PixelPerUnit) * math.abs(sc.y) * 0.5 * self.HitFairness
+        log("[Obstacle] hitbox AUTO size=" .. string.format("%.2fx%.2f", self.HitHalfWidth * 2, self.HitHalfHeight * 2)
+            .. " center=(" .. string.format("%.2f,%.2f", self.HitOffsetX, self.HitOffsetY) .. ")")
     end
 
     @ExecSpace("ServerOnly")
@@ -119,12 +166,34 @@ script Obstacle extends Component
         if users == nil then return end
 
         local myPos = self.Entity.TransformComponent.WorldPosition
+        -- 판정 박스 중심 = 엔티티 원점 + 히트박스 오프셋(보이는 그림 중심). AutoSizeHitbox가 산출.
+        local cx = myPos.x + self.HitOffsetX
+        local cy = myPos.y + self.HitOffsetY
         for i, user in ipairs(users) do
             if isvalid(user) then
                 local up = user.TransformComponent.WorldPosition
-                local dx = up.x - myPos.x
-                local dy = up.y - myPos.y
-                if math.abs(dx) <= self.HitHalfWidth and math.abs(dy) <= self.HitHalfHeight then
+                local hit = false
+                if self.RespectSlide then
+                    -- 슬라이드 회피: 플레이어를 세로 구간(발-0.2 ~ 발+머리높이)으로 보고 스파이크 세로범위와 겹치는지 판정.
+                    -- 슬라이드 중이면 머리높이(top)가 SlideHeight로 낮아져 높은(천장) 스파이크 밑을 통과한다. 가로는 스파이크 폭 내.
+                    if math.abs(up.x - cx) <= self.HitHalfWidth then
+                        local top = self.PlayerHeight
+                        ---@type Slide
+                        local slide = user:GetComponent("script.Slide")
+                        if slide ~= nil and slide.serverSliding == true then
+                            top = self.SlideHeight
+                        end
+                        if (up.y + top) >= (cy - self.HitHalfHeight) and (up.y - 0.2) <= (cy + self.HitHalfHeight) then
+                            hit = true
+                        end
+                    end
+                else
+                    -- 기존 방식: 플레이어 발밑 점이 박스 안에 있는지(다른 장애물 무영향).
+                    if math.abs(up.x - cx) <= self.HitHalfWidth and math.abs(up.y - cy) <= self.HitHalfHeight then
+                        hit = true
+                    end
+                end
+                if hit then
                     ---@type PlayerHealth
                     local hp = user:GetComponent("script.PlayerHealth")
                     if hp ~= nil then

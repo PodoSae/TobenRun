@@ -47,6 +47,8 @@ script Slide extends Component
     -- (e.g. MushmomSpore's hit test treating a sliding player as a LOW target) can't read it — this flag is
     -- pushed to the server on slide start/end so they can.
     @HideFromInspector property boolean serverSliding = false
+    -- 모바일 슬라이드 버튼 눌림 상태(누르는 동안 true). IsSlideKeyHeld가 키와 OR로 읽어 hold-to-slide로 동작. 클라 로컬.
+    @HideFromInspector property boolean touchHeld = false
     property Vector3 origScale = Vector3(1, 1, 1)
     -- Original PlayRate of the MOVE (walk) body action, captured server-side so the remap can be
     -- restored without resetting the run-animation speed (SetActionSheet would reset it to 1).
@@ -81,8 +83,14 @@ script Slide extends Component
     end
 
     method boolean IsSlideKeyHeld()
-        -- True while either slide key (Down / S) is currently held down on this client.
-        return _InputService:IsKeyPressed(KeyboardKey.DownArrow) or _InputService:IsKeyPressed(KeyboardKey.S)
+        -- True while a slide key (Down / S) is held OR 모바일 슬라이드 버튼이 눌린 상태(touchHeld)면 true.
+        return self.touchHeld or _InputService:IsKeyPressed(KeyboardKey.DownArrow) or _InputService:IsKeyPressed(KeyboardKey.S)
+    end
+
+    @ExecSpace("ClientOnly")
+    method void SetTouchHeld(boolean on)
+        -- 모바일 슬라이드 버튼의 눌림 상태(누르는 동안 true, 떼면 false). OnUpdate의 hold-to-slide 루프가 이 값을 읽는다.
+        self.touchHeld = on
     end
 
     @ExecSpace("ClientOnly")
@@ -108,9 +116,7 @@ script Slide extends Component
             self.controller.speedMultiplier = self.speedMultiplier
         end
 
-        -- Duck the avatar by squashing vertical scale (avatar pivot is at the feet, so the head lowers).
-        self.Entity.TransformComponent.Scale =
-            Vector3(self.origScale.x, self.origScale.y * self.squashY, self.origScale.z)
+        -- (요청: 시각적 Y스케일 찌그러뜨림 제거 — 아바타는 원래 비율 유지. 숙임은 아래 crouch 포즈 애니메이션으로만 표현한다.)
 
         -- Drop into the slide (prone/crouch) body pose. The server remap (MOVE->crouch) makes the
         -- engine drive crouch for the whole slide; the local event is just instant feedback.
@@ -140,7 +146,7 @@ script Slide extends Component
         if self.controller ~= nil then
             self.controller.speedMultiplier = 1
         end
-        self.Entity.TransformComponent.Scale = self.origScale
+        -- (스케일 복원 불필요 — 슬라이드 중 Transform.Scale을 건드리지 않는다.)
         if self.playSlidePose then
             self:RequestSlideAnim(false)
             self:RestoreRunPose()

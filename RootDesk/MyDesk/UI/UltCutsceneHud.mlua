@@ -1,0 +1,121 @@
+@Logic
+@ExecSpace("ClientOnly")
+script UltCutsceneHud extends Logic
+
+    -- 궁극기 발동 직전 재생되는 오리진식 컷씬(클라 전용). UltimateSkill.OnKeyDown이 게이지 full일 때 Play(player)를
+    -- 호출한다 → 러너/입력 정지(보스 인트로와 동일 메커니즘 재사용) → 암전 → 히어로 스킬 이펙트 풀스크린 재생 → 플래시
+    -- → 끝나면 러너 재개 + 그 플레이어의 UltimateSkill:RequestActivate()로 실제 발동. 게이지 소모는 발동 시점에 일어난다.
+
+    -- UI 바인딩(UIBuilder가 write 시 UUID 주입). cutGroup=그룹 루트(show/hide), dark=암전, flash=플래시.
+    property Entity cutGroup = "233569f4-c4fe-42a4-b68a-84d225568361"
+    property SpriteGUIRendererComponent dark = "c9c27649-1d5c-40ca-9ff6-6ef27295a46b"
+    property SpriteGUIRendererComponent flash = "ac73ac7d-c54f-4665-b0ca-9d8d1305dc6f"
+
+    -- 타이밍(초).
+    @DisplayName("암전 페이드인 시간")
+    property number DarkInTime = 0.12
+    @DisplayName("이펙트 홀드 시간")
+    property number HoldTime = 0.55
+    @DisplayName("플래시 시간")
+    property number FlashTime = 0.12
+    @DisplayName("암전 최대 알파")
+    property number DarkAlpha = 0.72
+
+    property boolean playing = false
+    property number t = 0
+    property any pendingPlayer = nil
+
+    method void OnBeginPlay()
+        -- 시작 시 컷씬 숨김.
+        if not self:IsClient() then return end
+        self:HideGroup()
+    end
+
+    method void HideGroup()
+        -- 컷씬 그룹 루트를 끈다(전체 숨김).
+        if isvalid(self.cutGroup) then
+            self.cutGroup.Enable = false
+        end
+    end
+
+    method void Play(Entity player)
+        -- 궁극기 발동 직전 컷씬 시작. player = 컷씬 후 발동할 플레이어. 재생 중이면 무시(중복 방지).
+        if not self:IsClient() then return end
+        if self.playing then return end
+        if not isvalid(player) then return end
+        self.playing = true
+        self.pendingPlayer = player
+        self.t = 0
+
+        -- 러너 전진 + 입력 정지(보스 인트로/부활 팝업과 동일 메커니즘 재사용).
+        if _RunGameHud ~= nil then
+            _RunGameHud:SetRunnerActive(false)
+            _RunGameHud:LockPlayerInput(true)
+        end
+
+        -- 초기 알파(암전/플래시).
+        if isvalid(self.dark) then self.dark.Color = Color(0, 0, 0, 0) end
+        if isvalid(self.flash) then self.flash.Color = Color(1, 1, 1, 0) end
+        if isvalid(self.cutGroup) then self.cutGroup.Enable = true end
+        log("[UltCutsceneHud] play")
+    end
+
+    method void OnUpdate(number delta)
+        -- 타임라인: 암전 페이드인 → 이펙트 홀드 → 플래시 → 종료.
+        if not self:IsClient() then return end
+        if not self.playing then return end
+        self.t = self.t + delta
+        local total = self.DarkInTime + self.HoldTime + self.FlashTime
+
+        -- 암전: DarkInTime 동안 0→DarkAlpha, 이후 유지.
+        local darkA = self.DarkAlpha
+        if self.DarkInTime > 0 and self.t < self.DarkInTime then
+            darkA = self.DarkAlpha * (self.t / self.DarkInTime)
+        end
+        if isvalid(self.dark) then
+            self.dark.Color = Color(0, 0, 0, darkA)
+        end
+
+        -- 플래시: 마지막 FlashTime 구간에 삼각 알파(0→1→0).
+        local flashStart = self.DarkInTime + self.HoldTime
+        local flashA = 0
+        if self.FlashTime > 0 and self.t >= flashStart then
+            local ft = (self.t - flashStart) / self.FlashTime
+            if ft < 0.5 then
+                flashA = ft * 2
+            else
+                flashA = (1 - ft) * 2
+            end
+            if flashA < 0 then flashA = 0 end
+            if flashA > 1 then flashA = 1 end
+        end
+        if isvalid(self.flash) then
+            self.flash.Color = Color(1, 1, 1, flashA)
+        end
+
+        if self.t >= total then
+            self:Finish()
+        end
+    end
+
+    method void Finish()
+        -- 컷씬 종료: 숨김 + 러너 재개 + 궁극기 발동.
+        self.playing = false
+        self:HideGroup()
+        if _RunGameHud ~= nil then
+            _RunGameHud:SetRunnerActive(true)
+            _RunGameHud:LockPlayerInput(false)
+        end
+        local p = self.pendingPlayer
+        self.pendingPlayer = nil
+        if isvalid(p) then
+            ---@type UltimateSkill
+            local ult = p:GetComponent("script.UltimateSkill")
+            if ult ~= nil then
+                ult:RequestActivate()
+            end
+        end
+        log("[UltCutsceneHud] finish -> activate")
+    end
+
+end

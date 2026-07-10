@@ -1,0 +1,214 @@
+@Logic
+@ExecSpace("ClientOnly")
+script ResultUI extends Logic
+
+    -- 게임 결과창(클라 전용). Show(...)에 이번 판 스탯을 넘기면 3개의 목표(별)를 평가해, 달성이면 별을 노란색(찬 별),
+    -- 미달성이면 회색(빈 별)으로 칠하고 각 줄 라벨을 목표에 맞게 갱신한다.
+    --
+    -- 목표 구조: 슬롯 3개 = {타입, 값}. 타입:
+    --   clear   = 스테이지 클리어              (값 무시)
+    --   kills   = 몬스터 처치 수 >= 값
+    --   maxhits = 피격 횟수 <= 값
+    --   score   = 점수 >= 값
+    --   boss    = 보스 처치                    (값 무시)
+    -- 스테이지마다 다른 목표를 주려면 이 슬롯을 StageObjective 데이터셋에서 읽도록 확장하면 된다(구조 동일).
+
+    -- UI 바인딩(UIBuilder가 주입).
+    property Entity resultGroup = "cbfa8f2a-5aab-4547-9325-8713e92f4782"
+    property TextComponent scoreText = "92493ed8-b373-4b62-bcab-ee2ba108a7a4"
+    property SpriteGUIRendererComponent star1 = "b024c4cc-1ef5-4474-b028-699b95d837a7"
+    property SpriteGUIRendererComponent star2 = "00b1747a-f3aa-4e4d-9582-cedd1a5ff499"
+    property SpriteGUIRendererComponent star3 = "763ddc13-2b91-4411-85b7-6c7f2551081c"
+    property TextComponent row1 = "c3705b4a-2e0e-4bd5-acc4-39ad94f7c846"
+    property TextComponent row2 = "bff39277-b891-4db8-bd2c-cf9cc80c2262"
+    property TextComponent row3 = "b1a2bc74-6d01-4951-a73e-78296f9b7c81"
+
+    -- 별 색.
+    @DisplayName("찬 별 색(달성)")
+    property Color StarFull = Color(1, 0.85, 0.2, 1)
+    @DisplayName("빈 별 색(미달성)")
+    property Color StarEmpty = Color(0.28, 0.28, 0.32, 1)
+
+    -- 목표 3슬롯(인스펙터에서 타입/값 변경). 타입: clear / kills / maxhits / score / boss.
+    @DisplayName("목표1 타입")
+    property string Obj1Type = "clear"
+    @DisplayName("목표1 값")
+    property integer Obj1Value = 0
+    @DisplayName("목표2 타입")
+    property string Obj2Type = "score"
+    @DisplayName("목표2 값")
+    property integer Obj2Value = 10000
+    @DisplayName("목표3 타입")
+    property string Obj3Type = "boss"
+    @DisplayName("목표3 값")
+    property integer Obj3Value = 0
+
+    -- 토벤 위 폭죽(런타임에 Loop 재생). 엔티티 UUID로 SpriteGUIRendererComponent 바인딩.
+    property SpriteGUIRendererComponent fw1 = "64169239-8d42-4a17-ae0b-5b9d8b185e53"
+    property SpriteGUIRendererComponent fw2 = "6e0e0af1-e45d-4ac7-91b9-b8ea9d816a1e"
+    @DisplayName("폭죽1 RUID")
+    property string Fw1Ruid = "c48d0f0096604f59852f637e38bda0f5"
+    @DisplayName("폭죽2 RUID")
+    property string Fw2Ruid = "d7437bb56b5c4d4dbb8b4426676b72bc"
+
+    -- 보상 표시(서버 GrantStageReward → ShowReward RPC로 채움). CoinBg=상시 보상, CoinBg_1=최초 보너스 박스.
+    property TextGUIRendererComponent mesoText = "c0133716-9099-423e-aa1a-6a451e1c181a"
+    property TextGUIRendererComponent coinText = "88c00d84-b429-490b-ba0b-a5ce0fe7e72d"
+    property TextGUIRendererComponent firstCoinText = "7dfac19f-dd52-4ec3-9a6d-c540d7d61894"
+    property Entity firstBox = "692c40f4-561d-44af-9111-aced10ad5670"
+
+    method void OnBeginPlay()
+        if not self:IsClient() then return end
+        self:Hide()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Hide()
+        if isvalid(self.resultGroup) then self.resultGroup.Enable = false end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Show(string stage, boolean cleared, integer kills, integer hitsTaken, integer score, boolean bossKilled)
+        -- 이번 판 스탯으로 3목표를 평가 → 별 채움 + 라벨 갱신 + 점수 표시 + 폭죽 + 결과창 표시.
+        -- 목표는 StageObjective 데이터셋의 stage 행에서 읽고, 행이 없으면 인스펙터 기본값을 사용한다.
+        local o1t = self.Obj1Type
+        local o1v = self.Obj1Value
+        local o2t = self.Obj2Type
+        local o2v = self.Obj2Value
+        local o3t = self.Obj3Type
+        local o3v = self.Obj3Value
+        if _DataService ~= nil and stage ~= nil and stage ~= "" then
+            local ds = _DataService:GetTable("StageObjective")
+            if ds ~= nil then
+                local row = ds:FindRow("stage", stage)
+                if row ~= nil then
+                    o1t = self:Cell(row, "obj1Type", o1t)
+                    o1v = self:CellNum(row, "obj1Value", o1v)
+                    o2t = self:Cell(row, "obj2Type", o2t)
+                    o2v = self:CellNum(row, "obj2Value", o2v)
+                    o3t = self:Cell(row, "obj3Type", o3t)
+                    o3v = self:CellNum(row, "obj3Value", o3v)
+                end
+            end
+        end
+
+        if isvalid(self.scoreText) then
+            self.scoreText.Text = self:Comma(score)
+        end
+
+        local m1 = self:Eval(o1t, o1v, cleared, kills, hitsTaken, score, bossKilled)
+        local m2 = self:Eval(o2t, o2v, cleared, kills, hitsTaken, score, bossKilled)
+        local m3 = self:Eval(o3t, o3v, cleared, kills, hitsTaken, score, bossKilled)
+
+        self:SetStar(self.star1, m1)
+        self:SetStar(self.star2, m2)
+        self:SetStar(self.star3, m3)
+
+        if isvalid(self.row1) then self.row1.Text = self:Label(o1t, o1v) end
+        if isvalid(self.row2) then self.row2.Text = self:Label(o2t, o2v) end
+        if isvalid(self.row3) then self.row3.Text = self:Label(o3t, o3v) end
+
+        -- 토벤 위 폭죽 재생(매번 첫 프레임부터 루프).
+        self:PlayFirework(self.fw1, self.Fw1Ruid)
+        self:PlayFirework(self.fw2, self.Fw2Ruid)
+
+        -- 보상 표시 초기화(서버 보상 RPC ShowReward가 곧 채운다). 최초 보너스 박스는 숨겨둔다.
+        if isvalid(self.mesoText) then self.mesoText.Text = "0 메소" end
+        if isvalid(self.coinText) then self.coinText.Text = "0 토벤코인" end
+        if isvalid(self.firstCoinText) then self.firstCoinText.Text = "0 토벤코인" end
+        if isvalid(self.firstBox) then self.firstBox.Enable = false end
+
+        if isvalid(self.resultGroup) then self.resultGroup.Enable = true end
+        log("[ResultUI] show stage=" .. tostring(stage) .. " cleared=" .. tostring(cleared) .. " kills=" .. tostring(kills)
+            .. " hits=" .. tostring(hitsTaken) .. " score=" .. tostring(score) .. " boss=" .. tostring(bossKilled)
+            .. " -> stars " .. tostring(m1) .. "/" .. tostring(m2) .. "/" .. tostring(m3))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ShowReward(integer meso, integer coin, boolean isFirst)
+        -- 서버가 실제 지급한 보상 표시. CoinBg=획득 메소+토벤코인, CoinBg_1("최초")=최초 클리어일 때만 표시.
+        if isvalid(self.mesoText) then self.mesoText.Text = self:Comma(meso) .. " 메소" end
+        if isvalid(self.coinText) then self.coinText.Text = self:Comma(coin) .. " 토벤코인" end
+        if isvalid(self.firstCoinText) then self.firstCoinText.Text = self:Comma(coin) .. " 토벤코인" end
+        if isvalid(self.firstBox) then self.firstBox.Enable = isFirst end
+        log("[ResultUI] reward meso=" .. tostring(meso) .. " coin=" .. tostring(coin) .. " first=" .. tostring(isFirst))
+    end
+
+    method boolean Eval(string t, integer v, boolean cleared, integer kills, integer hits, integer score, boolean boss)
+        -- 목표 타입별 달성 판정.
+        if t == "clear" then return cleared end
+        if t == "kills" then return kills >= v end
+        if t == "maxhits" then return hits <= v end
+        if t == "score" then return score >= v end
+        if t == "boss" then return boss end
+        return false
+    end
+
+    method string Label(string t, integer v)
+        -- 목표 타입별 표시 라벨(줄 텍스트).
+        if t == "clear" then return "스테이지 클리어" end
+        if t == "kills" then return "몬스터 " .. tostring(v) .. "마리 처치" end
+        if t == "maxhits" then return "피격 " .. tostring(v) .. "회 이하" end
+        if t == "score" then return "스코어 " .. self:Comma(v) .. "점 이상" end
+        if t == "boss" then return "보스 처치" end
+        return "-"
+    end
+
+    method void SetStar(SpriteGUIRendererComponent star, boolean achieved)
+        -- 달성이면 찬 별(노란색), 아니면 빈 별(회색).
+        if not isvalid(star) then return end
+        if achieved then
+            star.Color = self.StarFull
+        else
+            star.Color = self.StarEmpty
+        end
+    end
+
+    method string Comma(integer n)
+        -- 천단위 콤마.
+        local s = tostring(n)
+        local neg = false
+        if string.sub(s, 1, 1) == "-" then
+            neg = true
+            s = string.sub(s, 2)
+        end
+        local out = ""
+        local cnt = 0
+        local i = string.len(s)
+        while i >= 1 do
+            out = string.sub(s, i, i) .. out
+            cnt = cnt + 1
+            if cnt % 3 == 0 and i > 1 then
+                out = "," .. out
+            end
+            i = i - 1
+        end
+        if neg then out = "-" .. out end
+        return out
+    end
+
+    method string Cell(any row, string col, string fallback)
+        -- 데이터 행에서 문자열 셀 읽기(빈 값이면 fallback). row = UserDataRow.
+        local v = row:GetItem(col)
+        if v == nil or v == "" then return fallback end
+        return v
+    end
+
+    method integer CellNum(any row, string col, integer fallback)
+        -- 데이터 행에서 정수 셀 읽기(변환 실패 시 fallback).
+        local v = row:GetItem(col)
+        local n = tonumber(v)
+        if n == nil then return fallback end
+        return math.floor(n)
+    end
+
+    method void PlayFirework(SpriteGUIRendererComponent fw, string ruid)
+        -- 결과창이 뜰 때마다 폭죽 애니메이션을 Loop로 재생(RUID 재할당으로 첫 프레임부터 재시작).
+        if not isvalid(fw) then return end
+        fw.AnimClipPlayType = SpriteAnimClipPlayType.Loop
+        if ruid ~= nil and ruid ~= "" then
+            fw.ImageRUID = DataRef(ruid)
+        end
+    end
+
+end

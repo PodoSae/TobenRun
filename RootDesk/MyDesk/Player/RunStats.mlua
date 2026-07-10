@@ -1,0 +1,33 @@
+@Component
+script RunStats extends Component
+
+    -- 이번 판(스테이지) 실적 집계. 서버 권위로 증가하고 @Sync로 클라에 반영 → 게임 종료 시 ResultUI가 읽어 별 목표를 판정.
+    -- 스테이지 (재)진입마다 CourseGen.ResetStageBuffsOnMap에서 ResetRun()으로 초기화된다.
+    @Sync property integer Kills = 0        -- 몬스터 처치 수
+    @Sync property integer HitsTaken = 0    -- 실제 피해를 받은(피격) 횟수
+    @Sync property boolean BossKilled = false -- 이번 판에서 보스를 처치했는지
+
+    @ExecSpace("ServerOnly")
+    method void ResetRun()
+        -- 스테이지 시작 시 초기화.
+        self.Kills = 0
+        self.HitsTaken = 0
+        self.BossKilled = false
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddKill()
+        self.Kills = self.Kills + 1
+    end
+
+    @ExecSpace("ServerOnly")
+    method void AddHit()
+        self.HitsTaken = self.HitsTaken + 1
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetBossKilled()
+        self.BossKilled = true
+    end
+
+end
