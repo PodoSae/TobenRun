@@ -442,6 +442,9 @@ script MushmomBoss extends Component
     @HideFromInspector property boolean engaged = false
     @HideFromInspector property boolean entering = false
     @HideFromInspector property number chargeDir = -1
+    -- 튜토리얼 전용: true면 일반 공격(HandleHitEvent)으로는 HP가 깎이지 않는다(피격 연출/게이지는 유지).
+    -- 궁극기(ApplyExternalDamage 경로)만 보스를 죽일 수 있게 해, "궁극기를 써야 보스가 죽는" 튜토리얼 흐름을 보장.
+    @HideFromInspector property boolean TutorialInvincible = false
 
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
@@ -1470,6 +1473,13 @@ script MushmomBoss extends Component
         -- 피격 애니메이션: 스프라이트 히트 플래시(전 클라).
         self:PlayHitFlash()
         local dmg = event.TotalDamage
+        -- 튜토리얼 무적: 궁극기 전까지 죽지 않는다. 피격 연출(위 파티클/플래시)은 남기고 게이지 충전만 유지하되
+        -- HP 감소/도트/타수/사망/그로기 크릿 숫자는 모두 건너뛴다(그로기 처리 앞에 두어 '264' 같은 오해 숫자 방지).
+        -- 궁극기는 ApplyExternalDamage 경로라 이 무적을 무시하고 정상 처치한다.
+        if self.TutorialInvincible then
+            self:GrantUltGauge(event.AttackerEntity)
+            return
+        end
         if self.groggy then
             dmg = dmg * self.GroggyDamageMultiplier
             -- Auto DamageSkin is off during groggy, so show ONE total number in crit style.

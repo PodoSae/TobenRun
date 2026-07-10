@@ -47,6 +47,10 @@ property number spawnX = 0
 property number spawnY = 0
 property number bestX = 0
 property number goalX = 0
+-- 로딩 전환 연동: holdStart=true면 스테이지 도착 시 러너를 자동 시작하지 않고 대기(startHeld=true)했다가,
+-- 로딩 커버가 페이드아웃하는 순간 BeginHeldRun()으로 시작한다("인게임은 화면이 꺼질 때 시작").
+property boolean holdStart = false
+property boolean startHeld = false
 -- Boss course (Set,goal,boss): no fixed clear line — keep running while the floor auto-extends, and
 -- Clear only once the boss that appeared has been defeated. bossSeen tracks "a boss has existed".
 property boolean bossMode = false
@@ -487,20 +491,52 @@ method void OnArriveMap(Entity player)
 	-- If a stage was selected (teleport in flight), auto-start the run on arrival.
 	if self.pendingStart then
 		self.pendingStart = false
-		self.isAlive = true
-		if self.BossIntroOnArriveMap ~= "" and self.curMapName == self.BossIntroOnArriveMap then
-			-- 치트 보스 테스트 맵: 골 접근과 무관하게 도착 즉시 보스 경고 인트로를 재생한다. 연출이 끝나면
-			-- EndBossIntro가 러너를 재개한다(보스는 CourseBossTest의 Boss 행으로 이미 배치됨).
-			self:BeginBossIntro()
-			log("[RunGameHud] boss-test map: boss intro on arrival (" .. tostring(self.curMapName) .. ")")
+		if self.holdStart then
+			-- 로딩 커버가 걷힐 때(BeginHeldRun) 시작한다. 지금은 스폰에 멈춰 대기.
+			self.isAlive = false
+			self:SetRunnerActive(false)
+			self.startHeld = true
+			log("[RunGameHud] arrival held (waiting for loading fade-out)")
 		else
-			self:SetRunnerActive(true)
-			log("[RunGameHud] auto-start on arrival")
+			self.isAlive = true
+			if self.BossIntroOnArriveMap ~= "" and self.curMapName == self.BossIntroOnArriveMap then
+				-- 치트 보스 테스트 맵: 골 접근과 무관하게 도착 즉시 보스 경고 인트로를 재생한다. 연출이 끝나면
+				-- EndBossIntro가 러너를 재개한다(보스는 CourseBossTest의 Boss 행으로 이미 배치됨).
+				self:BeginBossIntro()
+				log("[RunGameHud] boss-test map: boss intro on arrival (" .. tostring(self.curMapName) .. ")")
+			else
+				self:SetRunnerActive(true)
+				log("[RunGameHud] auto-start on arrival")
+			end
 		end
 	else
 		self.isAlive = false
 		self:SetRunnerActive(false)
 	end
+end
+
+@ExecSpace("ClientOnly")
+method void GoToStageHeld(string stage, string mapName)
+	-- 로딩 커버가 덮인 동안 호출: 스테이지로 이동/셋업하되 러너는 대기(BeginHeldRun 전까지 정지). 로딩 전환 전용.
+	self.holdStart = true
+	self:GoToStage(stage, mapName)
+end
+
+@ExecSpace("ClientOnly")
+method void BeginHeldRun()
+	-- 로딩 페이드아웃 시점에 호출: 대기 중이던(startHeld) 러너를 실제로 시작한다("화면이 꺼질 때 시작").
+	self.holdStart = false
+	if not self.startHeld then
+		return
+	end
+	self.startHeld = false
+	self.isAlive = true
+	if self.BossIntroOnArriveMap ~= "" and self.curMapName == self.BossIntroOnArriveMap then
+		self:BeginBossIntro()
+	else
+		self:SetRunnerActive(true)
+	end
+	log("[RunGameHud] held run started (loading fade-out)")
 end
 
 @ExecSpace("ClientOnly")
@@ -937,7 +973,9 @@ method void ShowResult(string title, integer score, boolean isClear)
 	end
 
 	-- 새 결과창(별 목표) 표시. 이번 판 실적(킬/피격/보스)은 로컬 플레이어 RunStats(@Sync)에서 읽는다.
-	if _ResultUI ~= nil then
+	-- 튜토리얼 스테이지("0-0"/"0-1")는 결과창을 띄우지 않는다 — TutorialManager가 곧바로 다음 단계(로비)로 넘긴다.
+	local isTutStage = (self.curStage == "0-0" or self.curStage == "0-1")
+	if _ResultUI ~= nil and isTutStage == false then
 		local kills = 0
 		local hits = 0
 		local bossKilled = false

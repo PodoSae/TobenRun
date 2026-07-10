@@ -1,0 +1,114 @@
+@Logic
+@ExecSpace("ClientOnly")
+script LoadingScreen extends Logic
+
+-- 화면 전환용 로딩/커버 오버레이(클라 전용 @Logic). ui/LoadingGroup(전체화면 Cover 스프라이트)을 페이드 인/아웃한다.
+-- 흐름: Cover(coveredFn, revealFn) 호출 → 페이드 인(검정으로 덮음) → 완전히 덮이면 coveredFn()(화면 전환 수행:
+--   맵 이동/스테이지 셋업/로비 표시 등) → 잠깐 유지 → 페이드 아웃 시작 시 revealFn()(인게임이면 여기서 러너 시작
+--   = "화면이 꺼질 때 시작") → 다 걷히면 숨김. Cover 스프라이트에 이미지 RUID를 주면 검정 대신 이미지로 덮인다.
+
+@DisplayName("커버 이미지 RUID(비우면 검정)")
+@Description("전체화면 커버에 표시할 이미지. 비우면 검정 단색. 나중에 로딩 이미지 RUID로 교체 가능")
+property string CoverImageRUID = ""
+@DisplayName("페이드 인 시간(초)")
+property number FadeInSec = 0.35
+@DisplayName("완전히 덮인 뒤 유지(초)")
+property number HoldSec = 0.15
+@DisplayName("페이드 아웃 시간(초)")
+property number FadeOutSec = 0.45
+
+-- 진행 상태: 0=대기, 1=페이드인, 2=유지, 3=페이드아웃.
+property integer phase = 0
+property number t = 0
+property boolean coveredFired = false
+
+method void OnBeginPlay()
+	-- 커버 이미지(있으면) 적용 후 투명하게 숨긴다.
+	local cover = _EntityService:GetEntityByPath("/ui/LoadingGroup/Cover")
+	if isvalid(cover) and cover.SpriteGUIRendererComponent ~= nil and self.CoverImageRUID ~= nil and self.CoverImageRUID ~= "" then
+		cover.SpriteGUIRendererComponent.ImageRUID = DataRef(self.CoverImageRUID)
+	end
+	self:SetCoverAlpha(0)
+	self:HideRoot()
+	log("[LoadingScreen] ready")
+end
+
+method void Cover(any coveredCallback, any revealCallback)
+	-- 페이드 인 시작. coveredCallback=완전히 덮였을 때(전환 수행), revealCallback=페이드아웃 시작 시(인게임 시작). 둘 다 nil 허용.
+	-- 진행 중이면 새 요청으로 덮어쓴다(마지막 전환 우선).
+	self._T.coveredFn = coveredCallback
+	self._T.revealFn = revealCallback
+	self.coveredFired = false
+	self.t = 0
+	self.phase = 1
+	self:ShowRoot()
+	self:SetCoverAlpha(0)
+end
+
+@ExecSpace("ClientOnly")
+method void OnUpdate(number delta)
+	if self.phase == 0 then return end
+	self.t = self.t + delta
+	if self.phase == 1 then
+		-- 페이드 인: alpha 0 → 1.
+		local d = self.FadeInSec
+		if d <= 0 then d = 0.01 end
+		local a = self.t / d
+		if a >= 1 then a = 1 end
+		self:SetCoverAlpha(a)
+		if a >= 1 then
+			if not self.coveredFired then
+				self.coveredFired = true
+				local fn = self._T.coveredFn
+				if fn ~= nil then fn() end
+			end
+			self.phase = 2
+			self.t = 0
+		end
+	elseif self.phase == 2 then
+		-- 완전히 덮인 채 잠깐 유지 → 페이드 아웃 시작.
+		if self.t >= self.HoldSec then
+			local fn = self._T.revealFn
+			if fn ~= nil then fn() end
+			self.phase = 3
+			self.t = 0
+		end
+	elseif self.phase == 3 then
+		-- 페이드 아웃: alpha 1 → 0.
+		local d = self.FadeOutSec
+		if d <= 0 then d = 0.01 end
+		local a = 1 - (self.t / d)
+		if a <= 0 then a = 0 end
+		self:SetCoverAlpha(a)
+		if a <= 0 then
+			self.phase = 0
+			self:HideRoot()
+		end
+	end
+end
+
+method void SetCoverAlpha(number a)
+	-- 커버 스프라이트 + 라벨의 알파를 함께 조절.
+	local cover = _EntityService:GetEntityByPath("/ui/LoadingGroup/Cover")
+	if isvalid(cover) and cover.SpriteGUIRendererComponent ~= nil then
+		local c = cover.SpriteGUIRendererComponent.Color
+		cover.SpriteGUIRendererComponent.Color = Color(c.r, c.g, c.b, a)
+	end
+	local label = _EntityService:GetEntityByPath("/ui/LoadingGroup/Cover/Label")
+	if isvalid(label) and label.TextComponent ~= nil then
+		local fc = label.TextComponent.FontColor
+		label.TextComponent.FontColor = Color(fc.r, fc.g, fc.b, a)
+	end
+end
+
+method void ShowRoot()
+	local root = _EntityService:GetEntityByPath("/ui/LoadingGroup")
+	if isvalid(root) then root.Enable = true end
+end
+
+method void HideRoot()
+	local root = _EntityService:GetEntityByPath("/ui/LoadingGroup")
+	if isvalid(root) then root.Enable = false end
+end
+
+end
