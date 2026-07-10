@@ -199,7 +199,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "e06850667da2401d921925896b40e00b"
+                "DataId": "b376eefa6ef14471bb9fa19c51259445"
               },
               "LocalPosition": {
                 "x": 0.0,
@@ -5153,7 +5153,7 @@
               "Text": "모험 시작",
               "UseConstraintX": false,
               "UseConstraintY": false,
-              "UseOutLine": true,
+              "UseOutLine": false,
               "Enable": true
             }
           ],

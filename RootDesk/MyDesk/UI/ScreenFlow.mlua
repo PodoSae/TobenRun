@@ -858,6 +858,31 @@ method any BlessEffectColor(string effectId)
 	return Color(0.9, 0.3, 0.3, 1)
 end
 
+method string BlessEffectIcon(string effectId)
+	-- Dedicated sprite RUID for effects that have a real icon; others fall back to the color swatch.
+	if effectId == "swift" then
+		return "1c4508e357784c15be1caf2828b01ef8"
+	elseif effectId == "crit" then
+		return "ee044e735c3148c49797f4f1a8b5f3fa"
+	end
+	return ""
+end
+
+method void ApplyBlessIcon(any iconEnt, string effectId)
+	-- Set an effect icon: real sprite (white tint) when one exists, otherwise the tinted color swatch.
+	if not isvalid(iconEnt) or iconEnt.SpriteGUIRendererComponent == nil then
+		return
+	end
+	local ruid = self:BlessEffectIcon(effectId)
+	if ruid ~= "" then
+		iconEnt.SpriteGUIRendererComponent.ImageRUID = DataRef(ruid)
+		iconEnt.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+	else
+		iconEnt.SpriteGUIRendererComponent.ImageRUID = DataRef("4fea64a3307cda641809ad8be0d4890b")
+		iconEnt.SpriteGUIRendererComponent.Color = self:BlessEffectColor(effectId)
+	end
+end
+
 @ExecSpace("ClientOnly")
 method void RefreshBlessUI()
 	-- Update the 축복 page from save: level header, level-up cost, top point pill, and each effect row
@@ -915,18 +940,41 @@ method void RefreshBlessUI()
 				local id = row:GetItem("id")
 				if id ~= nil and id ~= "" then
 					local elv = _PlayerSave:GetEffectLevel(id)
+					local maxLv = tonumber(row:GetItem("maxLevel")) or 5
+					-- 효과 이름 옆에 현재 축복효과 레벨(Lv.N) 표기.
 					local nameEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Name")
 					if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
-						nameEnt.TextComponent.Text = tostring(row:GetItem("name"))
+						nameEnt.TextComponent.Text = tostring(row:GetItem("name")) .. "   Lv." .. tostring(elv)
 					end
 					local descEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Desc")
 					if isvalid(descEnt) and descEnt.TextComponent ~= nil then
 						descEnt.TextComponent.Text = self:BlessEffectDesc(id)
 					end
+					-- 기존 Lv 자리(LvPill)에는 강화 시 소모되는 축복 포인트 값을 아이콘과 함께 표기(최대면 MAX).
+					local atMaxRow = (elv >= maxLv)
 					local lvTxt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/LvPill/Txt")
 					if isvalid(lvTxt) and lvTxt.TextComponent ~= nil then
-						lvTxt.TextComponent.Text = "Lv." .. tostring(elv)
+						if atMaxRow then
+							lvTxt.TextComponent.Text = "MAX"
+						else
+							lvTxt.TextComponent.Text = tostring(_PlayerSave:EffectUpgradeCost(elv))
+						end
+						if lvTxt.UITransformComponent ~= nil then
+							if atMaxRow then
+								lvTxt.UITransformComponent.anchoredPosition = Vector2(0, 0)
+							else
+								lvTxt.UITransformComponent.anchoredPosition = Vector2(14, 0)
+							end
+						end
 					end
+					-- 축복 포인트 아이콘: 비용이 있는 상태에서만 표시.
+					local lvIcon = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/LvPill/Icon")
+					if isvalid(lvIcon) then
+						lvIcon.Enable = (atMaxRow == false)
+					end
+					-- 효과 아이콘(속사/즉사는 전용 스프라이트, 나머지는 색상칸).
+					local rowIcon = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id .. "/Icon")
+					self:ApplyBlessIcon(rowIcon, id)
 					-- Selection highlight (selected row bright, others tan).
 					local rowEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/Row_" .. id)
 					if isvalid(rowEnt) and rowEnt.SpriteGUIRendererComponent ~= nil then
@@ -972,9 +1020,7 @@ method void RefreshBlessDetail()
 		descEnt.TextComponent.Text = self:BlessEffectDesc(id)
 	end
 	local iconEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetIcon")
-	if isvalid(iconEnt) and iconEnt.SpriteGUIRendererComponent ~= nil then
-		iconEnt.SpriteGUIRendererComponent.Color = self:BlessEffectColor(id)
-	end
+	self:ApplyBlessIcon(iconEnt, id)
 	local lvEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/DetLv")
 	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
 		if elv >= maxLv then
@@ -1027,22 +1073,17 @@ method void RefreshBlessDetail()
 		local costEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn/CostText")
 		if isvalid(costEnt) and costEnt.TextComponent ~= nil then
 			costEnt.TextComponent.Text = costText
-			-- MAX일 땐 아이콘 숨김 → 'MAX'를 슬롯 정중앙(x=0)에. 비용 표시일 땐 아이콘+값을 하나의 묶음으로 가운데 정렬(x=14).
+			-- 값(숫자/MAX)은 항상 슬롯 정중앙(x=0)에 고정 → MAX↔비용 전환 시 값이 움직이지 않는다.
 			if costEnt.UITransformComponent ~= nil then
-				if atMax then
-					costEnt.UITransformComponent.anchoredPosition = Vector2(0, 18)
-				else
-					costEnt.UITransformComponent.anchoredPosition = Vector2(14, 18)
-				end
+				costEnt.UITransformComponent.anchoredPosition = Vector2(0, 18)
 			end
 		end
-		-- 축복 포인트 아이콘: 비용이 있는 상태에서만 값 앞에 표시(최대 레벨이면 'MAX'만 남기고 숨김).
-		-- 아이콘도 왼쪽으로 살짝 당겨(x=-20) 값(x=14)과 겹치지 않게 띄우면서 아이콘+값 묶음이 버튼 가운데에 오도록 한다.
+		-- 축복 포인트 아이콘: 비용이 있을 때만, 중앙 고정 값의 왼쪽(x=-40)에 표시(값과 안 겹침). MAX면 숨김.
 		local iconEnt = _EntityService:GetEntityByPath("/ui/BlessGroup/DetailPanel/Detail/UpgradeBtn/CostIcon")
 		if isvalid(iconEnt) then
 			iconEnt.Enable = (atMax == false)
 			if iconEnt.UITransformComponent ~= nil then
-				iconEnt.UITransformComponent.anchoredPosition = Vector2(-20, 18)
+				iconEnt.UITransformComponent.anchoredPosition = Vector2(-40, 18)
 			end
 		end
 	end
@@ -1098,14 +1139,15 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnBlessAllTabClick(ButtonClickEvent event)
-	-- ALL tab: show every effect (already all shown) — just keep it visually selected.
+	-- ALL tab: show every effect (already all shown). Tabs now use background images,
+	-- so keep both tints white — no color change on click (per user request).
 	local allTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/AllTab")
 	if isvalid(allTab) and allTab.SpriteGUIRendererComponent ~= nil then
-		allTab.SpriteGUIRendererComponent.Color = Color(0.99, 0.93, 0.72, 1)
+		allTab.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
 	end
 	local lockTab = _EntityService:GetEntityByPath("/ui/BlessGroup/LeftRail/LockTab")
 	if isvalid(lockTab) and lockTab.SpriteGUIRendererComponent ~= nil then
-		lockTab.SpriteGUIRendererComponent.Color = Color(0.42, 0.36, 0.30, 1)
+		lockTab.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
 	end
 	log("[ScreenFlow] bless tab: ALL")
 end
