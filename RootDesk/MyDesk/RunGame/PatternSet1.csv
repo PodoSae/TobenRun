@@ -1,6 +1,6 @@
 ﻿cmd,p1,p2,p3
 Set,size,50,
-Spawn,coin,8,
+Spawn,sporewall,8,
 Spawn,coin,9,
 Spawn,coin,10,
 Spawn,coin,11,

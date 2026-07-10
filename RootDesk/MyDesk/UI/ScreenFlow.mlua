@@ -40,14 +40,18 @@ property any shopCells = nil
 property any gaugeTimers = nil
 -- 축복 button icon idle animation (3 layers): aura (static, glow pulse) + wings (flap) + sword (float).
 property any blessWings = nil
-property any blessSword = nil
+property any blessRing = nil
 property any blessAura = nil
 property number blessT = 0
-property number swBaseX = 0
-property number swBaseY = 0
+property number ringBaseX = 0
+property number ringBaseY = 0
 property number wgBaseSX = 1
 property number wgBaseSY = 1
 property boolean blessInit = false
+-- 장비 button icon idle animation: gentle vertical float (bob up/down).
+property any equipIcon = nil
+property number eqBaseX = 0
+property number eqBaseY = 0
 
 @ExecSpace("ClientOnly")
 method void OnBeginPlay()
@@ -173,10 +177,12 @@ method void OnBeginPlay()
 	if isvalid(closeBtn) then
 		self.blessCloseHandler = closeBtn:ConnectEvent(ButtonClickEvent, self.OnBlessDetailClose)
 	end
-	-- Cache the 축복 icon's 3 animation layers (aura / wings / sword) for the idle animation.
+	-- Cache the 축복 icon's 3 animation layers (aura / wings / ring) for the idle animation.
 	self.blessAura = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon")
 	self.blessWings = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/Wings")
-	self.blessSword = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/Sword")
+	self.blessRing = _EntityService:GetEntityByPath("/ui/LobbyGroup/BlessBtn/Icon/ring")
+	-- Cache the 장비 button icon (child of the button's Aura) for its idle vertical float.
+	self.equipIcon = _EntityService:GetEntityByPath("/ui/LobbyGroup/EquipBtn/Aura/Icon")
 	local settingsBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/SettingsBtn")
 	if isvalid(settingsBtn) then
 		self.settingsHandler = settingsBtn:ConnectEvent(ButtonClickEvent, self.OnSettingsClick)
@@ -233,7 +239,7 @@ end
 method void AnimateBlessIcon(number delta)
 	-- Idle 축복 emblem animation (3 independent layers), only while the lobby is visible:
 	--   wings  → quick horizontal-scale flap (with a small vertical counter-beat)
-	--   sword  → slow vertical float (bob up/down)
+	--   ring   → slow vertical float (bob up/down)
 	--   aura   → gentle glow pulse via alpha
 	-- Base transforms are captured once on the first tick.
 	if isvalid(self.lobbyRoot) == false or self.lobbyRoot.Enable == false then
@@ -246,20 +252,31 @@ method void AnimateBlessIcon(number delta)
 			self.wgBaseSX = sc.x
 			self.wgBaseSY = sc.y
 		end
-		if isvalid(self.blessSword) and self.blessSword.UITransformComponent ~= nil then
-			local ap = self.blessSword.UITransformComponent.anchoredPosition
-			self.swBaseX = ap.x
-			self.swBaseY = ap.y
+		if isvalid(self.blessRing) and self.blessRing.UITransformComponent ~= nil then
+			local ap = self.blessRing.UITransformComponent.anchoredPosition
+			self.ringBaseX = ap.x
+			self.ringBaseY = ap.y
+		end
+		if isvalid(self.equipIcon) and self.equipIcon.UITransformComponent ~= nil then
+			local ep = self.equipIcon.UITransformComponent.anchoredPosition
+			self.eqBaseX = ep.x
+			self.eqBaseY = ep.y
 		end
 		self.blessInit = true
 	end
 	if isvalid(self.blessWings) and self.blessWings.UITransformComponent ~= nil then
 		local flap = math.sin(self.blessT * 6.5)
+		-- Original flap: X-scale grows/shrinks while Y counter-beats (wings beat).
 		self.blessWings.UITransformComponent.UIScale = Vector3(self.wgBaseSX * (1.0 + 0.12 * flap), self.wgBaseSY * (1.0 - 0.06 * flap), 1)
 	end
-	if isvalid(self.blessSword) and self.blessSword.UITransformComponent ~= nil then
+	if isvalid(self.blessRing) and self.blessRing.UITransformComponent ~= nil then
 		local bob = 6.0 * math.sin(self.blessT * 2.4)
-		self.blessSword.UITransformComponent.anchoredPosition = Vector2(self.swBaseX, self.swBaseY + bob)
+		self.blessRing.UITransformComponent.anchoredPosition = Vector2(self.ringBaseX, self.ringBaseY + bob)
+	end
+	-- 장비 icon → slow vertical float (bob up/down), slightly offset in phase from the 축복 ring.
+	if isvalid(self.equipIcon) and self.equipIcon.UITransformComponent ~= nil then
+		local eqBob = 7.0 * math.sin(self.blessT * 2.2 + 1.0)
+		self.equipIcon.UITransformComponent.anchoredPosition = Vector2(self.eqBaseX, self.eqBaseY + eqBob)
 	end
 	if isvalid(self.blessAura) and self.blessAura.SpriteGUIRendererComponent ~= nil then
 		local c = self.blessAura.SpriteGUIRendererComponent.Color
