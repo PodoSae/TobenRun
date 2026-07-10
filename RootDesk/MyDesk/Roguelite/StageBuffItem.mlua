@@ -43,7 +43,7 @@ script StageBuffItem extends Component
     @MinValue(1)
     @MaxValue(15)
     @Delta(0.5)
-    property number Range = 4.5
+    property number Range = 2.25
 
     @DisplayName("획득 이펙트 RUID")
     @Description("먹었을 때 재생할 이펙트. 비우면 없음")

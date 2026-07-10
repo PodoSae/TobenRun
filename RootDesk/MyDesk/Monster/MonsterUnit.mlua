@@ -75,6 +75,9 @@ script MonsterUnit extends Component
     -- 피격 타격 이펙트(animationclip). 값이 있으면 내장 파티클 대신 이 이펙트를 EffectService로 재생한다.
     @DisplayName("피격 이펙트 RUID")
     property string HitEffectRUID = "b4e2c5447f2e45a4a16745ba3dcb54fd"
+    -- 급소 일격 즉사 시 몬스터 위치에 1회 재생하는 이펙트(animationclip). 비우면 없음.
+    @DisplayName("즉사 이펙트 RUID")
+    property string InstakillEffectRUID = "0224a00456c54a6bb8ae18ba9d41c66c"
 
     -- ── 피격 애니메이션(히트 플래시) ──
     -- 스프라이트 몬스터는 상태-애니메이션 파이프라인이 없어 아바타식 ChangeState("HIT")를 못 쓴다. 대신 피격 순간
@@ -158,7 +161,7 @@ script MonsterUnit extends Component
     @DisplayName("다단히트 숫자 높이 오프셋")
     property number BurstSkinOffsetY = 0.7
     @DisplayName("다단히트 숫자 좌우 흩뿌림")
-    property number BurstSkinSpreadX = 0.5
+    property number BurstSkinSpreadX = 0.3
     @DisplayName("다단히트 숫자 크기")
     property number BurstSkinScale = 1.0
 
@@ -277,6 +280,24 @@ script MonsterUnit extends Component
     end
 
     @ExecSpace("Multicast")
+    method void PlayInstakillEffect()
+        -- 급소 일격 즉사 시 몬스터 위치에 1회 재생(전 클라). SwordBeamAttack.CalcDamage(서버)에서 즉사 판정 성공 시 호출.
+        if not isvalid(self.Entity) then return end
+        if self.InstakillEffectRUID == "" then return end
+        local pos = self.Entity.TransformComponent.WorldPosition
+        _EffectService:PlayEffect(self.InstakillEffectRUID, self.Entity,
+            Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z), 0, Vector3(1, 1, 1), false)
+    end
+
+    @ExecSpace("Multicast")
+    method void SetAutoDamageSkin(boolean on)
+        -- 몬스터의 자동 데미지스킨(HitEvent 시 뜨는 기본 숫자, DamageSkinSpawnerComponent)을 토글한다. 즉사 시 off로 꺼
+        -- 9999 자동 숫자를 안 보이게 한다(몬스터는 즉사로 곧 죽으므로 복구 불필요). 숫자는 클라 렌더라 Multicast.
+        local c = self.Entity.DamageSkinSpawnerComponent
+        if isvalid(c) then c.Enable = on end
+    end
+
+    @ExecSpace("Multicast")
     method void PlayBurstSkin(integer amount)
         -- 다단히트(타수)/궁극기 피니셔의 데미지 숫자. 직접 데미지는 HitEvent를 안 타 자동 DamageSkin이 안 뜨므로 여기서
         -- 수동으로 띄운다. 연속 타격마다 좌우로 살짝 흩뿌려 겹치지 않게 클러스터로 읽히게 한다(보스와 동일 패턴). 클라 렌더라 Multicast.
@@ -293,6 +314,27 @@ script MonsterUnit extends Component
             DamageSkinTweenType.Default, false,
             Vector2(jx, self.BurstSkinOffsetY),
             Vector2(s, s), 1.0, 1.0, LitMode.Default)
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayBurstSkinMulti(integer amount, integer count)
+        -- 궁극기 피니셔 다라락 연출: 한 번의 Multicast로 데미지 숫자를 count개 좌우로 흩뿌려 동시 스폰한다(각 숫자는 스폰 후
+        -- 독립적으로 떠오르며 사라짐 → 몬스터가 곧 죽어도 이미 뜬 숫자는 유지). 검기 1발이 이걸 호출해 몬스터당 count개가 뜬다.
+        if not isvalid(self.Entity) then return end
+        if amount <= 0 or count <= 0 then return end
+        for n = 1, count do
+            local idx = (self._T.burstSkinIdx or 0) + 1
+            self._T.burstSkinIdx = idx
+            local side = 1
+            if idx % 2 == 0 then side = -1 end
+            local jx = side * self.BurstSkinSpreadX * (0.35 + 0.22 * (idx % 3))
+            local s = self.BurstSkinScale
+            _DamageSkinService:Play(
+                self.Entity, self.HitSkinRUID, 0, { amount },
+                DamageSkinTweenType.Default, false,
+                Vector2(jx, self.BurstSkinOffsetY + (n - 1) * 0.12),
+                Vector2(s, s), 1.0, 1.0, LitMode.Default)
+        end
     end
 
     @ExecSpace("Multicast")

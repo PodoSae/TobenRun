@@ -34,6 +34,8 @@ script SwordBeamAttack extends AttackComponent
                 local mu = defender:GetComponent("script.MonsterUnit")
                 if mu ~= nil and _UtilLogic:RandomDouble() < self.InstakillChance then
                     log("[SwordBeamAttack] 급소일격 즉사! -> " .. tostring(defender.Name) .. " (9999)")
+                    mu:SetAutoDamageSkin(false)   -- 즉사 시 자동 데미지 숫자(9999) 억제 (몬스터는 곧 죽으므로 복구 불필요)
+                    mu:PlayInstakillEffect()      -- 즉사 이펙트(전 클라)
                     return 9999
                 end
             end
