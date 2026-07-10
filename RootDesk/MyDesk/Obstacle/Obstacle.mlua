@@ -127,6 +127,7 @@ script Obstacle extends Component
         -- Rises from below to TargetY and self-destructs on lifetime. Player contact deals damage ONCE but does
         -- NOT remove the obstacle (it stays on the field after the hit). Once launched by the ultimate, the
         -- knockback fly-off takes over all movement.
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 정지
         if self.launched then
             self:UpdateLaunch(delta)
             return

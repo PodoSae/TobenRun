@@ -9,6 +9,11 @@ script PlayerHealth extends Component
     property number respawnX = 0
     property number respawnY = 0
 
+    -- 구덩이 낙사(맵 아래로 추락) 시 엔진 네이티브 리스폰 딜레이(초). 기본 5초는 너무 길어 짧게 준다.
+    -- 실제 리스폰 위치는 RunGameHud가 SetRespawnPos로 매 프레임 '직전 안전 지점'으로 갱신한다.
+    @DisplayName("낙사 리스폰 딜레이(초)")
+    property number FallRespawnDelay = 0.4
+
     -- Death gate: once HP hits 0 the player is "dead" (no further damage) until the revive popup
     -- resolves (부활 = heal in place / 포기 = heal + lobby). Replaces the old silent auto-respawn.
     property boolean dead = false
@@ -82,9 +87,9 @@ script PlayerHealth extends Component
     -- Hit feedback (effects played when the player takes damage). Inspector-tunable.
     -- 피격 카메라 흔들림 — 직관적 타격감을 위해 강하고 짧게(펀치감). 인스펙터에서 조절 가능.
     @DisplayName("카메라 흔들림 강도")
-    property number ShakeIntensity = 0.6
+    property number ShakeIntensity = 1.2
     @DisplayName("카메라 흔들림 시간")
-    property number ShakeDuration = 0.3
+    property number ShakeDuration = 0.35
     -- 캐릭터 피격 스파크 색. 몬스터 피격(MonsterUnit = 노란 사방 스파크)과 구분되도록 기본 빨강("피해 받음").
     @DisplayName("피격 파티클 색(캐릭터)")
     property Color HitParticleColor = Color(1, 0.25, 0.25, 1)
@@ -131,6 +136,12 @@ script PlayerHealth extends Component
         local wp = self.Entity.TransformComponent.WorldPosition
         self.respawnX = wp.x
         self.respawnY = wp.y
+        -- 네이티브 낙사 리스폰을 짧게(기본 5초 → FallRespawnDelay). RespawnPosition은 RunGameHud가 매 프레임
+        -- '직전 안전 지점'으로 갱신하므로(SetRespawnPos), 맵 아래로 떨어지면 시작부가 아니라 구덩이 앞에서 재개된다.
+        local pc0 = self.Entity.PlayerComponent
+        if pc0 ~= nil then
+            pc0.RespawnDuration = self.FallRespawnDelay
+        end
         log("[PlayerHealth] OnBeginPlay HP=" .. tostring(self.CurrentHp) .. "/" .. tostring(self.MaxHp)
             .. " respawn=(" .. tostring(self.respawnX) .. "," .. tostring(self.respawnY) .. ")")
     end
@@ -450,6 +461,17 @@ script PlayerHealth extends Component
         self.CurrentHp = self.MaxHp
         self.invulnRemain = self.invulnTime
         log("[PlayerHealth] revived HP=" .. tostring(self.CurrentHp))
+    end
+
+    @ExecSpace("Server")
+    method void SetRespawnPos(number x, number y)
+        -- RunGameHud(클라) → 서버: 네이티브 낙사 리스폰 위치(PlayerComponent.RespawnPosition, @Sync)를 '직전 안전
+        -- 지점'으로 지정. 이 값이 있으면 맵 아래로 떨어졌을 때 엔진 Respawn()이 SpawnLocation(=시작부) 대신 여기로
+        -- 되돌린다(PlayerComponent.d.mlua: RespawnPosition이 1순위). z는 0으로 둔다(2D).
+        local pc = self.Entity.PlayerComponent
+        if pc ~= nil then
+            pc.RespawnPosition = Vector3(x, y, 0)
+        end
     end
 
     @ExecSpace("Multicast")

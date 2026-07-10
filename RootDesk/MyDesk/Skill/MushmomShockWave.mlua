@@ -70,6 +70,7 @@ script MushmomShockWave extends Component
         -- Server-authoritative travel loop: slide toward the player, hit-test grounded players, recycle on
         -- lifetime / max travel distance.
         if self._T.fired ~= true then return end
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 정지
 
         self._T.lifetime = self._T.lifetime + delta
         if self._T.lifetime >= self.MaxLifetime then

@@ -1,0 +1,138 @@
+@Logic
+@ExecSpace("ClientOnly")
+script PausePopup extends Logic
+
+    -- 일시정지 팝업(클라 전용 @Logic). 우상단 정지 버튼(또는 ESC)으로 열고, 계속하기/로비 이동 두 버튼만 있다.
+    -- 정지/재개/로비는 RunGameHud의 기존 메서드를 재사용한다(PauseForDeath / ResumeAfterRevive / GoLobby).
+    -- UI 엔티티 UUID는 UIBuilder가 write 시 주입한다(아래 기본값은 주입 전 placeholder).
+
+    property Entity content = "33b633ba-075f-477e-b4ba-e374b6a9c2a2"        -- 팝업 내용 루트(Content) — show/hide 토글
+    property Entity pauseBtn = "fd2d86e0-04af-45ab-8bde-a4c75a1973a3"       -- 우상단 정지 버튼(열기)
+    property Entity continueBtn = "1710c66f-03be-427c-bdc9-d4db7edf3924"    -- 계속하기
+    property Entity lobbyBtn = "dff9d5a2-55fe-485e-95ba-04415eef3a64"       -- 로비 이동
+
+    property any pauseHandler = nil
+    property any continueHandler = nil
+    property any lobbyHandler = nil
+    property any keyHandler = nil
+
+    method void OnBeginPlay()
+        -- 시작 시 팝업 숨김 + 버튼/키 이벤트 연결.
+        if not self:IsClient() then return end
+        if isvalid(self.content) then
+            self.content.Enable = false
+        end
+        if isvalid(self.pauseBtn) then
+            self.pauseHandler = self.pauseBtn:ConnectEvent(ButtonClickEvent, self.OnPauseClick)
+        end
+        if isvalid(self.continueBtn) then
+            self.continueHandler = self.continueBtn:ConnectEvent(ButtonClickEvent, self.OnContinueClick)
+        end
+        if isvalid(self.lobbyBtn) then
+            self.lobbyHandler = self.lobbyBtn:ConnectEvent(ButtonClickEvent, self.OnLobbyClick)
+        end
+        self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
+        log("[PausePopup] ready")
+    end
+
+    method boolean IsShown()
+        -- 팝업이 현재 열려 있는지.
+        return isvalid(self.content) and self.content.Enable == true
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnPauseClick(ButtonClickEvent event)
+        -- 정지 버튼: 활성 런 중일 때만 연다(로비/사망/결과 화면에선 무시).
+        if _RunGameHud == nil then return end
+        if _RunGameHud.isAlive == false then return end
+        if self:IsShown() then return end
+        self:Show()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnKeyDown(KeyDownEvent event)
+        -- ESC로 토글(PC 편의). 열려 있으면 재개, 활성 런 중이면 정지.
+        if event.key ~= KeyboardKey.Escape then return end
+        if self:IsShown() then
+            self:Resume()
+        elseif _RunGameHud ~= nil and _RunGameHud.isAlive then
+            self:Show()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Show()
+        -- 런/스코어 정지 + 입력 잠금 + 팝업 표시.
+        if _RunGameHud ~= nil then
+            _RunGameHud:PauseForDeath()
+            _RunGameHud:LockPlayerInput(true)
+        end
+        -- 몬스터/보스/장애물/투사체/스폰 전역 정지(서버 플래그).
+        if _GamePause ~= nil then
+            _GamePause:SetPaused(true)
+        end
+        if isvalid(self.content) then
+            self.content.Enable = true
+        end
+        log("[PausePopup] paused")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Resume()
+        -- 팝업 숨김 + 입력 잠금 해제 + 런 재개.
+        if isvalid(self.content) then
+            self.content.Enable = false
+        end
+        if _RunGameHud ~= nil then
+            _RunGameHud:LockPlayerInput(false)
+            _RunGameHud:ResumeAfterRevive()
+        end
+        if _GamePause ~= nil then
+            _GamePause:SetPaused(false)
+        end
+        log("[PausePopup] resumed")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnContinueClick(ButtonClickEvent event)
+        -- 계속하기: 재개.
+        self:Resume()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnLobbyClick(ButtonClickEvent event)
+        -- 로비 이동: 팝업 숨김 + 입력 잠금 해제 + 로비로.
+        if isvalid(self.content) then
+            self.content.Enable = false
+        end
+        if _RunGameHud ~= nil then
+            _RunGameHud:LockPlayerInput(false)
+            _RunGameHud:GoLobby()
+        end
+        if _GamePause ~= nil then
+            _GamePause:SetPaused(false)
+        end
+        log("[PausePopup] go lobby")
+    end
+
+    method void OnEndPlay()
+        -- 이벤트 구독 해제.
+        if isvalid(self.pauseBtn) and self.pauseHandler ~= nil then
+            self.pauseBtn:DisconnectEvent(ButtonClickEvent, self.pauseHandler)
+            self.pauseHandler = nil
+        end
+        if isvalid(self.continueBtn) and self.continueHandler ~= nil then
+            self.continueBtn:DisconnectEvent(ButtonClickEvent, self.continueHandler)
+            self.continueHandler = nil
+        end
+        if isvalid(self.lobbyBtn) and self.lobbyHandler ~= nil then
+            self.lobbyBtn:DisconnectEvent(ButtonClickEvent, self.lobbyHandler)
+            self.lobbyHandler = nil
+        end
+        if self.keyHandler ~= nil then
+            _InputService:DisconnectEvent(KeyDownEvent, self.keyHandler)
+            self.keyHandler = nil
+        end
+    end
+
+end

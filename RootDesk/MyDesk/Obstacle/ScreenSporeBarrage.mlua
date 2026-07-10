@@ -98,6 +98,7 @@ script ScreenSporeBarrage extends Component
     method void OnUpdate(number delta)
         -- Idle → wait FireInterval → telegraph (flash lane warning) → wait TelegraphDuration → fire → idle.
         if self.removed then return end
+        if _GamePause ~= nil and _GamePause.Paused then return end   -- 일시정지 중 정지
 
         if self.Lifetime > 0 then
             self.aliveTime = self.aliveTime + delta

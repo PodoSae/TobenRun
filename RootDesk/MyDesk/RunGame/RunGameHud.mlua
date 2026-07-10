@@ -18,6 +18,8 @@ property number fallDropMargin = 2.0
 property number gapRespawnBack = 3.0
 
 property number lastGroundedX = 0
+-- 네이티브 낙사 리스폰 위치(PlayerComponent.RespawnPosition)로 마지막에 서버에 보낸 X. RPC 남발 방지 스로틀 기준.
+property number lastSentRespawnX = -99999
 
 property Entity scoreText = "2de4eed6-7a29-4a36-be9b-57cc5f3bf397"
 -- Distance-progress HUD (how far along the course the runner is): a fill bar + "x cur / goal" label.
@@ -218,6 +220,9 @@ method void OnUpdate(number delta)
 	end
 	self:UpdateProgress()
 
+	-- 네이티브 낙사 리스폰 앵커를 '직전 안전 지점'으로 계속 갱신(구덩이에 빠지면 엔진이 시작부가 아니라 여기로 되돌림).
+	self:UpdateRespawnAnchor(player, x)
+
 	-- Coins are collected by each Coin pickup's own box-overlap (script.Coin → AddCoin); no loop here.
 
 	-- Boss intro cutscene gate — runs for BOTH a real boss course (approach-triggered near goalX) and the
@@ -284,6 +289,45 @@ method void FallIntoGap()
 	player.MovementComponent:Stop()
 	player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY))
 	log("[RunGameHud] fell into gap fx=" .. string.format("%.1f", fx) .. " -> respawn x=" .. string.format("%.1f", rx))
+end
+
+method number ComputeSafeRespawnX(number x)
+	-- 현재 x 기준 '직전 안전 지점' X: 구덩이 위에 있으면 그 구덩이 왼쪽 가장자리(x1=구덩이 앞 땅), 아니면 현재 x.
+	-- gapRespawnBack만큼 뒤로 물려 재개 활주로를 주고, spawnX 미만으로는 내려가지 않는다. FallIntoGap의 기준과 동일.
+	local safe = x
+	if self.gapZones ~= nil then
+		for _, g in ipairs(self.gapZones) do
+			if x >= g.x1 and x <= g.x2 then
+				safe = g.x1
+				break
+			end
+		end
+	end
+	local rx = safe - self.gapRespawnBack
+	if rx < self.spawnX then
+		rx = self.spawnX
+	end
+	return rx
+end
+
+@ExecSpace("ClientOnly")
+method void UpdateRespawnAnchor(Entity player, number x)
+	-- 네이티브 낙사 리스폰 위치(PlayerComponent.RespawnPosition)를 '직전 안전 지점'으로 계속 갱신한다. 구덩이에
+	-- 빠지면 엔진 Respawn()이 시작부(SpawnLocation)가 아니라 여기로 되돌린다. @Sync 프로퍼티라 서버에서 세팅해야
+	-- 하므로 PlayerHealth의 @Server RPC(SetRespawnPos)로 넘긴다. RPC 남발 방지를 위해 1유닛 이상 변할 때만 전송.
+	if isvalid(player) == false then
+		return
+	end
+	local rx = self:ComputeSafeRespawnX(x)
+	if math.abs(rx - self.lastSentRespawnX) < 1.0 then
+		return
+	end
+	self.lastSentRespawnX = rx
+	---@type PlayerHealth
+	local hp = player:GetComponent("script.PlayerHealth")
+	if hp ~= nil then
+		hp:SetRespawnPos(rx, self.spawnY)
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -442,6 +486,8 @@ method void OnArriveMap(Entity player)
 	self.bestX = sx
 	-- 구덩이 부활 기준점을 스테이지 시작값으로 리셋(이전 판의 값이 남지 않도록).
 	self.lastGroundedX = sx
+	-- 낙사 리스폰 앵커 스로틀 리셋 → 새 스테이지 첫 프레임에 RespawnPosition을 강제로 다시 보낸다.
+	self.lastSentRespawnX = -99999
 	self.ultGaugeLastX = sx
 	self.score = 0
 	self.coinScore = 0
