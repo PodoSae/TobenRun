@@ -65,6 +65,9 @@ property string dotSwordRuid = "7c92e0752a8342bb9fc05c2bafebdeae"
 @DisplayName("궁극기 게이지 물약 RUID")
 @Description("궁극기 게이지 물약(ultgauge) 스프라이트 (기본: '마나 엘릭서')")
 property string ultPotionRuid = "3b778fe9d0b64a52a038b1c72cb58454"
+@DisplayName("궁극기 물약 획득 이펙트 RUID")
+@Description("ultgauge 아이템 획득 시 재생하는 이펙트(animationclip)")
+property string ultPickupEffectRuid = "bda67354085345fa9da5087671e26f72"
 @DisplayName("무적 아이템 RUID")
 @Description("무적(invincible) 스프라이트 (기본: '무적')")
 property string invincibleRuid = "52616cd70c2943c5b632ec687dd2a452"
@@ -924,6 +927,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		local buffKind = "attack"
 		local defaultAmt = 0.5
 		local statKey = "AtkBuffAmt"   -- 강화 시 이 아이템 지급량↑ StatTable 키(획득 순간 플레이어별 반영)
+		local pickupFx = ""            -- 획득 이펙트 RUID(kind별. 비면 없음)
 		if kind == "aspdbuff" then
 			ruid = self.aspdBuffRuid
 			buffKind = "attackspeed"
@@ -974,6 +978,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			buffKind = "ultgauge"
 			defaultAmt = 10     -- 궁극기 게이지 % (MaxGauge의 10%). p3로 지정 가능
 			statKey = ""
+			pickupFx = self.ultPickupEffectRuid   -- 궁극기 게이지 물약 획득 이펙트
 		elseif kind == "invincible" then
 			ruid = self.invincibleRuid
 			buffKind = "invincible"
@@ -993,6 +998,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			if ic ~= nil then
 				ic.BuffKind = buffKind
 				ic.StatKey = statKey
+				ic.PickupEffectRUID = pickupFx
 				local amt = tonumber(c.p3)
 				ic.Amount = (amt ~= nil) and amt or defaultAmt
 			end

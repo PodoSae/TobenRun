@@ -1244,6 +1244,42 @@
             "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
           "Value": 2.0
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "respawnEffectRUID",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": "64b8f9ee7c4f43ef98f77296c4ef145b"
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "prevDead",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": false
+        },
+        {
+          "TargetType": "script.PlayerHealth",
+          "Name": "respawnFxCooldown",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0.0
+        },
+        {
+          "TargetType": "script.RunSpeedEffect",
+          "Name": "runEffectSerial",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Int64, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 0
         }
       ],
       "EventLinks": [],

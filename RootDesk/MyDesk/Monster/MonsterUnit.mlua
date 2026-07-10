@@ -72,6 +72,9 @@ script MonsterUnit extends Component
     property number HitParticleOffsetY = 0.5
     @DisplayName("피격 파티클 색")
     property Color HitParticleColor = Color(1, 1, 0.6, 1)
+    -- 피격 타격 이펙트(animationclip). 값이 있으면 내장 파티클 대신 이 이펙트를 EffectService로 재생한다.
+    @DisplayName("피격 이펙트 RUID")
+    property string HitEffectRUID = "b4e2c5447f2e45a4a16745ba3dcb54fd"
 
     -- ── 피격 애니메이션(히트 플래시) ──
     -- 스프라이트 몬스터는 상태-애니메이션 파이프라인이 없어 아바타식 ChangeState("HIT")를 못 쓴다. 대신 피격 순간
@@ -258,13 +261,18 @@ script MonsterUnit extends Component
 
     @ExecSpace("Multicast")
     method void PlayHitParticle(Vector3 pos)
-        -- 몬스터 피격 타격 이펙트(전 클라 재생). 캐릭터 피격(PlayerHealth = 빨간 SparkExplosion)과 구분되도록 사방으로
-        -- 튀는 노란 SparkRadialExplosion을 쓴다. HitParticleColor/Scale/OffsetY로 인스펙터에서 조절 가능.
+        -- 몬스터 피격 타격 이펙트(전 클라 재생). HitEffectRUID(animationclip)가 있으면 EffectService로 그 이펙트를,
+        -- 없으면 내장 노란 SparkRadialExplosion 파티클을 폴백으로 재생. Scale/OffsetY로 인스펙터 조절 가능.
         if not isvalid(self.Entity) then return end
         local s = self.HitParticleScale
+        local fxPos = Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z)
+        if self.HitEffectRUID ~= "" then
+            _EffectService:PlayEffect(self.HitEffectRUID, self.Entity, fxPos, 0, Vector3(s, s, s), false)
+            return
+        end
         _ParticleService:PlayBasicParticle(
             BasicParticleType.SparkRadialExplosion, self.Entity,
-            Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z), 0,
+            fxPos, 0,
             Vector3(s, s, s), false, { Color = self.HitParticleColor })
     end
 
