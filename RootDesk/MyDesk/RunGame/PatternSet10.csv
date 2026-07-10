@@ -1,0 +1,17 @@
+﻿cmd,p1,p2,p3
+Set,size,50,
+Spawn,spike,5,
+Spawn,coin,6,
+Spawn,coin,7,
+Spawn,coin,8,
+Spawn,coin,9,
+Spawn,coin,10,
+Spawn,mud,11,
+Spawn,mud,12,
+Spawn,coin,13,1.5
+Spawn,coin,14,1.5
+Spawn,coin,15,1.5
+Spawn,Haz_spike,16,
+Spawn,coin,17,
+Spawn,coin,18,
+Spawn,coin,19,
