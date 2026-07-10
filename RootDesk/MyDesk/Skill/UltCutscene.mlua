@@ -128,6 +128,15 @@ method void Hide()
 	end
 end
 
+method boolean IsPlaying()
+	-- 컷씬 오버레이가 켜져 있으면(궁극기 시전 연출 재생 중) true. 튜토리얼 종료 시 로비 전환을 지연시키는 데 사용.
+	local root = _EntityService:GetEntityByPath("/ui/UltCutsceneGroup")
+	if isvalid(root) then
+		return root.Enable
+	end
+	return false
+end
+
 method void OnEndPlay()
 	-- 이벤트 구독 해제.
 	if self.endHandler ~= nil then

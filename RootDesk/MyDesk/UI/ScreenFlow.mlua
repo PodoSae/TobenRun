@@ -1216,18 +1216,7 @@ method void GoToNextStage(string curStage)
 		log("[ScreenFlow] no next stage after " .. tostring(curStage) .. " -> lobby")
 		return
 	end
-	if isvalid(self.stageSelectRoot) then
-		self.stageSelectRoot.Enable = false
-	end
-	if isvalid(self.lobbyRoot) then
-		self.lobbyRoot.Enable = false
-	end
-	if isvalid(self.titleRoot) then
-		self.titleRoot.Enable = false
-	end
-	if _RunGameHud ~= nil then
-		_RunGameHud:GoToStage(nextStage, "RunStage")
-	end
+	self:EnterGameWithLoading(nextStage, "RunStage")
 	log("[ScreenFlow] next stage " .. tostring(curStage) .. " -> " .. tostring(nextStage))
 end
 
@@ -1292,19 +1281,29 @@ method void OnStageClick(string stage)
 		return
 	end
 	local mapName = "RunStage"
-	if isvalid(self.stageSelectRoot) then
-		self.stageSelectRoot.Enable = false
-	end
-	if isvalid(self.lobbyRoot) then
-		self.lobbyRoot.Enable = false
-	end
-	if isvalid(self.titleRoot) then
-		self.titleRoot.Enable = false
-	end
-	if _RunGameHud ~= nil then
-		_RunGameHud:GoToStage(stage, mapName)
-	end
+	self:EnterGameWithLoading(stage, mapName)
 	log("[ScreenFlow] stage " .. tostring(stage) .. " -> map " .. tostring(mapName))
+end
+
+@ExecSpace("ClientOnly")
+method void EnterGameWithLoading(string stage, string mapName)
+	-- 로딩 커버로 화면을 덮은 뒤(covered) 스테이지 셋업(러너는 대기), 커버가 걷힐 때(reveal) 러너 시작.
+	-- 로딩이 없으면(폴백) 즉시 진입.
+	if _LoadingScreen == nil then
+		if isvalid(self.stageSelectRoot) then self.stageSelectRoot.Enable = false end
+		if isvalid(self.lobbyRoot) then self.lobbyRoot.Enable = false end
+		if isvalid(self.titleRoot) then self.titleRoot.Enable = false end
+		if _RunGameHud ~= nil then _RunGameHud:GoToStage(stage, mapName) end
+		return
+	end
+	_LoadingScreen:Cover(function()
+		if isvalid(self.stageSelectRoot) then self.stageSelectRoot.Enable = false end
+		if isvalid(self.lobbyRoot) then self.lobbyRoot.Enable = false end
+		if isvalid(self.titleRoot) then self.titleRoot.Enable = false end
+		if _RunGameHud ~= nil then _RunGameHud:GoToStageHeld(stage, mapName) end
+	end, function()
+		if _RunGameHud ~= nil then _RunGameHud:BeginHeldRun() end
+	end)
 end
 
 @ExecSpace("ClientOnly")
@@ -1339,18 +1338,41 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnStartClick(ButtonClickEvent event)
-	-- Title clicked → go to the lobby.
-	if isvalid(self.titleRoot) then
-		self.titleRoot.Enable = false
+	-- Title clicked. 튜토리얼을 아직 끝내지 않은 유저면 곧바로 튜토리얼로 진입, 아니면 로비로 이동한다.
+	if _TutorialManager ~= nil and _TutorialManager:RequestTutorialFromTitle() then
+		if isvalid(self.titleRoot) then
+			self.titleRoot.Enable = false
+		end
+		log("[ScreenFlow] title -> tutorial")
+		return
+	end
+	-- 로비 진입도 로딩 페이드 전환으로.
+	self:ShowLobby()
+	log("[ScreenFlow] -> Lobby")
+end
+
+@ExecSpace("ClientOnly")
+method void ShowTitle()
+	-- 타이틀 화면으로 되돌린다(로비/스테이지선택/서브화면/결과창을 모두 숨기고 타이틀만 표시). T키 리셋에서 사용.
+	if _ResultUI ~= nil then
+		_ResultUI:Hide()
+	end
+	for _, path in ipairs({ "/ui/EquipGroup", "/ui/BlessGroup", "/ui/ShopGroup", "/ui/SettingsGroup", "/ui/EquipPopupGroup" }) do
+		local g = _EntityService:GetEntityByPath(path)
+		if isvalid(g) then
+			g.Enable = false
+		end
+	end
+	if isvalid(self.lobbyRoot) then
+		self.lobbyRoot.Enable = false
 	end
 	if isvalid(self.stageSelectRoot) then
 		self.stageSelectRoot.Enable = false
 	end
-	if isvalid(self.lobbyRoot) then
-		self.lobbyRoot.Enable = true
+	if isvalid(self.titleRoot) then
+		self.titleRoot.Enable = true
 	end
-	self:RefreshSavedUI()
-	log("[ScreenFlow] -> Lobby")
+	log("[ScreenFlow] ShowTitle")
 end
 
 @ExecSpace("ClientOnly")
@@ -1389,7 +1411,19 @@ end
 
 @ExecSpace("ClientOnly")
 method void ShowLobby()
-	-- Show the lobby screen (called after a run ends from the result panel).
+	-- 로비 진입: 로딩 커버로 덮은 뒤(covered) 로비를 표시하고 커버가 걷힌다. 로딩이 없으면 즉시.
+	if _LoadingScreen == nil then
+		self:DoShowLobby()
+		return
+	end
+	_LoadingScreen:Cover(function()
+		self:DoShowLobby()
+	end, nil)
+end
+
+@ExecSpace("ClientOnly")
+method void DoShowLobby()
+	-- 실제 로비 표시(로딩 커버 아래에서 수행). Show the lobby screen (called after a run ends from the result panel).
 	if isvalid(self.titleRoot) then
 		self.titleRoot.Enable = false
 	end

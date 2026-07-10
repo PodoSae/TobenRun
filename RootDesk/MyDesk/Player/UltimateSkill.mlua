@@ -390,6 +390,41 @@ script UltimateSkill extends Component
         log("[UltimateSkill] tutorial: gauge filled full")
     end
 
+    @ExecSpace("Server")
+    method void TutorialSetBossInvincible(boolean inv)
+        -- 튜토리얼 전용: 이 플레이어의 맵에 있는 보스의 무적 플래그를 설정한다. 켜면 일반 공격으로는 죽지 않고
+        -- 궁극기(TutorialFinishBoss=ApplyExternalDamage)로만 처치된다. 클라 TutorialManager의 보스전 스텝이 호출.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local bosses = map:GetChildComponentsByTypeName("script.MushmomBoss", true)
+        if bosses == nil then return end
+        for _, bc in ipairs(bosses) do
+            if bc ~= nil and isvalid(bc) then
+                ---@type MushmomBoss
+                local boss = bc
+                boss.TutorialInvincible = inv
+            end
+        end
+    end
+
+    @ExecSpace("Server")
+    method void TutorialFinishBoss()
+        -- 튜토리얼 전용: 이 플레이어의 맵에 있는 보스에게 현재 HP만큼 피해를 넣어 궁극기로 마무리한다(정상 사망
+        -- 연출→결과 플로우). 튜토리얼 3막에서 R 발동 순간 클라 TutorialManager가 호출한다.
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return end
+        local bosses = map:GetChildComponentsByTypeName("script.MushmomBoss", true)
+        if bosses == nil then return end
+        for _, bc in ipairs(bosses) do
+            if bc ~= nil and isvalid(bc) then
+                ---@type MushmomBoss
+                local boss = bc
+                boss:ApplyExternalDamage(boss.Hp, self.Entity, false)
+                log("[UltimateSkill] tutorial: boss finished by ultimate")
+            end
+        end
+    end
+
     @ExecSpace("ServerOnly")
     method void SetAutoFillPaused(boolean paused)
         -- Pause/resume the time-based gauge fill. MushmomBoss pauses it for the duration of the boss fight
