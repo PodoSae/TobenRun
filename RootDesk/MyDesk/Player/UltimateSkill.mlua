@@ -46,7 +46,9 @@ script UltimateSkill extends Component
     @Description("궁극기 컷씬이 끝나는 순간 앞으로 연속 발사하는 검기 수(각 검기=평소 검기 1발, 데미지=플레이어 공격력). 기획: 10타")
     @MinValue(1)
     @MaxValue(30)
-    property integer FinisherHits = 10
+    -- 검기는 1발만 발사(관통 99로 앞의 몬스터 전부 통과). 데미지 숫자 다라락 연출은 검기 1발이 각 몬스터에 여러 번 띄운다
+    -- (SwordBeam.FinisherHitCount). 즉 "발사 횟수"와 "숫자 표시 횟수"를 분리했다.
+    property integer FinisherHits = 1
     @DisplayName("피니셔 검기 발사 간격(초)")
     @Description("연속 검기 사이 간격. 0.09면 10발이 약 0.8초에 걸쳐 발사된다")
     @MinValue(0.02)
@@ -344,6 +346,13 @@ script UltimateSkill extends Component
         self.remaining = self.DashDuration
         self.bossDmgTimer = 0
         self.gravityReleased = false
+        -- 타격감용 임시 스폰: 플레이어 앞에 몬스터+장애물을 깔아 돌진(DestroyTargetsInPath)이 부수며 지나가게 한다.
+        -- 정규 코스 스폰과 별개. CourseGen이 소유(현재 코스 floorY/스폰 셋업 재사용).
+        local map = self.Entity.CurrentMap
+        if isvalid(map) and _CourseGen ~= nil then
+            local px = self.Entity.TransformComponent.WorldPosition.x
+            _CourseGen:SpawnUltimateTargets(map, px)
+        end
         log("[UltimateSkill] ULTIMATE activated (server)")
     end
 

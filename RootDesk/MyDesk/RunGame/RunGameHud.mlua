@@ -16,6 +16,18 @@ property number fallDropMargin = 2.0
 -- 구덩이에 빠지면 마지막으로 밟은 땅에서 이만큼 뒤(월드유닛)로 되돌려 세운다(구덩이 앞 재시도 + 점프 활주로).
 @DisplayName("구덩이 부활 뒤로물림")
 property number gapRespawnBack = 3.0
+-- 낙사(구덩이) 처리: y가 이 값 이하로 떨어지면 최근 땅 x(lastGroundedX)에 스폰하고 respawnFreezeSec만큼 정지 후 재개.
+@DisplayName("낙사 트리거 y")
+property number fallDeathY = 0.0
+@DisplayName("낙사 스폰 후 정지(초)")
+property number respawnFreezeSec = 1.0
+@HideFromInspector property boolean respawnFreezing = false
+@HideFromInspector property integer respawnFreezeTimer = 0
+-- 낙사 스폰 바닥에 1회 재생하는 이펙트(비우면 없음). y는 스폰 높이 - respawnFxYOffset(바닥 표면).
+@DisplayName("낙사 스폰 이펙트 RUID")
+property string respawnFxRUID = "64b8f9ee7c4f43ef98f77296c4ef145b"
+@DisplayName("낙사 스폰 이펙트 y오프셋(스폰 높이 아래)")
+property number respawnFxYOffset = 0.3
 
 property number lastGroundedX = 0
 -- 네이티브 낙사 리스폰 위치(PlayerComponent.RespawnPosition)로 마지막에 서버에 보낸 X. RPC 남발 방지 스로틀 기준.
@@ -254,47 +266,67 @@ method void OnUpdate(number delta)
 		return
 	end
 
-	-- Fell into a GAP hole → re-drop from above the screen, past that gap, so the run continues.
+	-- 낙사: y가 fallDeathY 이하로 떨어지면 최근 땅 x에 스폰(정지 중이면 스킵 — 중복 트리거 방지).
 	local py = player.TransformComponent.WorldPosition.y
-	local floorY = self.spawnY - 1.0
-	if py < floorY - 0.5 then
-		self:FallIntoGap()
+	if self.respawnFreezing == false and py <= self.fallDeathY then
+		self:FallRespawn()
 		return
 	end
-
-	-- 네이티브 낙사 리스폰 앵커를 '직전 안전 지점'으로 계속 갱신(구덩이에 빠지면 엔진이 시작부가 아니라 여기로 되돌림).
-	--self:UpdateRespawnAnchor(player, x)
-	--	log("2222")
 end
 
 @ExecSpace("ClientOnly")
-method void FallIntoGap()
-	-- 구덩이에 빠지면 직전 땅으로 되돌려 세운다 — 구덩이를 넘겨주지 않고 앞에서 다시 시도. 러너 물리상 IsOnGround가
-	-- 잘 안 잡혀 lastGroundedX가 스폰 근처에 머물 수 있으므로, 떨어진 x가 속한 구덩이(gapZone)의 시작 x1(=구덩이 앞
-	-- 땅 가장자리)을 기준으로 되돌린다. 못 찾으면 lastGroundedX로 폴백. 가장자리에 정확히 서면 자동 러너가 또 떨어지니
-	-- gapRespawnBack만큼 뒤로 물려 점프 활주로를 준다. (HP 페널티는 아직 미연결.)
+method void FallRespawn()
+	-- 낙사(y ≤ fallDeathY): 플레이어가 땅에 닿아있을 때 저장해 둔 최근 x(lastGroundedX)에 스폰 높이로 세운다.
+	-- 스폰 직후 respawnFreezeSec(1초) 동안 러너를 멈췄다가(SetRunnerActive) 자동 재개한다.
 	local player = _UserService.LocalPlayer
 	if isvalid(player) == false or player.MovementComponent == nil then
 		return
 	end
-	local fx = player.TransformComponent.WorldPosition.x
-	local edge = self.lastGroundedX
-	if self.gapZones ~= nil then
-		for _, g in ipairs(self.gapZones) do
-			if fx >= g.x1 - 1.0 and fx <= g.x2 + 1.0 then
-				edge = g.x1
-				break
-			end
-		end
-	end
-	local rx = edge - self.gapRespawnBack
+	-- 최근 땅 x보다 gapRespawnBack만큼 뒤로 물려 재개 활주로를 준다(가장자리에 바로 서면 재개 후 또 떨어지므로).
+	local rx = self.lastGroundedX - self.gapRespawnBack
 	if rx < self.spawnX then
 		rx = self.spawnX
 	end
-	-- 스폰 높이(spawnY = floorY+0.5)로 세워 중력이 바로 그 땅에 안착시킨다(초기 스폰과 동일).
+	-- 스폰 높이(spawnY)로 세운다 → 중력이 바로 그 땅에 안착.
 	player.MovementComponent:Stop()
 	player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY))
-	log("[RunGameHud] fell into gap fx=" .. string.format("%.1f", fx) .. " -> respawn x=" .. string.format("%.1f", rx))
+	-- 스폰 바닥에 이펙트 1회(월드 고정). y는 스폰 높이 - 오프셋(바닥 표면).
+	if self.respawnFxRUID ~= "" then
+		_EffectService:PlayEffect(self.respawnFxRUID, player, Vector3(rx, self.spawnY - self.respawnFxYOffset, 0), 0, Vector3(1, 1, 1), false, { ["PlayRate"] = 0.7 })
+	end
+	-- 스폰 순간 캐릭터 스프라이트(아바타) + 이름표(NameTag) 끄기(클라 즉시). EndRespawnFreeze(1초 뒤)에서 다시 켠다.
+	if player.AvatarRendererComponent ~= nil then
+		player.AvatarRendererComponent:SetAlpha(0)
+	end
+	if player.NameTagComponent ~= nil then
+		player.NameTagComponent.Enable = false
+	end
+	-- 스폰 후 1초 정지 → 재개.
+	self.respawnFreezing = true
+	self:SetRunnerActive(false)
+	if self.respawnFreezeTimer ~= 0 then
+		_TimerService:ClearTimer(self.respawnFreezeTimer)
+	end
+	self.respawnFreezeTimer = _TimerService:SetTimer(self, self.EndRespawnFreeze, self.respawnFreezeSec, false)
+	log("[RunGameHud] fall respawn -> x=" .. string.format("%.1f", rx) .. " freeze=" .. tostring(self.respawnFreezeSec) .. "s")
+end
+
+@ExecSpace("ClientOnly")
+method void EndRespawnFreeze()
+	-- 낙사 스폰 후 정지 종료(1초): 캐릭터 스프라이트 다시 켜고 러너 재개.
+	self.respawnFreezeTimer = 0
+	self.respawnFreezing = false
+	local player = _UserService.LocalPlayer
+	if isvalid(player) then
+		if player.AvatarRendererComponent ~= nil then
+			player.AvatarRendererComponent:SetAlpha(1)
+		end
+		if player.NameTagComponent ~= nil then
+			player.NameTagComponent.Enable = true
+		end
+	end
+	self:SetRunnerActive(true)
+	log("[RunGameHud] fall respawn freeze end -> show + resume")
 end
 
 method number ComputeSafeRespawnX(number x)

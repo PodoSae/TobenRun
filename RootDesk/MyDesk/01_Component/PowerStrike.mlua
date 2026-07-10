@@ -443,13 +443,16 @@ script PowerStrike extends SkillComponent
         local dmg = self:GetEffectiveDamage()
         local pierce = 99   -- 앞의 몬스터 전부 관통(그룹 일괄 타격)
         self:FireBeam(1, dmg, 0, pierce, true)
+        log("[PowerStrike] finisher beam 1/" .. tostring(count) .. " fired (invisible) dmg=" .. tostring(dmg))
         for i = 1, count - 1 do
             local delay = interval * i
+            local idx = i + 1
             _TimerService:SetTimerOnce(function()
                 self:FireBeam(1, dmg, 0, pierce, true)
+                log("[PowerStrike] finisher beam " .. tostring(idx) .. "/" .. tostring(count) .. " fired (invisible)")
             end, delay)
         end
-        log("[PowerStrike] finisher beams x" .. tostring(count) .. " dmg=" .. tostring(dmg))
+        log("[PowerStrike] finisher beams scheduled x" .. tostring(count) .. " dmg=" .. tostring(dmg) .. " interval=" .. tostring(interval))
     end
 
     @ExecSpace("ServerOnly")

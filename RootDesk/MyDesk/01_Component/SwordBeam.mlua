@@ -38,6 +38,11 @@ script SwordBeam extends Component
     -- renderer.Enable = not Hidden으로 적용한다. transform과 같은 복제 채널이라 발사 즉시 동기화된다.
     @Sync property boolean Hidden = false
 
+    -- 투명(피니셔) 검기 전용 데미지 숫자 연출: 피격 몬스터마다 데미지 숫자를 이 횟수만큼 짧은 간격으로 띄운다(다라락).
+    -- 검기 발사 자체는 1발이어도 각 몬스터에 FinisherHitCount번 숫자가 올라간다. 일반 검기(Hidden=false)엔 적용 안 됨.
+    @DisplayName("피니셔 데미지 숫자 표시 횟수")
+    property integer FinisherHitCount = 10
+
     -- Max travel distance (world units) from the LAUNCH POINT before the beam recycles. This is RELATIVE to
     -- where it was fired — not a fixed world rectangle. The runner scrolls the player rightward with no bound,
     -- so the old fixed BoundMaxX (=90, map01's tile edge) made every beam spawn already out-of-bounds and
@@ -80,6 +85,8 @@ script SwordBeam extends Component
         -- Pierce state: remaining distinct hits + the set of entity ids already counted (so the same enemy
         -- lingering in the hit box across frames is counted once).
         self._T.pierceLeft = (pierce ~= nil and pierce >= 1) and pierce or 1
+        -- 피격 시 수동 데미지 숫자용(투명 피니셔 검기 전용). AttackFrom은 자동 데미지스킨이 안 떠서 직접 띄운다.
+        self._T.damage = (damage ~= nil) and damage or 0
         -- Reset the attack component's per-launch hit set so a pooled beam re-fires cleanly. Enemy-dedupe lives
         -- there (IsAttackTarget) so AttackFrom damages each enemy ONCE and the beam passes THROUGH.
         ---@type SwordBeamAttack
@@ -143,6 +150,25 @@ script SwordBeam extends Component
             local hitCenter = Vector2(pos.x, pos.y + self.HitVerticalOffset)
             local hits = ac:AttackFrom(Vector2(self.HitWidth, self.HitHeight), hitCenter, self.AttackInfo, CollisionGroups.HitBox)
             if hits ~= nil and #hits > 0 then
+                -- 피격 로그: 투명(피니셔) 검기 여부 + 이번 프레임에 새로 맞은 적 수 + 위치/남은 관통.
+                log("[SwordBeam] HIT " .. tostring(#hits) .. " enemy(s) invisible=" .. tostring(self.Hidden)
+                    .. " x=" .. string.format("%.2f", pos.x) .. " pierceLeft=" .. tostring(self._T.pierceLeft - #hits))
+                -- 투명(피니셔) 검기 전용: AttackFrom은 자동 데미지스킨이 안 뜨므로, 맞은 몬스터마다 수동으로 데미지 숫자를
+                -- FinisherHitCount개 흩뿌려 띄운다(PlayBurstSkinMulti=Multicast, 한 번 호출로 여러 개). 검기가 1발이어도 각
+                -- 몬스터당 여러 숫자가 다라락 올라간다. 같은 프레임 스폰이라 몬스터가 곧 죽어도 이미 뜬 숫자는 유지된다.
+                if self.Hidden then
+                    local amt = math.floor(self._T.damage or 0)
+                    for _, h in ipairs(hits) do
+                        if h ~= nil and isvalid(h) then
+                            local he = h.Entity
+                            if isvalid(he) then
+                                ---@type MonsterUnit
+                                local mu = he:GetComponent("script.MonsterUnit")
+                                if mu ~= nil then mu:PlayBurstSkinMulti(amt, self.FinisherHitCount) end
+                            end
+                        end
+                    end
+                end
                 -- Each returned target is a NEW enemy — SwordBeamAttack.IsAttackTarget excludes ones already hit
                 -- this launch, so AttackFrom neither re-damages nor re-returns them (no more multi-hit / 타수 증가).
                 -- Spend one pierce per new enemy; the beam keeps flying (passes THROUGH) until the budget runs out.

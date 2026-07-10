@@ -65,6 +65,9 @@ property string dotSwordRuid = "7c92e0752a8342bb9fc05c2bafebdeae"
 @DisplayName("궁극기 게이지 물약 RUID")
 @Description("궁극기 게이지 물약(ultgauge) 스프라이트 (기본: '마나 엘릭서')")
 property string ultPotionRuid = "3b778fe9d0b64a52a038b1c72cb58454"
+@DisplayName("궁극기 물약 획득 이펙트 RUID")
+@Description("ultgauge 아이템 획득 시 재생하는 이펙트(animationclip)")
+property string ultPickupEffectRuid = "bda67354085345fa9da5087671e26f72"
 @DisplayName("무적 아이템 RUID")
 @Description("무적(invincible) 스프라이트 (기본: '무적')")
 property string invincibleRuid = "52616cd70c2943c5b632ec687dd2a452"
@@ -86,6 +89,26 @@ property number platformThickness = 0.4
 property number monsterYOff = 1.0
 @DisplayName("장애물 안착 높이 보정")
 property number obstacleYRest = 0.5
+
+-- ── 궁극기 타격감용 임시 스폰(정규 코스와 별개) ──
+-- 궁극기 발동 시 플레이어 앞에 몬스터+장애물을 임시로 깔아 돌진이 부수며 지나가게 한다(UltimateSkill.RequestActivate가 호출).
+@DisplayName("궁극기 스폰 개수")
+property integer UltTargetCount = 5
+@DisplayName("궁극기 스폰 간격(월드유닛)")
+property number UltTargetGap = 2.0
+@DisplayName("궁극기 스폰 전방 기준거리(월드유닛)")
+@Description("플레이어 x에서 이만큼 앞부터 타겟을 깐다")
+property number UltSpawnAheadX = 5.0
+@DisplayName("궁극기 스폰 몬스터 kind 목록(쉼표구분)")
+@Description("스폰 순서대로 번갈아 사용. MonsterTable id 기준. 기본 spore,slime,orange")
+property string UltMonsterKinds = "spore,slime,orange"
+@DisplayName("궁극기 스폰 장애물 kind")
+property string UltObstacleKind = "obstacle"
+@DisplayName("궁극기 스폰 타겟 수명(초)")
+@Description("돌진이 놓쳐도 이 시간 뒤 자동 제거되어 잔존/자해를 막는다")
+property number UltTargetLifetime = 3.0
+-- 현재 코스 바닥 y(BuildCourse에서 갱신). 궁극기 스폰의 몬스터/장애물 높이 기준.
+@HideFromInspector property number curFloorY = 0
 @DisplayName("진흙 안착 높이 보정")
 @Description("진흙 웅덩이 중심이 바닥에서 이만큼 위에 놓인다(바닥에 깔린 것처럼 보이도록 낮게)")
 property number mudYRest = 0.15
@@ -482,11 +505,15 @@ method void BuildCourse(string stage, Entity map)
 	-- 문서: MapComponent.UseCustomBound "Works only when TileMapMode is MapleTile" — 이 맵이 MapleTile(0)이라 유효.
 	if isvalid(map) and map.MapComponent ~= nil then
 		local mc = map.MapComponent
+		-- ⚠ mc.InstanceMap = true 를 런타임에 세팅하면 맵이 재-인스턴싱되어 코스 생성(발판 스폰 등)이 깨진다 → 절대 코드에서
+		-- 켜지 말 것. InstanceMap은 Maker에서 디자인 타임에 켜야 한다(공식 문서: UseCustomBound는 InstanceMap이 켜져 있어야 적용).
 		mc.UseCustomBound = true
-		mc.LeftBottom = Vector2(-100000, cfg.floorY - 30)
+		mc.LeftBottom = Vector2(-100000, cfg.floorY - 100)
 		mc.RightTop = Vector2(1000000, cfg.floorY + 1000)
-		log("[CourseGen] custom map bound: fall death y=" .. tostring(cfg.floorY - 30) .. " (floorY=" .. tostring(cfg.floorY) .. ")")
+		log("[CourseGen] custom map bound: fall death y=" .. tostring(cfg.floorY - 100) .. " (floorY=" .. tostring(cfg.floorY) .. ")")
 	end
+	-- 궁극기 타격감 스폰의 바닥 높이 기준(정규 코스의 이 스테이지 floorY).
+	self.curFloorY = cfg.floorY
 	-- Stage background (Set,bg,<templateRUID>). BackgroundComponent lives on the map's "Background"
 	-- child entity and is @Sync, so applying it here (server) propagates to every client. Stages with
 	-- no Set,bg row keep whatever background the map already had.
@@ -870,6 +897,53 @@ method number ObstacleVisualHalfHeight(Entity o)
 end
 
 @ExecSpace("ServerOnly")
+method void SpawnUltimateTargets(Entity map, number startX)
+	-- 궁극기 발동 시 타격감용으로 플레이어 앞(+X)에 몬스터+장애물을 임시 스폰(정규 코스와 별개). 돌진의 DestroyTargetsInPath가
+	-- 이걸 넉백(LaunchKnockback)하며 지나간다. 정규 코스 배치(CmdSpawn, Lifetime=999999)와 달리 여기선 "안전한 타격감 타겟"으로
+	-- 만든다: (1) 접촉 데미지 0(자해 방지), (2) UltTargetLifetime 뒤 자동 제거(돌진이 놓쳐도 잔존 안 함). startX=플레이어 x, 스폰은 그 앞부터.
+	if not isvalid(map) then return end
+	local fY = self.curFloorY
+	local omodel = self:ObstacleModel(self.UltObstacleKind)
+	-- 몬스터 kind 목록 파싱(쉼표구분). 스폰 순서대로 번갈아 사용. 비면 normal 폴백.
+	local kinds = {}
+	for k in string.gmatch(self.UltMonsterKinds, "[^,]+") do
+		table.insert(kinds, k)
+	end
+	if #kinds == 0 then table.insert(kinds, "normal") end
+	for i = 1, self.UltTargetCount do
+		local bx = startX + self.UltSpawnAheadX + self.UltTargetGap * i
+		-- 몬스터(Rigidbody → 중력으로 발판에 안착). kind는 목록에서 번갈아. 접촉 데미지 0, 수명 뒤 자동 제거.
+		local mkind = kinds[((i - 1) % #kinds) + 1]
+		local mon = _SpawnService:SpawnByModelId("normalmonster", "UltMon_" .. tostring(i), Vector3(bx, fY + self.monsterYOff, 0), map)
+		if isvalid(mon) then
+			---@type MonsterUnit
+			local mu = mon:GetComponent("script.MonsterUnit")
+			if mu ~= nil then
+				mu:SetMonster(mkind)
+				mu.ContactDamage = 0
+			end
+			mon:Destroy(self.UltTargetLifetime)
+		end
+		-- 장애물(바닥 접지). 접촉 데미지 0, 자동 despawn 끄고(Lifetime 크게) 수명 뒤 명시적 제거.
+		if omodel ~= "" then
+			local ox = bx + self.UltTargetGap * 0.5
+			local o = _SpawnService:SpawnByModelId(omodel, "UltObs_" .. tostring(i), Vector3(ox, fY + self.obstacleYRest, 0), map)
+			if isvalid(o) then
+				---@type Obstacle
+				local oc = o:GetComponent("script.Obstacle")
+				if oc ~= nil then
+					oc.Damage = 0
+					oc.Lifetime = 999999   -- Obstacle 자체 despawn 끔 → 아래 Destroy(수명)로만 제거
+				end
+				o:Destroy(self.UltTargetLifetime)
+			end
+		end
+	end
+	log("[CourseGen] ultimate targets spawned startX=" .. string.format("%.1f", startX)
+		.. " count=" .. tostring(self.UltTargetCount) .. " floorY=" .. tostring(fY))
+end
+
+@ExecSpace("ServerOnly")
 method void CmdSpawn(Entity map, table cfg, table c)
 	-- "Spawn" command — p1=type, p2=x, p3=optional Y (height ABOVE the floor).
 	-- p1 is a hazard id defined in the ObstacleDef DataSet (spike/obstacle/monster/...),
@@ -924,6 +998,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		local buffKind = "attack"
 		local defaultAmt = 0.5
 		local statKey = "AtkBuffAmt"   -- 강화 시 이 아이템 지급량↑ StatTable 키(획득 순간 플레이어별 반영)
+		local pickupFx = ""            -- 획득 이펙트 RUID(kind별. 비면 없음)
 		if kind == "aspdbuff" then
 			ruid = self.aspdBuffRuid
 			buffKind = "attackspeed"
@@ -974,6 +1049,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			buffKind = "ultgauge"
 			defaultAmt = 10     -- 궁극기 게이지 % (MaxGauge의 10%). p3로 지정 가능
 			statKey = ""
+			pickupFx = self.ultPickupEffectRuid   -- 궁극기 게이지 물약 획득 이펙트
 		elseif kind == "invincible" then
 			ruid = self.invincibleRuid
 			buffKind = "invincible"
@@ -993,6 +1069,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			if ic ~= nil then
 				ic.BuffKind = buffKind
 				ic.StatKey = statKey
+				ic.PickupEffectRUID = pickupFx
 				local amt = tonumber(c.p3)
 				ic.Amount = (amt ~= nil) and amt or defaultAmt
 			end
