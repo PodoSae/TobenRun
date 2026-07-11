@@ -93,6 +93,9 @@ script MushmomBoss extends Component
     @MaxValue(6)
     @Delta(0.1)
     property number EntranceDustScale = 2.4
+    @DisplayName("착지 먼지 이펙트 RUID")
+    @Description("착지 순간 재생할 먼지 이펙트(animationclip). 비면 내장 DustExplosion 파티클로 대체")
+    property string LandDustVfxRUID = "9a2c9bcad8634136b9653960bbf69c1b"
     @DisplayName("등장 낙하 이미지")
     @Description("낙하 중 표시할 클립(비면 기본 이미지). Mushmom jump 클립 기본값")
     property string FallRUID = "5ecbcc4002a5491aafd7e1d3191c6ddc"
@@ -297,23 +300,34 @@ script MushmomBoss extends Component
     -- player instead of an instant map-wide hit. The player jumps over it to dodge.
     property string ShockWaveModelId = "MushmomShockWave"
     @DisplayName("충격파 이동 속도")
-    @Description("바닥을 타고 플레이어 쪽으로 날아오는 충격파의 수평 속도")
-    @MinValue(1)
+    @Description("충격파가 바닥을 타고 플레이어 쪽으로 굴러오는 수평 속도. 낮을수록 천천히 다가온다(과거 9는 너무 빨랐음)")
+    @MinValue(0.5)
     @MaxValue(30)
     @Delta(0.5)
-    property number ShockwaveSpeed = 9.0
-    @DisplayName("충격파 생성 앞거리")
-    @Description("보스 발 앞 이만큼 떨어진 지점에서 충격파가 생성된다(보스 몸에서 곧바로 겹치지 않게)")
+    property number ShockwaveSpeed = 2.0
+    @DisplayName("충격파 생성 뒷거리")
+    @Description("보스 발 뒤(플레이어 반대쪽) 이만큼 떨어진 지점에서 충격파가 생성되어 보스를 지나 플레이어 쪽으로 굴러온다")
     @MinValue(0)
     @MaxValue(3)
     @Delta(0.1)
     property number ShockwaveSpawnForward = 0.6
     @DisplayName("충격파 지면 높이 보정")
-    @Description("충격파 스프라이트가 바닥에 걸쳐 보이도록 바닥에서 살짝 띄우는 값")
+    @Description("충격파 이펙트 Y = 바닥 + 이 값. 0이면 바닥과 동일 높이")
     @MinValue(0)
     @MaxValue(2)
     @Delta(0.1)
-    property number ShockwaveGroundOffset = 0.3
+    property number ShockwaveGroundOffset = 0.0
+    @DisplayName("충격파 착지 이펙트 RUID")
+    @Description("보스가 착지하는 순간 생성되는 이펙트(animationclip). 비면 내장 SmallExplosion 파티클로 대체")
+    property string ShockwaveLandVfxRUID = "9a2c9bcad8634136b9653960bbf69c1b"
+    @DisplayName("충격파 착지 이펙트 크기")
+    @MinValue(0.1)
+    @MaxValue(8)
+    @Delta(0.1)
+    property number ShockwaveLandVfxScale = 1.2
+    @DisplayName("충격파 착지 이펙트 오프셋(보스 기준)")
+    @Description("착지 이펙트를 보스의 자식으로 붙일 때의 로컬 오프셋. (0,0,0)이면 보스 발/지면")
+    property Vector3 ShockwaveLandVfxOffset = Vector3(0, 0, 0)
 
     -- === Boss-fight ultimate gauge (궁극기 게이지 규칙 전환) ===
     @DisplayName("피격 시 궁극기 게이지 획득(%)")
@@ -338,7 +352,7 @@ script MushmomBoss extends Component
     @MinValue(0)
     @MaxValue(12)
     @Delta(0.5)
-    property number NormalOffsetX = 8.0
+    property number NormalOffsetX = 10.0
     @DisplayName("그로기 추적 오프셋 X(앞)")
     @Description("그로기 중 보스 위치 = 플레이어 X + 이 값. 작으면 플레이어와 겹치고, 크면 멀어져 때리기 어려움")
     @MinValue(0)
@@ -425,7 +439,20 @@ script MushmomBoss extends Component
     @MinValue(0.2)
     @MaxValue(5)
     @Delta(0.1)
-    property number GroggyVfxScale = 1.5
+    property number GroggyVfxScale = 3.0
+
+    -- 돌진(몸통박치기) 전조증상 이펙트: 웅크리기(예고) 동안 보스에 부착되어 루프 재생되고, 돌진 시작(BeginCharge) 시 제거된다.
+    @DisplayName("돌진 전조 이펙트 RUID")
+    @Description("돌진 직전 웅크리는 예고 동안 보스에 부착해 재생하는 경고 이펙트. 돌진이 시작되면 사라진다")
+    property string ChargeTelegraphVfxRUID = "d485cc6782dd48588d753628582f3141"
+    -- 오프셋 y=0 → 보스 트랜스폼 원점(= 발/지면 높이. LandShockwave가 groundY로 스냅하는 그 값)에 딱 붙어 바닥에 닿는다.
+    @DisplayName("돌진 전조 이펙트 오프셋")
+    property Vector3 ChargeTelegraphVfxOffset = Vector3(0, 0, 0)
+    @DisplayName("돌진 전조 이펙트 크기 배율")
+    @MinValue(0.2)
+    @MaxValue(10)
+    @Delta(0.1)
+    property number ChargeTelegraphVfxScale = 6.0
 
     -- Server-only caches / guards.
     property any movement = nil
@@ -969,10 +996,12 @@ script MushmomBoss extends Component
         if not isvalid(t) then return end
         local wp = t.WorldPosition
 
-        -- Spawn just in FRONT of the boss (toward the player) and send it traveling that way.
-        -- dir = which way the player is; ShockwaveSpawnForward = how far ahead it is born.
+        -- The wave rolls TOWARD the player at a slow speed — it is born just BEHIND the boss (the side away from
+        -- the player) and slides forward through the boss toward the player, so it reads as "the slam sends a wave
+        -- rolling at you". Slow (ShockwaveSpeed ≪ old 9) so it no longer whooshes past; the player jumps it.
+        --   dir = sign toward the player (boss sits to the player's right ⇒ usually −1/left) = the travel direction.
         local dir = self:DirectionToPlayer()
-        local startX = wp.x + dir * self.ShockwaveSpawnForward
+        local startX = wp.x - dir * self.ShockwaveSpawnForward     -- 보스 뒤(플레이어 반대쪽)에서 생성
         local startPos = Vector3(startX, groundY + self.ShockwaveGroundOffset, wp.z)
         local hitTopY = groundY + self.ShockwaveSafeHeight
 
@@ -1038,14 +1067,20 @@ script MushmomBoss extends Component
 
     @ExecSpace("Multicast")
     method void PlayShockwaveVfx(number px, number py, number pz)
-        -- One-shot ground shock burst on every client. The position is computed on the SERVER and passed in
-        -- explicitly — NOT read from the client-side transform, which lags behind the boss's true position and
-        -- made the burst spawn behind the boss. CurrentMap is the context entity so the coords are world-absolute
-        -- (same proven pattern as MushmomShockWave.ShowHitEffect).
-        local mapEntity = self.Entity.CurrentMap
-        if mapEntity == nil then return end
-        _ParticleService:PlayBasicParticle(
-            BasicParticleType.SmallExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(1.2, 1.2, 1.2), false, {})
+        -- One-shot landing burst on every client. 착지 이펙트를 보스(self.Entity)의 자식으로 부착 재생한다
+        -- (PlayEffectAttached) — 보스에 딱 붙어 위치 지연 없이 발 밑에 뜬다. 로컬 오프셋은 ShockwaveLandVfxOffset.
+        -- RUID가 있으면 그 이펙트만, 없으면 내장 SmallExplosion 파티클(서버 계산 월드좌표 px,py,pz)로 대체.
+        if not isvalid(self.Entity) then return end
+        if self.ShockwaveLandVfxRUID ~= "" then
+            local s = self.ShockwaveLandVfxScale
+            _EffectService:PlayEffectAttached(
+                self.ShockwaveLandVfxRUID, self.Entity, self.ShockwaveLandVfxOffset, 0, Vector3(s, s, 1), false)
+        else
+            local mapEntity = self.Entity.CurrentMap
+            if mapEntity == nil then return end
+            _ParticleService:PlayBasicParticle(
+                BasicParticleType.SmallExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(1.2, 1.2, 1.2), false, {})
+        end
     end
 
     -- === Skill 2: body slam (몸통박치기) — telegraph → charge → hit / dodge → groggy ===
@@ -1062,6 +1097,7 @@ script MushmomBoss extends Component
         self:FacePlayer()
         self:SetSprite(self.CrouchRUID)
         self:PlayCastSound()
+        self:StartChargeTelegraphVfx()
         log("[MushmomBoss] body-slam telegraph (crouch) - charge in " .. tostring(self.SlamTelegraphDuration) .. "s")
         _TimerService:SetTimerOnce(function()
             if not isvalid(self.Entity) or self.dead then return end
@@ -1103,6 +1139,7 @@ script MushmomBoss extends Component
         self._T.chargeStartX = self.Entity.TransformComponent.WorldPosition.x
         self.chargeDir = self:DirectionToPlayer()
         self:ApplyFacing(self.chargeDir)
+        self:StopChargeTelegraphVfx()
         self:SetSprite(self.ChargeRUID)
 
         local movement = self.Entity.MovementComponent
@@ -1269,6 +1306,27 @@ script MushmomBoss extends Component
         end
     end
 
+    @ExecSpace("Multicast")
+    method void StartChargeTelegraphVfx()
+        -- 돌진 웅크리기(예고) 동안 보스에 부착해 루프 재생되는 전조 이펙트(ChargeTelegraphVfxRUID). 클라별 serial 보관.
+        if not isvalid(self.Entity) then return end
+        if self.ChargeTelegraphVfxRUID == "" then return end
+        self:StopChargeTelegraphVfx()   -- 중복 시작 방지(이전 serial 정리)
+        -- 가로 = 세로와 동일 폭(x = scale). 세로 크기는 ChargeTelegraphVfxScale 그대로.
+        self._T.chargeVfxSerial = _EffectService:PlayEffectAttached(
+            self.ChargeTelegraphVfxRUID, self.Entity, self.ChargeTelegraphVfxOffset, 0,
+            Vector3(self.ChargeTelegraphVfxScale, self.ChargeTelegraphVfxScale, 1), true)
+    end
+
+    @ExecSpace("Multicast")
+    method void StopChargeTelegraphVfx()
+        -- StartChargeTelegraphVfx로 시작한 루프 이펙트 제거(클라별 serial). 돌진 시작 시 호출.
+        if self._T.chargeVfxSerial ~= nil then
+            _EffectService:RemoveEffect(self._T.chargeVfxSerial)
+            self._T.chargeVfxSerial = nil
+        end
+    end
+
     @ExecSpace("ServerOnly")
     method number DirectionToPlayer()
         -- +1 if the nearest player is to the right, -1 if to the left. Defaults to -1 (sprites face left).
@@ -1362,10 +1420,15 @@ script MushmomBoss extends Component
 
     @ExecSpace("Multicast")
     method void PlayLandingImpact(Vector3 pos)
-        -- 전 클라 재생: 착지 먼지(DustExplosion, 원형 충격파+연기) + 카메라 흔들림 + 옵션 '쿵' 사운드.
+        -- 전 클라 재생: 착지 먼지 + 카메라 흔들림 + 옵션 '쿵' 사운드.
         if not isvalid(self.Entity) then return end
         local s = self.EntranceDustScale
-        _ParticleService:PlayBasicParticle(BasicParticleType.DustExplosion, self.Entity, pos, 0, Vector3(s, s, s), false, {})
+        -- 먼지 이펙트: 지정 RUID(animationclip)가 있으면 그걸 재생, 없으면 내장 DustExplosion 파티클로 대체.
+        if self.LandDustVfxRUID ~= "" then
+            _EffectService:PlayEffect(self.LandDustVfxRUID, self.Entity, pos, 0, Vector3(s, s, s), false)
+        else
+            _ParticleService:PlayBasicParticle(BasicParticleType.DustExplosion, self.Entity, pos, 0, Vector3(s, s, s), false, {})
+        end
         local cam = _CameraService:GetCurrentCameraComponent()
         if isvalid(cam) then
             cam:ShakeCamera(self.EntranceShakeIntensity, self.EntranceShakeDuration)
@@ -1677,6 +1740,7 @@ script MushmomBoss extends Component
         if isvalid(body) and self._T.shockGravity ~= nil then body.Gravity = self._T.shockGravity end
         self:StopShockTelegraphVfx()
         self:StopGroggyVfx()
+        self:StopChargeTelegraphVfx()
         -- Boss fight over: resume normal gauge fill (paused=false).
         self:SetPlayersGaugeAutoFill(false)
         self:GrantMeso(attacker)
