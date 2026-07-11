@@ -3,3 +3,6 @@ obstacle,Haz_obstacle,10,none,0,0
 spike,Haz_spike,15,slow,0.5,2
 spike_2,Haz_spike2,15,slow,0.5,2
 spike_up,Haz_spikeup,15,none,0,0
+spike_new_short,22182f17-3893-43bc-ac78-f7a50fcdb4aa,15,slow,0.5,2
+spikeup_new_short,c2bf1dec-abc8-4895-9a5a-56f8a0183196,15,none,0,0
+spikeup_new_long,14e643c5-b019-47a5-8a55-e1864d3526a8,15,none,0,0
