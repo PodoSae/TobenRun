@@ -74,6 +74,15 @@ property Entity scoreText = "2de4eed6-7a29-4a36-be9b-57cc5f3bf397"
 -- Distance-progress HUD (how far along the course the runner is): a fill bar + "x cur / goal" label.
 property Entity progressFill = "e0c5255c-5d64-4a00-a646-26fc75c6e869"
 property Entity progressText = "2aad731c-6936-4da9-aabe-98f98371ae33"
+-- 진행도 마커 아이콘: 코스 진행도(0~1)에 따라 X 위치가 이동한다. 절대좌표 대신 '디자인한 시작 위치(prog=0)'를
+-- 그대로 기준으로 삼고(첫 갱신 시 캡처) 거기서 오른쪽으로 progressIconMoveX 만큼 이동시킨다 → 앵커/부모와 무관하게 맞음.
+property Entity progressIcon = "9a099395-b1cf-4a57-9fb6-fcbe2f47572a"
+@DisplayName("진행 아이콘 이동 거리(X, 100%). 0=자동")
+@Description("0이면 진행 바(Fill) 우측 끝 - 시작위치로 자동 계산(아이콘이 진행 바와 같은 좌표계=RunProg 자식일 때 정확). 0이 아니면 그 값(px)만큼 이동")
+property number progressIconMoveX = 0
+-- 디자인한 시작 X(첫 갱신 때 아이콘의 anchoredPosition.x를 캡처). 이 값에서 progressIconMoveX*prog 만큼 오른쪽 이동.
+@HideFromInspector property number progressIconBaseX = 0
+@HideFromInspector property boolean progressIconBaseCaptured = false
 property Entity gameOverPanel = "133f65c0-d55e-41f2-b3f2-1ae708139b40"
 property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
 -- 새 결과창(ResultGroup)의 로비 버튼. 옛 팝업 버튼 대신 여기로 연결한다.
@@ -156,6 +165,14 @@ property Entity dbgStats = "a889b2eb-5b8b-48b2-bbfa-824f8e597e78"
 property Entity bossFrame = "55f95385-e767-49fb-aaee-5bb2e79baf0f"
 property SpriteGUIRendererComponent bossHpFill = "fc73c19c-d92f-4665-9442-24426a4cfde8"
 property TextComponent bossHpLabel = "0e41b6c3-d1d2-4240-89fb-93c2b7b6883d"
+-- 보스 프레임의 이름/초상화(수정된 DefaultGroup.ui의 BossFrame/Name·Portrait). 프레임을 켤 때 세팅.
+property TextComponent bossName = "1848e813-5ee1-4988-a569-203ee23b1e9b"
+property SpriteGUIRendererComponent bossPortrait = "daa52923-0e8f-4f8b-9b39-562ebf32823d"
+@DisplayName("보스 이름")
+property string bossDisplayName = "머쉬맘"
+@DisplayName("보스 초상화 RUID")
+@Description("비우면 .ui에 디자인된 초상화를 그대로 유지(권장). 값을 넣으면 그 스프라이트로 덮어쓴다(정적 sprite 권장 — animationclip이면 계속 재생됨)")
+property string bossPortraitRUID = ""
 property integer score = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
@@ -185,6 +202,12 @@ method void OnBeginPlay()
 	-- Hide the game-over panel and wire the result-panel restart button at world start.
 	if isvalid(self.gameOverPanel) then
 		self.gameOverPanel.Enable = false
+	end
+	-- 보스 프레임을 월드 시작 시 강제로 숨긴다. DefaultGroup은 DefaultShow=true라 타이틀/로비부터 HUD가 떠 있고,
+	-- 보스 프레임은 UpdateBossHp(보스전)에서만 켜지므로, 시작 시 여기서 확실히 꺼두지 않으면 스테이지 진입 전
+	-- (OnArriveMap 실행 전)에 보스전이 아닌데도 보일 수 있다.
+	if isvalid(self.bossFrame) then
+		self.bossFrame.Enable = false
 	end
 	if isvalid(self.restartButton) then
 		self.restartHandler = self.restartButton:ConnectEvent(ButtonClickEvent, self.OnGoLobbyClick)
@@ -951,6 +974,24 @@ method void UpdateProgress()
 	if isvalid(self.progressText) and self.progressText.TextComponent ~= nil then
 		self.progressText.TextComponent.Text = "x " .. tostring(math.floor(self.bestX)) .. " / " .. tostring(math.floor(self.goalX))
 	end
+	-- 진행도 마커 아이콘: 디자인한 시작 위치(첫 갱신 때 캡처)를 prog=0 기준으로 삼고, 진행도만큼 오른쪽으로 이동한다.
+	-- 이동 거리는 progressIconMoveX(0=자동). 자동이면 진행 바(Fill)의 우측 끝 - 시작위치로 계산 → 100%에서 바 우측 끝에
+	-- 정확히 닿는다(아이콘이 진행 바와 같은 좌표계=RunProg 자식일 때). Y는 유지.
+	if isvalid(self.progressIcon) and self.progressIcon.UITransformComponent ~= nil then
+		local ut = self.progressIcon.UITransformComponent
+		local ap = ut.anchoredPosition
+		if self.progressIconBaseCaptured == false then
+			self.progressIconBaseX = ap.x
+			self.progressIconBaseCaptured = true
+		end
+		local travel = self.progressIconMoveX
+		if travel <= 0 and isvalid(self.progressFill) and self.progressFill.UITransformComponent ~= nil then
+			local fut = self.progressFill.UITransformComponent
+			local rightEnd = fut.anchoredPosition.x + fut.RectSize.x * 0.5
+			travel = rightEnd - self.progressIconBaseX
+		end
+		ut.anchoredPosition = Vector2(self.progressIconBaseX + travel * prog, ap.y)
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -987,6 +1028,13 @@ method void UpdateBossHp(Component bossComp)
 	local boss = bossComp
 	if isvalid(self.bossFrame) and self.bossFrame.Enable == false then
 		self.bossFrame.Enable = true
+		-- 프레임을 처음 켤 때(보스 등장) 이름/초상화 세팅(매 프레임 재설정 방지).
+		if isvalid(self.bossName) then
+			self.bossName.Text = self.bossDisplayName
+		end
+		if isvalid(self.bossPortrait) and self.bossPortraitRUID ~= "" then
+			self.bossPortrait.ImageRUID = DataRef(self.bossPortraitRUID)
+		end
 	end
 	local maxHp = boss.MaxHp
 	if maxHp <= 0 then maxHp = 1 end
