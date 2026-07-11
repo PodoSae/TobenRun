@@ -199,15 +199,6 @@ script StageBuffItem extends Component
             else
                 log_warning("[StageBuffItem] PlayerSave or PlayerComponent missing — tobencoin not granted")
             end
-        elseif kind == "meso" then
-            -- 메소 픽업 → 그 플레이어 지갑에 메소 지급(서버 권위, @TargetUserSync Meso → 소유 클라 HUD 갱신). amount = 지급 메소량.
-            ---@type PlayerWallet
-            local wallet = player:GetComponent("script.PlayerWallet")
-            if wallet ~= nil then
-                wallet:AddMeso(amount)
-            else
-                log_warning("[StageBuffItem] player has no script.PlayerWallet — meso not granted")
-            end
         else
             log_warning("[StageBuffItem] unknown BuffKind: " .. tostring(kind))
         end

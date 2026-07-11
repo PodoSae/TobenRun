@@ -33,40 +33,17 @@ property number coinFloatY = 0.5
 @DisplayName("코인 RUID")
 property string coinRuid = "184093654538492ea60617c0e3dd5c51"
 -- ── 토벤코인 픽업(계정 재화) ── 메소(coin=점수)와 별개로 실제 토벤코인(coin 재화)을 지급하는 픽업. Spawn,tobencoin,x[,y]
-@DisplayName("토벤코인 픽업 RUID(애니메이션)")
-property string tobenCoinRuid = "9870868c618e440b9f99e38ea59e96d9"
+@DisplayName("토벤코인 픽업 RUID")
+property string tobenCoinRuid = "cf9cf3f4d48546adb9b4462dc6a34c1e"
 @DisplayName("토벤코인 기본 높이(바닥 위)")
 property number tobenCoinFloatY = 0.5
 @DisplayName("토벤코인 픽업 획득량")
 @MinValue(1)
 @MaxValue(100)
 property integer tobenCoinAmount = 1
-@DisplayName("토벤코인 픽업 크기 배율")
-@Description("스폰 시 엔티티 Scale 배율. 1.0 = 애니메이션 원본 크기")
-@MinValue(0.01)
-@MaxValue(5)
-@Delta(0.01)
-property number tobenCoinScale = 0.075
 @DisplayName("토벤코인 획득 이펙트 RUID")
 @Description("먹었을 때 재생할 이펙트. 비우면 없음")
 property string tobenCoinPickupFx = ""
--- ── 메소 픽업(애니메이션) ── 획득 시 그 플레이어 지갑에 메소 지급. Spawn,meso,x[,y]. body-less runprop + StageBuffItem(BuffKind=meso).
--- StageBuffItem은 고정 PickupRadius로 판정하므로 animationclip 비주얼과 안전(script.Coin의 스프라이트 측정 크래시 회피).
-@DisplayName("메소 픽업 RUID(애니메이션)")
-@Description("Spawn,meso,x 로 배치되는 메소 픽업 animationclip")
-property string mesoRuid = "b60c3cbbf52c40709f2fd886d98fe2d9"
-@DisplayName("메소 픽업 기본 높이(바닥 위)")
-property number mesoFloatY = 1.0
-@DisplayName("메소 픽업 획득량")
-@MinValue(1)
-@MaxValue(100000)
-property integer mesoAmount = 10
-@DisplayName("메소 픽업 크기 배율")
-@Description("스폰 시 엔티티 Scale 배율. 애니메이션 원본이 크면 낮춘다")
-@MinValue(0.01)
-@MaxValue(5)
-@Delta(0.01)
-property number mesoScale = 2
 @DisplayName("공격력 버프 아이템 RUID")
 @Description("로그라이트 공격력 증가 아이템(atkbuff) 스프라이트 (기본: '물리 공격력 상승' 아이템 스프라이트)")
 property string atkBuffRuid = "05763a97e7434f76b426fa2878395687"
@@ -525,7 +502,7 @@ end
 @ExecSpace("ServerOnly")
 method boolean IsCourseEntity(string nm)
 	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_", "TobenCoin_", "Meso_" }
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_", "TobenCoin_" }
 	for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
@@ -1081,7 +1058,6 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		end
 		local tc = self:SpawnProp(map, "TobenCoin_" .. tostring(math.floor(x)), x, ty, self.tobenCoinRuid)
 		if isvalid(tc) then
-			tc.TransformComponent.Scale = Vector3(self.tobenCoinScale, self.tobenCoinScale, 1)
 			---@type StageBuffItem
 			local tcc = tc:AddComponent("script.StageBuffItem")
 			if tcc ~= nil then
@@ -1092,29 +1068,6 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			end
 		else
 			log("[CourseGen] tobencoin spawn failed @x=" .. tostring(x))
-		end
-		return
-	end
-	-- 메소 픽업(애니메이션): body-less runprop에 mesoRuid(animationclip)를 얹고 StageBuffItem(BuffKind=meso) 런타임 부착 →
-	-- 서버 근접 판정으로 획득 시 그 플레이어 지갑에 메소 지급(@TargetUserSync → HUD 갱신). p3=y(선택).
-	if kind == "meso" then
-		local my2 = cfg.floorY + self.mesoFloatY
-		if yGiven ~= nil then
-			my2 = cfg.floorY + yGiven
-		end
-		local mp = self:SpawnProp(map, "Meso_" .. tostring(math.floor(x)), x, my2, self.mesoRuid)
-		if isvalid(mp) then
-			mp.TransformComponent.Scale = Vector3(self.mesoScale, self.mesoScale, 1)
-			---@type StageBuffItem
-			local mpc = mp:AddComponent("script.StageBuffItem")
-			if mpc ~= nil then
-				mpc.BuffKind = "meso"
-				mpc.Amount = self.mesoAmount
-				mpc.StatKey = ""
-				mpc.PickupEffectRUID = ""
-			end
-		else
-			log("[CourseGen] meso spawn failed @x=" .. tostring(x))
 		end
 		return
 	end
