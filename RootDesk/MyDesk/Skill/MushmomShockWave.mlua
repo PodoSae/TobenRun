@@ -8,11 +8,12 @@ script MushmomShockWave extends Component
 
     -- Travel speed along the floor (world units / sec), toward the player. Set per-launch by the boss.
     property number Speed = 9.0
-    -- Hard safety lifetime (seconds): recycles even if it never leaves the arena.
-    property number MaxLifetime = 4.0
+    -- Hard safety lifetime (seconds): recycles even if it never leaves the arena. The wave rolls SLOWLY toward the
+    -- player, so give it a long life so it doesn't vanish before it reaches / passes the player.
+    property number MaxLifetime = 10.0
     -- Max distance (world units) from the launch point before it recycles (relative, not a fixed world rect, so
     -- it works anywhere the endless runner scrolls to).
-    property number MaxRange = 22.0
+    property number MaxRange = 30.0
     -- Horizontal half-width (world units) of the contact band around the wave's current column.
     property number HitHalfWidth = 0.7
     -- Damage dealt to a player on contact (overwritten per-launch by the boss).
@@ -26,6 +27,12 @@ script MushmomShockWave extends Component
 
     -- Parking spot for an idle (pooled) wave: far off any camera while it waits to be reused.
     property Vector3 ParkPosition = Vector3(0, 99999, 999)
+
+    -- 진행파 비주얼: 이펙트 클립(animationclip)을 엔티티 SpriteRendererComponent.SpriteRUID로 재생한다. 렌더러는
+    -- 매 프레임 엔티티 트랜스폼 위치에 그려지므로 OnUpdate의 Translate 이동을 그대로 따라간다(부착 이펙트는 못 따라감).
+    property string VfxRUID = "aa0d34d6b7ed42ffa70841b15c9fede2"
+    property number VfxScale = 3.0        -- 엔티티 Scale에 적용(크기 배율)
+    property number VfxOffsetY = 0.0       -- 스폰 Y 미세조정(바닥에서 살짝 올리고 싶을 때)
 
     @ExecSpace("ServerOnly")
     method void OnBeginPlay()
@@ -56,10 +63,17 @@ script MushmomShockWave extends Component
         self.Damage = damage
         self.HitTopY = hitTopY
 
-        self.Entity.TransformComponent.Position = startPos
+        -- 비주얼 Y 미세조정(VfxOffsetY)만큼 올려 배치. 위치는 매 프레임 OnUpdate가 Translate로 갱신하며,
+        -- 렌더러는 엔티티 트랜스폼에 그려지므로 그 위치를 그대로 따라간다.
+        self.Entity.TransformComponent.Position = Vector3(startPos.x, startPos.y + self.VfxOffsetY, startPos.z)
+        self.Entity.TransformComponent.Scale = Vector3(self.VfxScale, self.VfxScale, 1)
 
+        -- 비주얼: 이펙트 클립(VfxRUID, animationclip)을 엔티티 렌더러의 SpriteRUID로 재생. 부착 이펙트(PlayEffectAttached)는
+        -- body 없는 엔티티의 직접 Translate 이동을 따라가지 못해 제자리에 머물렀다 — 렌더러는 매 프레임 엔티티 위치에
+        -- 그려지므로(스포어와 동일 검증된 방식) Translate로 갱신되는 위치를 확실히 따라간다.
         local renderer = self.Entity.SpriteRendererComponent
         if renderer ~= nil then
+            if self.VfxRUID ~= "" then renderer.SpriteRUID = self.VfxRUID end
             renderer.FlipX = self._T.dirX < 0
             renderer.Enable = true
         end
@@ -124,7 +138,7 @@ script MushmomShockWave extends Component
 
     @ExecSpace("ServerOnly")
     method void Deactivate()
-        -- Recycles the wave: mark idle and park it off-screen so the pool can reuse it.
+        -- Recycles the wave: mark idle and park it off-screen (renderer disabled in Park) so the pool can reuse it.
         self._T.fired = false
         self:Park()
     end
