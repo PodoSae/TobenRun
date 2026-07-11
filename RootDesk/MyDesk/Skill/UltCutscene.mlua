@@ -87,6 +87,18 @@ method void StopDashFull()
 	log("[UltCutscene] dash full-screen overlay off")
 end
 
+method void Dismiss()
+	-- 스테이지 종료/전환 시 궁극기 피버(전체화면 컷씬·돌진) 오버레이를 강제 해지한다. 상태·사운드도 정리해서
+	-- 남아있던 폴백 타이머가 나중에 EndCutscene을 발동해도 피니셔가 재실행되지 않도록 한다.
+	self.dashFullMode = false
+	self.finisherPending = false
+	if _SoundManager ~= nil then
+		_SoundManager:StopUltCutscene()
+	end
+	self:Hide()
+	log("[UltCutscene] dismissed (stage end)")
+end
+
 method void EndCutscene()
 	-- 컷신 종료(애니메이션 종료 이벤트 또는 폴백 타이머): 오버레이를 숨기고, 컷신 동안 멈춰 있던 러너/입력을 재개한 뒤
 	-- 투명 검기 피니셔 발사 + 궁극기 돌진 발동을 1회 수행한다. 이렇게 해야 캐릭터가 컷신 도중엔 정지해 있다가 컷신이

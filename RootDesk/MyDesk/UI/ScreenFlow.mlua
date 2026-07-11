@@ -1551,6 +1551,8 @@ end
 method void EnterGameWithLoading(string stage, string mapName)
 	-- 로딩 커버로 화면을 덮은 뒤(covered) 스테이지 셋업(러너는 대기), 커버가 걷힐 때(reveal) 러너 시작.
 	-- 로딩이 없으면(폴백) 즉시 진입.
+	-- 인게임 HUD를 켠다(스테이지에서만 표시). 로딩 커버가 위를 덮고 있어 reveal 시 게임과 함께 드러난다.
+	if _IngameHud ~= nil then _IngameHud:SetVisible(true) end
 	if _LoadingScreen == nil then
 		if isvalid(self.stageSelectRoot) then self.stageSelectRoot.Enable = false end
 		if isvalid(self.lobbyRoot) then self.lobbyRoot.Enable = false end
@@ -1698,6 +1700,10 @@ method void DoShowLobby()
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = true
 	end
+	-- 로비로 돌아오면 인게임 HUD를 숨긴다(스테이지에서만 표시).
+	if _IngameHud ~= nil then _IngameHud:SetVisible(false) end
+	-- 궁극기 피버(전체화면 컷씬) 오버레이가 남아있으면 로비 복귀 시 해지.
+	if _UltCutscene ~= nil then _UltCutscene:Dismiss() end
 	self:RefreshSavedUI()
 	-- 튜토리얼 2막: 로비로 돌아오면 현재 로비 스텝 안내를 띄우게 알림.
 	if _TutorialManager ~= nil then
@@ -1715,6 +1721,8 @@ method void OnStartGameClick(ButtonClickEvent event)
 	if isvalid(self.titleRoot) then
 		self.titleRoot.Enable = false
 	end
+	-- 인게임 HUD를 켠다(스테이지에서만 표시).
+	if _IngameHud ~= nil then _IngameHud:SetVisible(true) end
 	if _RunGameHud ~= nil then
 		_RunGameHud:StartGame()
 	end
