@@ -256,7 +256,9 @@ script PlayerController extends Component
 		if self.stunRemaining > 0 then return end
 		if self.inputLocked then return end
 		if self.body ~= nil and self.body:IsOnGround() then
-			self.body:AddForce(Vector2(self.jumpFwdForce, self.jumpForce))
+			-- 전방 성분 = 레벨에 고정된 달리기 속도(self.speed = 코스 Set,speed)를 반영해 레벨 속도에 비례한 전방 임펄스.
+			-- 고정 jumpFwdForce 대신 사용(빠른 레벨일수록 점프도 더 앞으로 나간다).
+			self.body:AddForce(Vector2(self.speed, self.jumpForce))
 		end
 	end
 

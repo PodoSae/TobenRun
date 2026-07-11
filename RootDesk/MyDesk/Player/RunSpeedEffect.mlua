@@ -124,7 +124,8 @@ script RunSpeedEffect extends Component
 		-- 러너 이펙트(캐릭터 부착 루프): 달릴 때 켜고 멈추면 끈다(소유 클라만). minSpeed 게이트보다 앞에서 처리해야
 		-- 정지 시(아래 early-return) 이펙트를 끌 수 있다.
 		if self.enableRunEffect and isLocalPlayer then
-			self:UpdateRunEffect(speed >= self.minSpeed)
+			-- 점프(공중) 중엔 뒤쪽 러너 먼지 이펙트를 생성하지 않는다(요청). 땅에서 달릴 때만 표시.
+			self:UpdateRunEffect(speed >= self.minSpeed and self.body:IsOnGround())
 		end
 
 		if speed < self.minSpeed then return end
