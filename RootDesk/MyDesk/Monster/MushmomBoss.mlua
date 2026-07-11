@@ -1002,12 +1002,19 @@ script MushmomBoss extends Component
         --   dir = sign toward the player (boss sits to the player's right ⇒ usually −1/left) = the travel direction.
         local dir = self:DirectionToPlayer()
         local startX = wp.x - dir * self.ShockwaveSpawnForward     -- 보스 뒤(플레이어 반대쪽)에서 생성
-        local startPos = Vector3(startX, groundY + self.ShockwaveGroundOffset, wp.z)
-        local hitTopY = groundY + self.ShockwaveSafeHeight
+
+        -- 맵 바닥 y(=파도 최소 y): groundY(예고 시 캡처)가 nil→0 폴백이면 floorY≠0 맵에서 바닥 아래에 생긴다.
+        -- 착지한 보스 실측 y(wp.y, 서버 권위)와 비교해 더 높은(=바닥에 해당하는) 값을 바닥 기준으로 삼아 방지한다.
+        -- (_RunGameHud.courseFloorY는 ClientOnly라 서버에서 신뢰 불가 → 서버측 보스 y 사용.)
+        local floorY = groundY
+        if wp.y > floorY then floorY = wp.y end
+        local startPos = Vector3(startX, floorY + self.ShockwaveGroundOffset, wp.z)
+        local hitTopY = floorY + self.ShockwaveSafeHeight
 
         local wave = self:AcquireShockWave()
         if wave ~= nil then
             wave.Speed = self.ShockwaveSpeed
+            wave.MinY = math.max(floorY, 1)                       -- 파도 y는 무조건 1 이상(바닥 밑으로 안 내려감)
             wave:Launch(startPos, dir, self.ShockwaveDamage, hitTopY)
             log("[MushmomBoss] shockwave TRAVEL launched x=" .. string.format("%.2f", startX)
                 .. " dir=" .. tostring(dir) .. " speed=" .. tostring(self.ShockwaveSpeed) .. " hitTopY=" .. tostring(hitTopY))

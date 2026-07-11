@@ -30,8 +30,19 @@ property string patternPrefix = "Pattern"
 property string obstacleRuid = "af921b2251574675834981e2394e05d1"
 @DisplayName("코인 기본 높이(바닥 위)")
 property number coinFloatY = 0.5
-@DisplayName("코인 RUID")
-property string coinRuid = "184093654538492ea60617c0e3dd5c51"
+@DisplayName("코인 RUID(애니메이션)")
+@Description("Spawn,coin,x 로 배치되는 코인(맵 화폐) 픽업 animationclip. 획득 시 메소+점수")
+property string coinRuid = "b60c3cbbf52c40709f2fd886d98fe2d9"
+@DisplayName("코인 픽업 크기 배율")
+@MinValue(0.01)
+@MaxValue(5)
+@Delta(0.01)
+property number coinScale = 2
+@DisplayName("코인 픽업 지급량(메소=점수)")
+@Description("획득 시 지급하는 메소와 점수(코인 카운터) 값. 기존 코인은 50")
+@MinValue(1)
+@MaxValue(100000)
+property integer coinAmount = 50
 -- ── 토벤코인 픽업(계정 재화) ── 메소(coin=점수)와 별개로 실제 토벤코인(coin 재화)을 지급하는 픽업. Spawn,tobencoin,x[,y]
 @DisplayName("토벤코인 픽업 RUID")
 property string tobenCoinRuid = "cf9cf3f4d48546adb9b4462dc6a34c1e"
@@ -1034,14 +1045,25 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		return
 	end
 	if kind == "coin" then
-		-- Coin is its own model (Models/Pickups/Coin.model, modelId "coin") — sprite + script.Coin baked
-		-- in. The in-model Coin script self-sizes its pickup box and collects on real box-overlap.
+		-- 코인(맵 화폐) 픽업: body-less runprop에 coinRuid(animationclip) + StageBuffItem(BuffKind=coin) 런타임 부착.
+		-- 서버 근접 판정으로 획득 시 메소 + 점수(획득 클라 HUD AddCoin) + 코인 SFX. StageBuffItem은 고정 PickupRadius라
+		-- 애니메이션 비주얼과 안전(기존 script.Coin의 스프라이트 측정 크래시 회피). p3=y(선택).
 		local cy = cfg.floorY + self.coinFloatY
 		if yGiven ~= nil then
 			cy = cfg.floorY + yGiven
 		end
-		local coin = _SpawnService:SpawnByModelId("coin", "Coin_" .. tostring(math.floor(x)), Vector3(x, cy, 0), map)
-		if isvalid(coin) == false then
+		local coin = self:SpawnProp(map, "Coin_" .. tostring(math.floor(x)), x, cy, self.coinRuid)
+		if isvalid(coin) then
+			coin.TransformComponent.Scale = Vector3(self.coinScale, self.coinScale, 1)
+			---@type StageBuffItem
+			local cc = coin:AddComponent("script.StageBuffItem")
+			if cc ~= nil then
+				cc.BuffKind = "coin"
+				cc.Amount = self.coinAmount
+				cc.StatKey = ""
+				cc.PickupEffectRUID = ""
+			end
+		else
 			log("[CourseGen] coin spawn failed @x=" .. tostring(x))
 		end
 		return

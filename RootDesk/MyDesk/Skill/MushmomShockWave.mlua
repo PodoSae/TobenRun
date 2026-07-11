@@ -28,6 +28,9 @@ script MushmomShockWave extends Component
     -- Parking spot for an idle (pooled) wave: far off any camera while it waits to be reused.
     property Vector3 ParkPosition = Vector3(0, 99999, 999)
 
+    -- 최소 world Y. 보스가 Launch 전에 설정(무조건 1 이상). 파도가 이 아래로 배치/이동하지 않도록 클램프한다.
+    property number MinY = 1
+
     -- 진행파 비주얼: 이펙트 클립(animationclip)을 엔티티 SpriteRendererComponent.SpriteRUID로 재생한다. 렌더러는
     -- 매 프레임 엔티티 트랜스폼 위치에 그려지므로 OnUpdate의 Translate 이동을 그대로 따라간다(부착 이펙트는 못 따라감).
     property string VfxRUID = "aa0d34d6b7ed42ffa70841b15c9fede2"
@@ -65,7 +68,10 @@ script MushmomShockWave extends Component
 
         -- 비주얼 Y 미세조정(VfxOffsetY)만큼 올려 배치. 위치는 매 프레임 OnUpdate가 Translate로 갱신하며,
         -- 렌더러는 엔티티 트랜스폼에 그려지므로 그 위치를 그대로 따라간다.
-        self.Entity.TransformComponent.Position = Vector3(startPos.x, startPos.y + self.VfxOffsetY, startPos.z)
+        -- 스폰 Y를 맵 바닥(MinY) 아래로 내려가지 않게 클램프(groundY nil→0 폴백 등으로 바닥 밑 스폰 방지).
+        local wy = startPos.y + self.VfxOffsetY
+        if wy < self.MinY then wy = self.MinY end
+        self.Entity.TransformComponent.Position = Vector3(startPos.x, wy, startPos.z)
         self.Entity.TransformComponent.Scale = Vector3(self.VfxScale, self.VfxScale, 1)
 
         -- 비주얼: 이펙트 클립(VfxRUID, animationclip)을 엔티티 렌더러의 SpriteRUID로 재생. 부착 이펙트(PlayEffectAttached)는
@@ -96,6 +102,11 @@ script MushmomShockWave extends Component
         self.Entity.TransformComponent:Translate(self._T.dirX * self.Speed * delta, 0)
 
         local pos = self.Entity.TransformComponent.Position
+        -- 맵 바닥(MinY) 아래로 내려가지 않게 매 프레임 클램프(안전장치).
+        if pos.y < self.MinY then
+            self.Entity.TransformComponent.Position = Vector3(pos.x, self.MinY, pos.z)
+            pos = self.Entity.TransformComponent.Position
+        end
         if math.abs(pos.x - (self._T.startX or pos.x)) >= self.MaxRange then
             self:Deactivate()
             return
