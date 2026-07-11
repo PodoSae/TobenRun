@@ -16,6 +16,12 @@ property any equipped = nil     -- slot -> itemId ("" = none)
 property any cellItems = nil    -- inventory cell index (0..15) -> itemId
 property string curTab = "all"
 property string selected = ""    -- item shown in the popup
+
+-- 무기 미장착 시 캐릭터가 드는 기본 무기(목검, 두손무기). 맨손/계정무기 대신 이걸 든다.
+-- 인게임·프리뷰·로비·고스트가 모두 ApplyRuidsToCostume를 공유하므로 이 값 하나로 전부 통일된다.
+-- 비우면("") 기존 동작(미장착=계정 코디로 복원/맨손). (목검 avataritem RUID)
+@DisplayName("기본 무기(목검) RUID")
+property string DefaultWeaponRuid = "43ad7bfeb9184252b24e6d60f76c17e5"
 property any slotHds = nil
 property any cellHds = nil
 property any tabHds = nil
@@ -582,6 +588,12 @@ method void ApplyRuidsToCostume(any cm, string weapon, string glove, string coat
 	if weapon ~= nil and weapon ~= "" then
 		cm:SetEquip(MapleAvatarItemCategory.OneHandedWeapon, weapon)
 		cm:SetEquip(MapleAvatarItemCategory.TwoHandedWeapon, "")
+		cm:SetEquip(MapleAvatarItemCategory.SubWeapon, "")
+	elseif self.DefaultWeaponRuid ~= nil and self.DefaultWeaponRuid ~= "" then
+		-- 무기 미장착 시 기본 목검(두손무기)을 든다(맨손/계정무기 대신). 두손무기는 한손+보조 슬롯을 점유하므로
+		-- 한손/보조는 비운다(장착 무기가 한손일 때와 대칭). 스탯은 그대로 미장착(0 보정) — 외형만 기본 목검.
+		cm:SetEquip(MapleAvatarItemCategory.OneHandedWeapon, "")
+		cm:SetEquip(MapleAvatarItemCategory.TwoHandedWeapon, self.DefaultWeaponRuid)
 		cm:SetEquip(MapleAvatarItemCategory.SubWeapon, "")
 	elseif revertEmptyToAccount then
 		cm:SetEquip(MapleAvatarItemCategory.OneHandedWeapon, "")
