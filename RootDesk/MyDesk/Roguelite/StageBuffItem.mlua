@@ -106,10 +106,6 @@ script StageBuffItem extends Component
         if self.taken then return end
         self.taken = true
 
-		if _SoundManager ~= nil then
-                _SoundManager:PlayCoin()
-            end
-
         -- 지급량은 강화 반영값(획득 순간 그 플레이어 기준). StatKey 없는 아이템(heal 등)은 Amount 그대로.
         local amount = self:ResolveAmount(player)
 
@@ -223,6 +219,11 @@ script StageBuffItem extends Component
         end
 
         self:PlayPickupEffect(self.Entity.TransformComponent.WorldPosition)
+        -- 획득 사운드(메소 획득음): 클라 전용(SoundManager)이라 획득 플레이어 클라로 RPC 재생(모든 아이템 공통).
+        local pcSound = player.PlayerComponent
+        if pcSound ~= nil then
+            self:PlayPickupSoundClient(pcSound.UserId)
+        end
         log("[StageBuffItem] '" .. tostring(self.BuffKind) .. "' +" .. tostring(amount)
             .. " (key=" .. tostring(self.StatKey) .. ") to " .. tostring(player.Name))
         -- Tiny delay so the effect can fire before the entity is gone.
@@ -238,11 +239,18 @@ script StageBuffItem extends Component
 
     @ExecSpace("Client")
     method void GrantCoinScoreClient(integer score)
-        -- 코인 픽업 획득한 플레이어의 클라에서만 실행: 점수(코인 카운터, RunGameHud.AddCoin) + 코인 SFX 재생.
+        -- 코인 픽업 획득한 플레이어의 클라에서만 실행: 점수(코인 카운터, RunGameHud.AddCoin) 반영.
         -- 서버 Grant("coin")에서 그 플레이어 UserId로 호출(마지막 인자로 targetUserId 자동 전달). 메소는 서버에서 이미 지급.
+        -- 사운드는 PlayPickupSoundClient(모든 아이템 공통)가 담당하므로 여기선 재생하지 않는다(중복 방지).
         if _RunGameHud ~= nil then
             _RunGameHud:AddCoin(score)
         end
+    end
+
+    @ExecSpace("Client")
+    method void PlayPickupSoundClient()
+        -- 아이템 획득한 플레이어의 클라에서만 메소 획득 사운드 재생. 서버 Grant에서 그 플레이어 UserId로 호출
+        -- (마지막 인자로 targetUserId 자동 전달). SoundManager.PlayCoin은 클라 전용이라 서버에서 직접 못 부른다.
         if _SoundManager ~= nil then
             _SoundManager:PlayCoin()
         end
