@@ -1057,10 +1057,13 @@ script MushmomBoss extends Component
 
     @ExecSpace("Multicast")
     method void StartShockTelegraphVfx()
-        -- Glowing warning above the boss head during the shockwave telegraph (눈이 빛나는 예고).
+        -- 충격파 경고(예고): 보스 자식으로 부착하지 않고 바닥(world Y=1) 고정 위치에 재생. 가로(X) 2배로 넓힌 경고 파티클.
         if not isvalid(self.Entity) then return end
-        self._T.shockGlowSerial = _ParticleService:PlayBasicParticleAttached(
-            BasicParticleType.SpinField, self.Entity, Vector3(0, 1.2, 0), 0, Vector3(0.3, 0.3, 0.3), true, {})
+        local mapEntity = self.Entity.CurrentMap
+        if mapEntity == nil then return end
+        local wp = self.Entity.TransformComponent.WorldPosition
+        self._T.shockGlowSerial = _ParticleService:PlayBasicParticle(
+            BasicParticleType.SpinField, mapEntity, Vector3(wp.x, 1, wp.z), 0, Vector3(0.6, 0.3, 0.3), true, {})
     end
 
     @ExecSpace("Multicast")
@@ -1074,19 +1077,18 @@ script MushmomBoss extends Component
 
     @ExecSpace("Multicast")
     method void PlayShockwaveVfx(number px, number py, number pz)
-        -- One-shot landing burst on every client. 착지 이펙트를 보스(self.Entity)의 자식으로 부착 재생한다
-        -- (PlayEffectAttached) — 보스에 딱 붙어 위치 지연 없이 발 밑에 뜬다. 로컬 오프셋은 ShockwaveLandVfxOffset.
-        -- RUID가 있으면 그 이펙트만, 없으면 내장 SmallExplosion 파티클(서버 계산 월드좌표 px,py,pz)로 대체.
-        if not isvalid(self.Entity) then return end
+        -- One-shot landing burst on every client. 보스 자식으로 부착하지 않고(PlayEffect, 고정 위치) 재생 → 보스가
+        -- 점프/이동해도 따라가지 않는다. Y는 1로 고정(바닥 밑으로 안 들어감). x/z는 서버 계산 보스 위치.
+        -- RUID가 있으면 그 이펙트만, 없으면 내장 SmallExplosion 파티클로 대체.
+        local mapEntity = self.Entity.CurrentMap
+        if mapEntity == nil then return end
         if self.ShockwaveLandVfxRUID ~= "" then
             local s = self.ShockwaveLandVfxScale
-            _EffectService:PlayEffectAttached(
-                self.ShockwaveLandVfxRUID, self.Entity, self.ShockwaveLandVfxOffset, 0, Vector3(s, s, 1), false)
+            _EffectService:PlayEffect(
+                self.ShockwaveLandVfxRUID, mapEntity, Vector3(px, 1, pz), 0, Vector3(s, s, 1), false)
         else
-            local mapEntity = self.Entity.CurrentMap
-            if mapEntity == nil then return end
             _ParticleService:PlayBasicParticle(
-                BasicParticleType.SmallExplosion, mapEntity, Vector3(px, py, pz), 0, Vector3(1.2, 1.2, 1.2), false, {})
+                BasicParticleType.SmallExplosion, mapEntity, Vector3(px, 1, pz), 0, Vector3(1.2, 1.2, 1.2), false, {})
         end
     end
 

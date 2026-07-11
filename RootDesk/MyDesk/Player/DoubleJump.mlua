@@ -127,11 +127,11 @@ script DoubleJump extends Component
 		-- no-ops in mid-air — SetForce does not.
 
 		--self.body:SetForce(Vector2(self.runSpeed * self.jumpForce, self.jumpForce))
-		-- 점프 전방 속도 = 레벨(코스)에 고정된 달리기 속도를 반영: PlayerController.speed(= 코스 Set,speed)를 매 발동 시
-		-- 새로 읽어 쓴다. 고정 forwardForce는 폴백(컨트롤러 미확보 시).
+		-- 점프 전방 속도 = 현재 유효 이동속도(레벨 속도 × 스킬배율 × 지형배율)를 반영. 매 발동 시 새로 읽어,
+		-- 감속(진흙)·가속(버프/궁극기) 상태의 실제 전진 속도를 이단점프에도 반영한다. 고정 forwardForce는 폴백(컨트롤러 미확보 시).
 		local fwd = self.forwardForce
 		if self.controller ~= nil then
-			fwd = self.controller.speed
+			fwd = self.controller.speed * self.controller.speedMultiplier * self.controller.terrainMultiplier
 		end
 		self.body:SetForce(Vector2(fwd, self.jumpForce * 1.5))
 

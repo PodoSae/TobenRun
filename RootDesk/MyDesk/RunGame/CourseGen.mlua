@@ -72,10 +72,10 @@ property string regenBuffRuid = "13111d76481843aca7ef1c0b67e1a608"
 property string maxHpBuffRuid = "043d30b5581945e2a21f061a0cfc64b3"
 @DisplayName("보호막 아이템 RUID")
 @Description("로그라이트 보호막 아이템(shieldbuff) 스프라이트 (기본: '슈페리얼 프로텍트 실드' 아이템 스프라이트)")
-property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
+property string shieldBuffRuid = "4c5a4894b8424dc1be09b0ce820e4fef"
 @DisplayName("즉시 회복 아이템 RUID")
 @Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
-property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
+property string healBuffRuid = "742f18365a034ba1b592c7750c5f7690"
 @DisplayName("자석 아이템 RUID")
 @Description("자석(magnet) 스프라이트 (기본: '검은 자석')")
 property string magnetRuid = "08b6bdf6f8a44eb9ac23a3b97b3c906d"
@@ -87,7 +87,7 @@ property string slowSwordRuid = "a88caa5fbd8646b8aeb331896f7d286d"
 property string dotSwordRuid = "7c92e0752a8342bb9fc05c2bafebdeae"
 @DisplayName("궁극기 게이지 물약 RUID")
 @Description("궁극기 게이지 물약(ultgauge) 스프라이트 (기본: '마나 엘릭서')")
-property string ultPotionRuid = "3b778fe9d0b64a52a038b1c72cb58454"
+property string ultPotionRuid = "6d3c0a4ccf9b430dae321127234774eb"
 @DisplayName("궁극기 물약 획득 이펙트 RUID")
 @Description("ultgauge 아이템 획득 시 재생하는 이펙트(animationclip)")
 property string ultPickupEffectRuid = "bda67354085345fa9da5087671e26f72"
