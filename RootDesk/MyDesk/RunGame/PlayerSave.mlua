@@ -281,6 +281,18 @@ method boolean IsStageCleared(string stage)
 	return tonumber(self.clientData["c_" .. stage]) == 1
 end
 
+method integer GetStageStars(string stage)
+	-- Client-side read of the persisted best star count (0..3) earned on a stage.
+	if self.clientData == nil then
+		return 0
+	end
+	local v = self.clientData["st_" .. stage]
+	if v == nil then
+		return 0
+	end
+	return math.floor(v)
+end
+
 method integer GetItemLevel(string itemId)
 	-- Client-side read of an item's current level (0 = not bought yet).
 	if self.clientData == nil then
@@ -1264,6 +1276,29 @@ end
 
 
 @ExecSpace("Server")
+method void SaveStageStars(string stage, integer stars)
+	-- Game end → save this stage's best star count (0..3), only when it beats the stored best.
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	if stage == nil or stage == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	local k = "st_" .. stage
+	local prev = data[k]
+	if prev == nil then
+		prev = 0
+	end
+	if stars > prev then
+		data[k] = stars
+		self:Persist(userId)
+		log("[PlayerSave] stage " .. tostring(stage) .. " NEW stars=" .. tostring(stars))
+	end
+end
+
+@ExecSpace("Server")
 method void SaveStageScore(string stage, integer score)
 	-- Game end → save this stage's best score (only when it beats the stored best).
 	local userId = senderUserId
@@ -1450,6 +1485,21 @@ method void SetLocalStageBest(string stage, integer score)
 	end
 	if score > prev then
 		self.clientData[k] = score
+	end
+end
+
+method void SetLocalStageStars(string stage, integer stars)
+	-- Keep the client cache in step with a just-finished run (server persists authoritatively).
+	if self.clientData == nil then
+		self.clientData = {}
+	end
+	local k = "st_" .. stage
+	local prev = self.clientData[k]
+	if prev == nil then
+		prev = 0
+	end
+	if stars > prev then
+		self.clientData[k] = stars
 	end
 end
 

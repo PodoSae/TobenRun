@@ -104,6 +104,16 @@ script ResultUI extends Logic
         self:SetStar(self.star2, m2)
         self:SetStar(self.star3, m3)
 
+        -- 이번 판 획득 별 수(0~3)를 스테이지별 최고 기록으로 저장 → 스테이지 선택 화면에서 표기.
+        local starCount = 0
+        if m1 then starCount = starCount + 1 end
+        if m2 then starCount = starCount + 1 end
+        if m3 then starCount = starCount + 1 end
+        if _PlayerSave ~= nil and stage ~= nil and stage ~= "" then
+            _PlayerSave:SetLocalStageStars(stage, starCount)
+            _PlayerSave:SaveStageStars(stage, starCount)
+        end
+
         if isvalid(self.row1) then self.row1.Text = self:Label(o1t, o1v) end
         if isvalid(self.row2) then self.row2.Text = self:Label(o2t, o2v) end
         if isvalid(self.row3) then self.row3.Text = self:Label(o3t, o3v) end
@@ -142,6 +152,32 @@ script ResultUI extends Logic
         if t == "score" then return score >= v end
         if t == "boss" then return boss end
         return false
+    end
+
+    @ExecSpace("ClientOnly")
+    method string ObjectivesText(string stage)
+        -- 스테이지 별 획득 조건 3줄(결과창과 동일 소스: StageObjective 행 → 없으면 인스펙터 기본값).
+        local o1t = self.Obj1Type
+        local o1v = self.Obj1Value
+        local o2t = self.Obj2Type
+        local o2v = self.Obj2Value
+        local o3t = self.Obj3Type
+        local o3v = self.Obj3Value
+        if _DataService ~= nil and stage ~= nil and stage ~= "" then
+            local ds = _DataService:GetTable("StageObjective")
+            if ds ~= nil then
+                local row = ds:FindRow("stage", stage)
+                if row ~= nil then
+                    o1t = self:Cell(row, "obj1Type", o1t)
+                    o1v = self:CellNum(row, "obj1Value", o1v)
+                    o2t = self:Cell(row, "obj2Type", o2t)
+                    o2v = self:CellNum(row, "obj2Value", o2v)
+                    o3t = self:Cell(row, "obj3Type", o3t)
+                    o3v = self:CellNum(row, "obj3Value", o3v)
+                end
+            end
+        end
+        return "★ " .. self:Label(o1t, o1v) .. "\n★ " .. self:Label(o2t, o2v) .. "\n★ " .. self:Label(o3t, o3v)
     end
 
     method string Label(string t, integer v)
