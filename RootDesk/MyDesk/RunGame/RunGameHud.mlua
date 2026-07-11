@@ -589,7 +589,9 @@ end
 method void ApplyEquippedGear(Entity player)
 	-- 인게임 캐릭터(실제 계정 아바타)에 장착한 게임 장비 세트(무기+장갑+상의+하의)를 계정 코디 위에 덮어씌운다.
 	-- 슬롯 겹침 처리 포함: 두손무기(목검)는 한손 슬롯 점유 → 비움, 한벌옷(Longcoat)은 상/하의 점유 → 비움.
-	-- 미장착 슬롯은 건드리지 않아 계정 코디가 그대로 남는다(revertEmptyToAccount=false). 저장/데이터셋
+	-- ★ 계정 셀프-클론(DefaultEquipUserId=본인)으로 만든다: 이렇게 하면 무기/세트를 해제(빈 슬롯)할 때
+	--   SetEquip("")이 '맨몸'이 아니라 '계정 코디로 복원'된다(revertEmptyToAccount=true). 그래서 장비창에서 해제한
+	--   뒤 인게임에 이전 무기/갑옷세트가 잔상으로 남던 버그가 사라진다. 프리뷰·로비 센터 아바타·고스트와 완전 동일 구조.
 	-- 매핑·겹침 규칙은 EquipScreen:ApplyRuidsToCostume에 중앙화되어 캐릭터·로비·장비창·고스트가 모두 일치.
 	if isvalid(player) == false then
 		return
@@ -602,8 +604,35 @@ method void ApplyEquippedGear(Entity player)
 	if _EquipScreen == nil then
 		return
 	end
-	_EquipScreen:ApplyEquippedFromSaveTo(cm, false)
-	log("[RunGameHud] applied in-game equipped gear set")
+	-- 계정 셀프-클론 설정은 값이 바뀔 때 1회만(러닝 중 클론 재빌드/히치 방지). 최초 세이브 수신(로비 시점)에 설정되므로
+	-- 런 시작 전에 클론이 안착한다. 클론은 비동기라, 처음 설정한 직후엔 0.6s 뒤 오버레이를 재적용한다(로비와 동일).
+	local uid = ""
+	if isvalid(player.PlayerComponent) then
+		uid = player.PlayerComponent.UserId
+	end
+	if uid ~= "" and cm.DefaultEquipUserId ~= uid then
+		cm.DefaultEquipUserId = uid
+		_TimerService:SetTimer(self, self.ReapplyEquippedGear, 0.6, false)
+		log("[RunGameHud] in-game avatar set to account self-clone (uid=" .. tostring(uid) .. ")")
+	end
+	_EquipScreen:ApplyEquippedFromSaveTo(cm, true)
+	log("[RunGameHud] applied in-game equipped gear set (self-clone revert)")
+end
+
+@ExecSpace("ClientOnly")
+method void ReapplyEquippedGear()
+	-- DefaultEquipUserId 계정 클론이 비동기로 안착한 뒤 장비 오버레이를 다시 씌운다(로비 RefreshLobbyAvatar와 동일 목적):
+	-- 클론이 늦게 도착하면 처음 씌운 오버레이가 덮여 사라질 수 있어, 잠시 후 한 번 더 적용해 확실히 반영한다.
+	local player = _UserService.LocalPlayer
+	if isvalid(player) == false then
+		return
+	end
+	local cm = player.CostumeManagerComponent
+	if cm == nil or _EquipScreen == nil then
+		return
+	end
+	_EquipScreen:ApplyEquippedFromSaveTo(cm, true)
+	log("[RunGameHud] re-applied in-game equipped gear (post-clone)")
 end
 
 @ExecSpace("ClientOnly")
