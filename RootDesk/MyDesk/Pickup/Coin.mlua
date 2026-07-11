@@ -57,6 +57,13 @@ script Coin extends Component
             if _RunGameHud ~= nil then
                 _RunGameHud:AddCoin(self.Bonus)
             end
+            -- 맵 코인 = 돈(메소): 로컬 플레이어 지갑에 메소도 적립(서버 RPC). 점수(AddCoin)는 그대로 유지.
+            -- 서버 AddMeso → @TargetUserSync Meso 동기화 → PlayerWallet.OnSyncProperty → HUD 메소 이벤트 갱신.
+            ---@type PlayerWallet
+            local wallet = player:GetComponent("script.PlayerWallet")
+            if wallet ~= nil then
+                wallet:RequestAddMeso(self.Bonus)
+            end
             -- Pickup chime (client-side SFX via the central SoundManager).
             if _SoundManager ~= nil then
                 _SoundManager:PlayCoin()

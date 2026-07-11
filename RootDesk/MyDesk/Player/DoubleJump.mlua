@@ -20,8 +20,8 @@ script DoubleJump extends Component
 
 	-- 더블점프 발동 시 재생하는 이펙트(animationclip). 발동 지점에 1회 재생. 비우면 없음.
 	property string jumpEffectRUID = "93a7c6fa97e1433d8a305a165b9e309f"
-	property Vector3 jumpEffectOffset = Vector3(0, 0, 0)
-	property Vector3 jumpEffectScale = Vector3(1, 1, 1)
+	property Vector3 jumpEffectOffset = Vector3(0.2, 0, 0)
+	property Vector3 jumpEffectScale = Vector3(2, 2, 2)
 
 	-- Cached + runtime state (client / local player only).
 	property RigidbodyComponent body = nil

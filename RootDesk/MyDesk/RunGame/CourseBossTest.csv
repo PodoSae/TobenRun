@@ -2,7 +2,7 @@
 Set,floorY,01,
 Set,length,420,
 Set,goal,400,
-Set,speed,3,
+Set,speed,6,
 Set,tile,55b80c636aa242b6add9c1eb2808a9d1,
 Spawn,slime,16,
 Spawn,spore,20,

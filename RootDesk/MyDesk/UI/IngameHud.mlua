@@ -1,0 +1,284 @@
+@Logic
+@ExecSpace("ClientOnly")
+script IngameHud extends Logic
+
+-- 새 인게임 HUD(IngameHudGroup.ui) 컨트롤러. PlayerHudUI와 동일한 방식(로컬 플레이어 + 게임 로직에서 매 프레임 값을
+-- 읽어 UI에 미러링)으로, 요청한 레이아웃의 각 요소를 실제 데이터에 바인딩한다. UUID는 UIBuilder가 주입한다.
+-- 데이터 출처:
+--   이름     = player.PlayerComponent.Nickname
+--   체력     = script.PlayerHealth.CurrentHp / MaxHp
+--   레벨     = _PlayerSave:GetTobenLevel() (토벤 레벨)
+--   레벨진행 = _RunGameHud 코스 진행도 (bestX-spawnX)/(goalX-spawnX) = 현재 스테이지 진행률
+--   점수     = _RunGameHud.score
+--   메소     = script.PlayerWallet.Meso - 런 시작 기준 (이번 스테이지 획득분; PlayerWallet.OnSyncProperty 이벤트로 갱신)
+--   토벤코인 = _PlayerSave:GetCoin() - 런 시작 기준 (이번 스테이지 획득 계정 coin)
+--   궁극기   = script.UltimateSkill.Gauge / MaxGauge
+--   보스     = 현재 맵의 script.MushmomBoss.Hp / MaxHp, 이름 = _RunGameHud.bossDisplayName
+
+-- 좌상단 플레이어 프레임
+property TextComponent nameLabel = "ca6bbc54-fe2e-4358-a078-12f0d56a7464"
+property SpriteGUIRendererComponent hpFill = "18d15a18-14f1-4030-b008-56fd8c3cad4c"
+property SpriteGUIRendererComponent lvFill = "5209402a-bd5e-42f2-8715-ba3ee705a641"
+-- 레벨 진행 마커: 진행률(0~1)에 따라 레벨 바 위를 좌→우로 이동한다. lvBar는 이동폭(부모 바 폭) 계산용.
+property Entity lvMarker = "6564bcb4-fd52-4b28-ab2f-cf03f5b68d1d"
+property Entity lvBar = "7c978169-3579-4635-9bf8-2de1a02cfa61"
+-- 디자인한 마커 시작 X(첫 갱신 때 캡처) = prog 0 기준. 좌우 동일 여백으로 부모 바 폭만큼 이동.
+@HideFromInspector property number lvMarkerBaseX = 0
+@HideFromInspector property boolean lvMarkerBaseCaptured = false
+-- 중앙 상단 점수
+property TextComponent scoreText = "28792d1d-06af-4db9-9683-09e058fa5a3d"
+-- 좌측 재화
+property TextComponent mesoText = "8bb34aba-80ae-4e49-b3de-61a3982de6ee"
+property TextComponent coinText = "02cb2374-13b8-452f-b12c-085931dbfa2f"
+-- 좌하단 궁극기
+-- ultFill = 아이콘 위 어두운 라디얼 덮개. FillAmount에 미충전분(1-ratio)을 넣어 충전될수록 시계방향으로 걷힌다.
+property SpriteGUIRendererComponent ultFill = "e5aab440-ad4c-4204-8a8c-218b187d2db2"
+property TextComponent ultText = "2bbd1b31-60b5-4574-831b-82bac746ef93"
+-- 중앙 하단 보스
+property Entity bossBar = "8c325ea3-d04e-4434-9aa0-52bd732cf974"
+property TextComponent bossName = "6cd0c954-c814-436f-8ffe-59fa89f670b3"
+property SpriteGUIRendererComponent bossHpFill = "5d2543f5-fce6-48d4-a54b-a7540a204aec"
+property TextComponent bossHpLabel = "b398a735-c5ea-409a-ba60-32eb5ef19f74"
+-- 인게임 HUD 그룹 루트(IngameHudGroup). 스테이지(런) 중에만 보이도록 ScreenFlow가 SetVisible로 토글한다.
+-- 로비/타이틀/스테이지선택에선 숨김. 시작 시(OnBeginPlay) 숨긴 상태로 시작.
+property Entity hudRoot = "22a65787-95da-46ba-9d13-f01d5c09f24a"
+
+-- 재화는 '이번 스테이지에서 획득한 양'만 표시한다: 런 시작 시점의 계정 잔액을 기준(base)으로 잡고 현재 잔액과의
+-- 증가분을 보여준다. 잔액은 런 중 토벤코인 픽업(GrantCoinToUser)과 클리어 보상(GrantStageReward)으로만 변한다.
+-- 런 감지 신호 = _RunGameHud.runSeq (OnArriveMap마다 +1, 같은 스테이지 재플레이 포함).
+@HideFromInspector property number startMeso = 0
+@HideFromInspector property number startCoin = 0
+@HideFromInspector property boolean currencyBaseCaptured = false
+@HideFromInspector property integer lastRunSeq = -1
+
+-- 이름은 바뀔 때만 기록(매 프레임 TextComponent 쓰기 방지).
+property string lastName = ""
+-- 보스 이름은 등장 시 1회만 세팅(매 프레임 재설정 방지).
+property string lastBossName = ""
+
+method void OnBeginPlay()
+	-- 인게임 HUD는 스테이지에서만 보이도록, 시작(타이틀/로비)에는 숨긴 상태로 둔다. ScreenFlow가 게임 진입 시 켠다.
+	if isvalid(self.hudRoot) then
+		self.hudRoot.Enable = false
+	end
+	-- 시작 시 보스 바는 숨겨둔다(보스가 실제로 존재하면 매 프레임 켠다).
+	if isvalid(self.bossBar) then
+		self.bossBar.Enable = false
+	end
+	log("[IngameHud] OnBeginPlay")
+end
+
+@ExecSpace("ClientOnly")
+method void SetVisible(boolean v)
+	-- 인게임 HUD 그룹 표시/숨김. ScreenFlow가 게임 진입 시 true, 로비 복귀 시 false로 호출한다.
+	if isvalid(self.hudRoot) then
+		self.hudRoot.Enable = v
+	end
+end
+
+method void OnUpdate(number delta)
+	-- 매 프레임 로컬 플레이어 + 게임 상태를 읽어 HUD 각 요소를 갱신한다. 각 갱신은 독립적으로 nil 가드해
+	-- 한 소스가 없어도(예: PlayerHealth 미부착) 나머지 갱신이 막히지 않는다.
+	local player = _UserService.LocalPlayer
+	if not isvalid(player) then
+		return
+	end
+	self:UpdateName(player)
+	self:UpdateHp(player)
+	self:UpdateLevel(player)
+	self:UpdateScore()
+	self:UpdateCurrency()
+	self:UpdateUlt(player)
+	self:UpdateBoss(player)
+end
+
+method void UpdateName(Entity player)
+	-- 닉네임(@Sync)을 프레임 이름표에 미러링. 첫 프레임엔 빈 값일 수 있어 비어있지 않고 바뀐 경우에만 쓴다.
+	if not isvalid(self.nameLabel) then return end
+	local pc = player.PlayerComponent
+	if pc == nil then return end
+	local nm = pc.Nickname
+	if nm == nil or nm == "" then return end
+	if nm ~= self.lastName then
+		self.lastName = nm
+		self.nameLabel.Text = nm
+	end
+end
+
+method void UpdateHp(Entity player)
+	-- PlayerHealth(@Sync CurrentHp/MaxHp)를 체력바 fill + 라벨에 미러링.
+	---@type PlayerHealth
+	local hp = player:GetComponent("script.PlayerHealth")
+	if hp == nil then return end
+	local cur = hp.CurrentHp
+	local max = hp.MaxHp
+	if max <= 0 then max = 1 end
+	local ratio = cur / max
+	if ratio < 0 then ratio = 0 end
+	if ratio > 1 then ratio = 1 end
+	if isvalid(self.hpFill) then
+		self.hpFill.FillAmount = ratio
+	end
+end
+
+method void UpdateLevel(Entity player)
+	-- 진행률(현재 스테이지 진행) 1회 계산 후 바/마커에 공용으로 사용.
+	local prog = 0
+	if _RunGameHud ~= nil then
+		local span = _RunGameHud.goalX - _RunGameHud.spawnX
+		if span > 0 then
+			prog = (_RunGameHud.bestX - _RunGameHud.spawnX) / span
+			if prog < 0 then prog = 0 end
+			if prog > 1 then prog = 1 end
+		end
+	end
+	if isvalid(self.lvFill) then
+		self.lvFill.FillAmount = prog
+	end
+	-- 레벨 진행 마커 이동: 첫 갱신 때 디자인 시작 X(baseX)를 prog=0 기준으로 캡처하고, 부모 바(lvBar) 폭에서
+	-- 좌우 동일 여백(baseX)을 뺀 만큼 오른쪽으로 이동시킨다 → prog 1에서 (바 폭 - baseX) = 우측 대칭 위치.
+	if isvalid(self.lvMarker) and self.lvMarker.UITransformComponent ~= nil then
+		local ut = self.lvMarker.UITransformComponent
+		local ap = ut.anchoredPosition
+		if self.lvMarkerBaseCaptured == false then
+			self.lvMarkerBaseX = ap.x
+			self.lvMarkerBaseCaptured = true
+		end
+		local travel = 0
+		if isvalid(self.lvBar) and self.lvBar.UITransformComponent ~= nil then
+			travel = self.lvBar.UITransformComponent.RectSize.x - 2 * self.lvMarkerBaseX
+		end
+		if travel < 0 then travel = 0 end
+		ut.anchoredPosition = Vector2(self.lvMarkerBaseX + travel * prog, ap.y)
+	end
+end
+
+method void UpdateScore()
+	-- 점수 = RunGameHud의 현재 점수.
+	if not isvalid(self.scoreText) then return end
+	local s = 0
+	if _RunGameHud ~= nil then
+		s = _RunGameHud.score
+	end
+	self.scoreText.Text = "SCORE  " .. tostring(s)
+end
+
+method void UpdateCurrency()
+	-- 토벤코인은 계정 coin 잔액 델타로 폴링. 메소는 PlayerWallet.Meso 델타이며 값 변경은 이벤트(OnWalletMesoChanged)로
+	-- 갱신한다. 여기서는 새 런(runSeq 변경)을 감지해 기준값(런 시작 메소/코인)을 다시 잡고 즉시 한 번 표시를 리셋한다.
+	local seq = 0
+	if _RunGameHud ~= nil then
+		seq = _RunGameHud.runSeq
+	end
+	if seq ~= self.lastRunSeq then
+		self.lastRunSeq = seq
+		self.currencyBaseCaptured = false
+	end
+	-- 지갑(PlayerWallet)과 세이브(clientData)가 준비되면 런 시작 기준을 스냅샷하고 표시를 0으로 리셋.
+	if self.currencyBaseCaptured == false then
+		local w = self:GetLocalWallet()
+		if w ~= nil and _PlayerSave ~= nil and _PlayerSave.clientData ~= nil then
+			self.startMeso = w.Meso
+			self.startCoin = _PlayerSave:GetCoin()
+			self.currencyBaseCaptured = true
+			self:RefreshMeso()
+		end
+	end
+	-- 토벤코인(계정 coin 델타) 폴링 갱신.
+	if _PlayerSave ~= nil and isvalid(self.coinText) then
+		local gainedCoin = _PlayerSave:GetCoin() - self.startCoin
+		if gainedCoin < 0 then gainedCoin = 0 end
+		self.coinText.Text = tostring(math.floor(gainedCoin))
+	end
+end
+
+method PlayerWallet GetLocalWallet()
+	-- 로컬 플레이어의 PlayerWallet(@Component). 없으면 nil.
+	local lp = _UserService.LocalPlayer
+	if not isvalid(lp) then return nil end
+	---@type PlayerWallet
+	local w = lp:GetComponent("script.PlayerWallet")
+	return w
+end
+
+method void RefreshMeso()
+	-- 이번 스테이지 획득 메소 = 현재 PlayerWallet.Meso - 런 시작 기준(startMeso). 기준 미확정이면 보류.
+	if not isvalid(self.mesoText) then return end
+	if self.currencyBaseCaptured == false then return end
+	local w = self:GetLocalWallet()
+	if w == nil then return end
+	local gained = w.Meso - self.startMeso
+	if gained < 0 then gained = 0 end
+	self.mesoText.Text = tostring(math.floor(gained))
+end
+
+@ExecSpace("ClientOnly")
+method void OnWalletMesoChanged()
+	-- PlayerWallet.Meso 동기화 이벤트(OnSyncProperty)로 호출됨 → 메소 표시 즉시 갱신.
+	self:RefreshMeso()
+end
+
+method void UpdateUlt(Entity player)
+	-- 궁극기 게이지(0~Max) → 충전 비율. 라디얼 덮개(ultFill)가 미충전분을 덮고 있다가 충전될수록 시계방향으로 걷히며
+	-- 아이콘이 밝아진다. 텍스트는 충전 %, 가득 차면 "READY".
+	---@type UltimateSkill
+	local ult = player:GetComponent("script.UltimateSkill")
+	if ult == nil then return end
+	local maxG = ult.MaxGauge
+	if maxG <= 0 then maxG = 100 end
+	local ratio = ult.Gauge / maxG
+	if ratio < 0 then ratio = 0 end
+	if ratio > 1 then ratio = 1 end
+	-- 어두운 라디얼 덮개 = 미충전분(1-ratio). 가득 차면 0이 되어 완전히 걷힌다.
+	if isvalid(self.ultFill) then
+		self.ultFill.FillAmount = 1 - ratio
+	end
+	if isvalid(self.ultText) then
+		if ratio >= 1 then
+			self.ultText.Text = "READY"
+		else
+			self.ultText.Text = tostring(math.floor(ratio * 100 + 0.5)) .. "%"
+		end
+	end
+end
+
+method void UpdateBoss(Entity player)
+	-- 현재 맵에 보스(script.MushmomBoss)가 살아있으면 보스 바를 켜고 HP/이름을 갱신, 없으면 숨긴다.
+	if not isvalid(self.bossBar) then return end
+	local map = player.CurrentMap
+	if not isvalid(map) then
+		if self.bossBar.Enable then self.bossBar.Enable = false end
+		return
+	end
+	local bosses = map:GetChildComponentsByTypeName("script.MushmomBoss", false)
+	if bosses == nil or #bosses == 0 then
+		if self.bossBar.Enable then self.bossBar.Enable = false end
+		return
+	end
+	---@type MushmomBoss
+	local boss = bosses[1]
+	if not self.bossBar.Enable then
+		self.bossBar.Enable = true
+	end
+	-- 이름은 등장 시 1회만.
+	if isvalid(self.bossName) and _RunGameHud ~= nil then
+		local bn = _RunGameHud.bossDisplayName
+		if bn ~= nil and bn ~= "" and bn ~= self.lastBossName then
+			self.lastBossName = bn
+			self.bossName.Text = bn
+		end
+	end
+	local maxHp = boss.MaxHp
+	if maxHp <= 0 then maxHp = 1 end
+	local ratio = boss.Hp / maxHp
+	if ratio < 0 then ratio = 0 end
+	if ratio > 1 then ratio = 1 end
+	if isvalid(self.bossHpFill) then
+		self.bossHpFill.FillAmount = ratio
+	end
+	if isvalid(self.bossHpLabel) then
+		self.bossHpLabel.Text = tostring(math.floor(ratio * 100 + 0.5)) .. "%"
+	end
+end
+
+end

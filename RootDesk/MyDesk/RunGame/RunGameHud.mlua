@@ -89,6 +89,10 @@ property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
 property Entity restartButton = "98cbe450-196b-46a5-96a1-c66b380b4df7"
 -- 새 결과창(ResultGroup)의 '다음 스테이지' 버튼.
 property Entity nextStageButton = "c281d540-2a2b-4eb8-8682-1896ef4338cd"
+-- 결과창 '로비' 버튼의 디자인된 좌측 X(다음 스테이지 버튼과 나란히 있을 때). 최초 배치 시 1회 캡처해, 다음 스테이지가
+-- 없으면 가운데(0)로, 있으면 이 X로 복귀시킨다.
+@HideFromInspector property number resultLobbySideX = 0
+@HideFromInspector property boolean resultLobbySideCaptured = false
 property Entity resultTitle = "77cc9c1c-ff74-4d20-a62d-d96614f6ce8d"
 -- PopupGroup root (DefaultShow=false → must be enabled for any child to render)
 -- and the generic confirm backdrop that shares the group (hidden so it never overlays the result).
@@ -174,6 +178,8 @@ property string bossDisplayName = "머쉬맘"
 @Description("비우면 .ui에 디자인된 초상화를 그대로 유지(권장). 값을 넣으면 그 스프라이트로 덮어쓴다(정적 sprite 권장 — animationclip이면 계속 재생됨)")
 property string bossPortraitRUID = ""
 property integer score = 0
+-- 런(스테이지 진입/재플레이) 순번. OnArriveMap마다 +1. IngameHud가 '이번 스테이지에서 획득한 재화' 기준값 리셋 신호로 사용.
+property integer runSeq = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
 property integer scoreAnimTarget = 0
@@ -640,6 +646,8 @@ method void OnArriveMap(Entity player)
 	self.ultGaugeLastX = sx
 	self.score = 0
 	self.coinScore = 0
+	-- 새 런 시작 신호(IngameHud의 '이번 스테이지 획득 재화' 기준 잔액 재캡처용). 같은 스테이지 재플레이도 여기서 +1.
+	self.runSeq = self.runSeq + 1
 	self.goalX = cfg.goalX
 	self.courseSpeed = cfg.speed
 	self.bossMode = cfg.bossMode
@@ -660,6 +668,10 @@ method void OnArriveMap(Entity player)
 	end
 	-- Reset the ultimate gauge so it starts empty each stage (no carry-over from the previous stage).
 	self:ResetUltimate()
+	-- 궁극기 피버(전체화면 컷씬) 오버레이가 이전 스테이지에서 남지 않도록 스테이지 진입 시 강제 해지.
+	if _UltCutscene ~= nil then
+		_UltCutscene:Dismiss()
+	end
 	-- Reset roguelite stage buffs (attack up, ...) so they don't carry into the next stage.
 	self:ResetStageBuff()
 	-- 인게임 캐릭터에 장착 장비 세트(무기+방어구) 외형 적용. 매 스테이지 진입마다 재적용.
@@ -1022,30 +1034,11 @@ method void CheckBossClear()
 end
 
 method void UpdateBossHp(Component bossComp)
-	-- Shows the top-right boss frame and mirrors the boss's @Sync HP onto its bar. Runs on the client
-	-- (called from the ClientOnly OnUpdate → CheckBossClear); MushmomBoss.Hp/MaxHp are @Sync so readable here.
-	---@type MushmomBoss
-	local boss = bossComp
-	if isvalid(self.bossFrame) and self.bossFrame.Enable == false then
-		self.bossFrame.Enable = true
-		-- 프레임을 처음 켤 때(보스 등장) 이름/초상화 세팅(매 프레임 재설정 방지).
-		if isvalid(self.bossName) then
-			self.bossName.Text = self.bossDisplayName
-		end
-		if isvalid(self.bossPortrait) and self.bossPortraitRUID ~= "" then
-			self.bossPortrait.ImageRUID = DataRef(self.bossPortraitRUID)
-		end
-	end
-	local maxHp = boss.MaxHp
-	if maxHp <= 0 then maxHp = 1 end
-	local ratio = boss.Hp / maxHp
-	if ratio < 0 then ratio = 0 end
-	if ratio > 1 then ratio = 1 end
-	if isvalid(self.bossHpFill) then
-		self.bossHpFill.FillAmount = ratio
-	end
-	if isvalid(self.bossHpLabel) then
-		self.bossHpLabel.Text = tostring(math.floor(boss.Hp + 0.5)) .. " / " .. tostring(math.floor(maxHp + 0.5))
+	-- 보스 체력 UI는 새 인게임 HUD의 중앙 하단 BossBar(IngameHud:UpdateBoss)로 일원화했다. 기존 우상단
+	-- DefaultGroup/BossFrame은 더 이상 사용하지 않으므로 항상 숨긴 상태로 둔다(중복 표시 제거). 보스 클리어
+	-- 판정은 CheckBossClear가 별도로 수행하므로 이 메서드는 프레임을 숨기는 것 외엔 아무것도 하지 않는다.
+	if isvalid(self.bossFrame) and self.bossFrame.Enable then
+		self.bossFrame.Enable = false
 	end
 end
 
@@ -1157,6 +1150,10 @@ method void Clear()
 		if ult ~= nil then
 			ult:StopUltimateNow()
 		end
+		-- 궁극기 피버(전체화면 컷씬/돌진) 오버레이 강제 해지 — 발동 중 클리어해도 결과창 위에 UI가 남지 않도록.
+		if _UltCutscene ~= nil then
+			_UltCutscene:Dismiss()
+		end
 		-- Hard stop at the finish — kill momentum so the runner doesn't slide.
 		if player.MovementComponent ~= nil then
 			player.MovementComponent:Stop()
@@ -1219,6 +1216,35 @@ method void ShowResult(string title, integer score, boolean isClear)
 			end
 		end
 		_ResultUI:Show(self.curStage, isClear, kills, hits, score, bossKilled)
+		-- 다음 스테이지 유무에 따라 결과창 버튼 배치(없으면 '다음 스테이지' 숨기고 '로비'만 가운데).
+		self:LayoutResultButtons()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void LayoutResultButtons()
+	-- 결과창 버튼 배치: 다음 스테이지가 있으면 [로비][다음] 나란히, 없으면(마지막 스테이지) '다음 스테이지'를 숨기고
+	-- '로비' 버튼만 가운데(x=0)에 출력한다. 다음 스테이지 유무는 ScreenFlow.NextStage(""=없음)로 판단.
+	local hasNext = false
+	if _ScreenFlow ~= nil and self.curStage ~= nil and self.curStage ~= "" then
+		hasNext = (_ScreenFlow:NextStage(self.curStage) ~= "")
+	end
+	if isvalid(self.nextStageButton) then
+		self.nextStageButton.Enable = hasNext
+	end
+	if isvalid(self.restartButton) and self.restartButton.UITransformComponent ~= nil then
+		local ut = self.restartButton.UITransformComponent
+		-- 디자인된 좌측 X(다음 버튼과 나란히 있을 때)를 최초 1회 캡처 → hasNext일 때 이 위치로 복귀.
+		if self.resultLobbySideCaptured == false then
+			self.resultLobbySideX = ut.anchoredPosition.x
+			self.resultLobbySideCaptured = true
+		end
+		local ay = ut.anchoredPosition.y
+		if hasNext then
+			ut.anchoredPosition = Vector2(self.resultLobbySideX, ay)
+		else
+			ut.anchoredPosition = Vector2(0, ay)
+		end
 	end
 end
 
