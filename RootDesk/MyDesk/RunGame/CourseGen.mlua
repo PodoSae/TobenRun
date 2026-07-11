@@ -101,12 +101,12 @@ property string GoalFlagRUID = "ff7a9e1d06054bd1b905e715b45b7d0b"
 @MinValue(0.5)
 @MaxValue(10)
 @Delta(0.5)
-property number GoalFlagHeight = 3.0
+property number GoalFlagHeight = 1.5
 @DisplayName("종점 깃발 x오프셋")
 @Description("goalX 기준 앞(+)/뒤(-) 미세 조정")
 property number GoalFlagXOffset = 0.0
 @DisplayName("종점 깃발 y오프셋(바닥 위 추가)")
-property number GoalFlagYOffset = 0.0
+property number GoalFlagYOffset = 0.2
 @DisplayName("발판 너비(월드유닛)")
 @Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
 property number platformWidth = 3.0
@@ -143,8 +143,11 @@ property number UltTargetLifetime = 3.0
 @DisplayName("진흙 안착 높이 보정")
 @Description("진흙 웅덩이 중심이 바닥에서 이만큼 위에 놓인다(바닥에 깔린 것처럼 보이도록 낮게)")
 property number mudYRest = 0.15
-@DisplayName("진흙 모델 id")
+@DisplayName("진흙 모델 id(짧은 버전)")
 property string mudModelId = "Mud"
+@DisplayName("진흙 모델 id(긴 버전)")
+@Description("코스 키워드 mudlong 으로 배치되는 긴 진흙 모델 id. MudObstacle이 스프라이트 폭에 맞춰 감속 범위 자동 확장")
+property string mudLongModelId = "MudLong"
 @DisplayName("포자 탄막 모델 id")
 property string barrageModelId = "ScreenSporeBarrage"
 @DisplayName("포자 탄막 발사점 높이 보정")
@@ -1071,9 +1074,16 @@ method void CmdSpawn(Entity map, table cfg, table c)
 	-- Mud patch (non-lethal terrain): a ground puddle that SLOWS the runner while walking through it
 	-- (MudObstacle sends a terrain-slow RPC to the player's client). Sits flat on the floor; jumping over
 	-- it avoids the slow. Fixed course placement, so it must not auto-despawn before the runner arrives.
-	if kind == "mud" then
+	-- mud = 짧은 버전(mudModelId), mudlong = 긴 버전(mudLongModelId). 감속 폭은 MudObstacle이 스프라이트에서 자동 산정.
+	if kind == "mud" or kind == "mudlong" then
+		local mid = self.mudModelId
+		if kind == "mudlong" then mid = self.mudLongModelId end
+		if mid == nil or mid == "" then
+			log("[CourseGen] mud model id empty for kind=" .. tostring(kind))
+			return
+		end
 		local my = cfg.floorY + self.mudYRest
-		local mud = _SpawnService:SpawnByModelId(self.mudModelId, "Mud_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
+		local mud = _SpawnService:SpawnByModelId(mid, "Mud_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
 		if isvalid(mud) then
 			---@type MudObstacle
 			local mc = mud:GetComponent("script.MudObstacle")
@@ -1081,7 +1091,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 				mc.Lifetime = 0   -- 0 = permanent; course placement waits for the runner (no timed despawn)
 			end
 		else
-			log("[CourseGen] mud spawn failed @x=" .. tostring(x))
+			log("[CourseGen] mud spawn failed @x=" .. tostring(x) .. " model=" .. tostring(mid))
 		end
 		return
 	end
