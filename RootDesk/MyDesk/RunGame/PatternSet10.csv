@@ -11,7 +11,7 @@ Spawn,mud,12,
 Spawn,coin,13,1.5
 Spawn,coin,14,1.5
 Spawn,coin,15,1.5
-Spawn,Haz_spike,16,
+Spawn,spike,16,
 Spawn,coin,16,2
 Spawn,coin,17,1.5
 Spawn,coin,18,1.5
@@ -22,4 +22,9 @@ Spawn,coin,25,1.5
 Spawn,coin,26,1
 Spawn,coin,27,1
 Spawn,coin,28,2
+Spawn,spike,21,
 Spawn,,,
+Spawn,,,
+Spawn,spike,24,
+Spawn,spike,25,
+,,,
