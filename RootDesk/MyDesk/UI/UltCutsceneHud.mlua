@@ -20,8 +20,8 @@ script UltCutsceneHud extends Logic
     property number FlashTime = 0.12
     @DisplayName("암전 최대 알파")
     property number DarkAlpha = 0.72
-    @DisplayName("정지 지연(초)")
-    @Description("R 발동 후 러너를 멈추기까지의 지연. 암전이 페이드되는 동안 잠깐 더 달려 급정거가 어색하지 않게 한다")
+    @DisplayName("입력 잠금 지연(초)")
+    @Description("R 발동 후 점프/슬라이드 입력을 잠그기까지의 지연(러너 전진은 멈추지 않음 — 궁극기 사용 직후 멈춤 제거)")
     @MinValue(0)
     @MaxValue(1)
     @Delta(0.05)
@@ -54,10 +54,11 @@ script UltCutsceneHud extends Logic
     end
 
     method void FreezeRunner()
-        -- FreezeDelay 경과 후 러너 전진 + 입력 정지(보스 인트로/부활 팝업과 동일 메커니즘). 컷신이 아직 재생 중일 때만.
+        -- 기획 변경: 궁극기 사용 직후 '멈추는 부분'을 제거한다 — 캐릭터는 컷신 동안에도 계속 전진(러너 정지 없음).
+        -- 대신 점프/슬라이드 입력만 잠근다(LockPlayerInput): 컷신 중 점프하면 궁극기 활공(중력 잠금)이 깨져 캐릭터가
+        -- 떠오르므로 이를 막는다. 전진 정지(SetRunnerActive(false))는 더 이상 호출하지 않는다. 컷신 재생 중일 때만.
         if not self.playing then return end
         if _RunGameHud ~= nil then
-            _RunGameHud:SetRunnerActive(false)
             _RunGameHud:LockPlayerInput(true)
         end
     end
@@ -72,8 +73,8 @@ script UltCutsceneHud extends Logic
         self.t = 0
         self.timelineDone = false
 
-        -- 러너/입력 정지를 FreezeDelay 만큼 늦춘다: 암전이 페이드되는 동안 캐릭터가 잠깐 더 달리다 멈추게 해서
-        -- 급정거가 눈에 띄지 않게 한다(멈추는 순간이 어둠에 가려짐).
+        -- 입력 잠금을 FreezeDelay 만큼 늦춘다(러너 전진은 멈추지 않음 — 궁극기 사용 직후 멈춤 제거). 암전 페이드
+        -- 동안 잠깐 자유 입력을 허용했다가 잠근다.
         _TimerService:SetTimer(self, self.FreezeRunner, self.FreezeDelay, false)
 
         -- 초기 알파(암전/플래시).

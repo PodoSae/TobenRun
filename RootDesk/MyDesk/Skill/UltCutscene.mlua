@@ -98,7 +98,7 @@ method void EndCutscene()
 	end
 	if not self.finisherPending then return end
 	self.finisherPending = false
-	-- 컷신 동안 정지시켰던 러너/입력을 이 시점에 재개(캐릭터는 여기서부터 움직인다).
+	-- 컷신 동안 잠갔던 점프/슬라이드 입력을 이 시점에 해제(러너 전진은 컷신 내내 유지 — 멈춤 제거).
 	if _RunGameHud ~= nil then
 		_RunGameHud:SetRunnerActive(true)
 		_RunGameHud:LockPlayerInput(false)

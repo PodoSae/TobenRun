@@ -64,6 +64,15 @@ script UltimateSkill extends Component
     @Delta(0.1)
     property number DashSpeedMul = 1.4
 
+    -- 궁극기 중 아바타 애니 재생속도(달리기 연출). 아바타에는 별도 '달리기' 클립이 없고 지상 이동은 걷기(Walk)뿐이라,
+    -- 걷기 애니를 빠르게 돌려(=AvatarRendererComponent.PlayRate) 달리는 것처럼 보이게 한다. 종료 시 1로 복원.
+    @DisplayName("궁극기 중 애니 재생속도(달리기 연출)")
+    @Description("궁극기 발동 동안 아바타 애니 재생속도 배율. 걷기 애니가 이 배율로 빨라져 달리는 느낌을 준다. 1=변화 없음, 1.6=60% 빠름")
+    @MinValue(1)
+    @MaxValue(3)
+    @Delta(0.1)
+    property number DashAnimPlayRate = 1.6
+
     -- ── Boss damage (궁극기가 보스에게 주는 틱 데미지) ──
     @DisplayName("보스 틱 데미지 배율")
     @Description("궁극기 경로에 보스가 있으면 한 틱마다 (플레이어 공격력 × 이 값) 만큼 보스 HP를 깎는다. 일반 몬스터/장애물처럼 삭제하지 않고 정상 데미지→사망 연출 경로를 탄다")
@@ -139,6 +148,19 @@ script UltimateSkill extends Component
     -- Boss-damage throttle: counts down while active; a boss tick lands when it reaches 0, then it resets to
     -- BossDamageTickInterval. Reset to 0 on activation so the first frame the boss is in range ticks at once.
     property number bossDmgTimer = 0
+
+    -- 발동 직전 컷씬 동안(궁극기 사용 직후 '멈춤'을 제거해 캐릭터가 컷씬 중에도 계속 전진) y축 하강을 막아
+    -- 그 자리 높이로 활공시키는 플래그(소유 클라 전용). 실제 발동(ApplyBoost)이 이어받으면 StartDashClient가
+    -- 내리고, 발동이 끝내 오지 않으면 안전 타이머(EndCutsceneGlideSafety)가 중력을 원복한다.
+    @HideFromInspector property boolean cutsceneGliding = false
+    -- PlayerHealth 캐시(궁극기 시전 중 무적 on/off를 위임). 런타임 부착 대비 사용 시점에 지연 조회.
+    @HideFromInspector property any health = nil
+    -- 일시정지(_GamePause.Paused) 중 궁극기 루프 이펙트(아우라/전방 스윙)를 제거해 정지시켰는지. 재개 시 다시 붙인다.
+    -- 엔진 루프 이펙트는 스스로 재생되므로 OnUpdate 스킵만으로는 멈추지 않아 명시적으로 제거/재부착해야 한다.
+    @HideFromInspector property boolean pausedVisualsOff = false
+    -- 스테이지 클리어 등 외부 요인으로 궁극기를 즉시 정지했는지(소유 클라 전용). 서버 종료(EndDashServer) sync가 도착해
+    -- Active=false가 되기 전까지, OnUpdate가 부스트를 되살리지 않도록 이 프레임부터 이동/이펙트를 정지 상태로 유지한다.
+    @HideFromInspector property boolean externallyStopped = false
 
     method void OnBeginPlay()
         -- Server owns the gauge/activation/destruction; the client binds the R input.
@@ -244,7 +266,17 @@ script UltimateSkill extends Component
     method void EndBoost()
         -- Restores the normal run-speed multiplier and the snapshotted per-course caps. Idempotent.
         if not self.boosting then return end
-        if self.controller ~= nil then self.controller.speedMultiplier = 1 end
+        if self.controller ~= nil then
+            -- speedMultiplier 복원값: 러너가 정지 상태(스테이지 클리어/일시정지 등, _RunGameHud.isAlive=false)면 0을
+            -- 유지해 계속 멈춰 있게 한다. 1로 되돌리면 궁극기 종료 순간 러너가 다시 '달림' 상태가 돼 결승선에서 걷기
+            -- 애니가 재생되고 앞으로 나아간다(일시정지가 궁극기를 '종료'하지 않고 halt만 해 멈추는 것과 동일 원리).
+            -- 정상 주행 중이면 1로 복원. _RunGameHud는 클라 전용이라 서버에선 nil → 서버는 1(이동 권위는 클라라 무해).
+            local resume = 1
+            if _RunGameHud ~= nil and _RunGameHud.isAlive == false then
+                resume = 0
+            end
+            self.controller.speedMultiplier = resume
+        end
         if self.body ~= nil then
             self.body.WalkSpeed = self.baseWalkSpeed
             self.body.FallSpeedMaxX = self.baseFallSpeedMaxX
@@ -275,32 +307,156 @@ script UltimateSkill extends Component
         self:ReleaseGravityLock()
     end
 
+    @ExecSpace("ClientOnly")
+    method void BeginCutsceneGlide()
+        -- 발동 직전 컷씬 동안(러너 정지를 없애 캐릭터가 계속 전진) 소유 클라의 y축 하강을 막아 그 자리 높이로 활공시킨다.
+        -- Gravity/FallSpeedMaxY를 0으로 잠그고 잔여 상하 속도를 제거(공중에서 R을 눌러도 떠오르거나 떨어지지 않게).
+        -- baseGravity/baseFallSpeedMaxY는 OnBeginPlay에서 스냅샷된 clean 값이라 여기서 다시 잡지 않는다. 실제 발동이
+        -- 시작되면 StartDashClient가 cutsceneGliding을 내리고 ApplyBoost가 이어받으며, 종료 시 EndBoost가 원복한다.
+        -- 발동이 끝내 오지 않는 경우(게이지 소실 등)를 대비해 안전 타이머로 중력을 원복한다.
+        if _UserService.LocalPlayer ~= self.Entity then return end
+        if self.body == nil then self.body = self.Entity.RigidbodyComponent end
+        if self.body == nil then return end
+        self.cutsceneGliding = true
+        local mv = self.body.MoveVelocity
+        self.body:SetForce(Vector2(mv.x, 0))
+        self.body.Gravity = 0
+        self.body.FallSpeedMaxY = 0
+        -- 안전 해제: 컷씬(암전 타임라인 + 전체화면 클립, 폴백 최대 5s) 최댓값보다 넉넉히 길게. 정상 발동 시엔
+        -- StartDashClient가 이미 플래그를 내려 이 타이머는 무해하게 지나간다.
+        _TimerService:SetTimer(self, self.EndCutsceneGlideSafety, 12.0, false)
+        log("[UltimateSkill] cutscene glide begin (no-fall)")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void EndCutsceneGlideSafety()
+        -- 컷씬 활공 안전 해제: 활공이 아직 켜져 있는데 발동으로 이어지지 않았다면(Active=false) 중력을 원복해
+        -- 영구 무중력(공중에 뜬 채)으로 남는 것을 막는다. 정상 발동됐다면 이미 cutsceneGliding=false라 무해.
+        if not self.cutsceneGliding then return end
+        self.cutsceneGliding = false
+        if not self.Active and self.body ~= nil then
+            self.body.Gravity = self.baseGravity
+            self.body.FallSpeedMaxY = self.baseFallSpeedMaxY
+            log("[UltimateSkill] cutscene glide safety-restored gravity (activation never happened)")
+        end
+    end
+
+    method void SetUltInvincible(boolean on)
+        -- 궁극기 시전 중 무적 on/off를 PlayerHealth에 위임(서버측 호출 경로에서만 실행됨: RequestActivate/EndDashServer/
+        -- RequestBeginInvincible 모두 서버). PlayerHealth를 지연 조회/캐싱한다.
+        if self.health == nil then
+            self.health = self.Entity:GetComponent("script.PlayerHealth")
+        end
+        if self.health ~= nil then
+            ---@type PlayerHealth
+            local h = self.health
+            h:SetUltimateInvincible(on)
+        end
+    end
+
+    @ExecSpace("Server")
+    method void RequestBeginInvincible()
+        -- 컷씬 시작 시 클라(RequestActivateFromInput) → 서버: 궁극기 시전 무적을 건다(컷씬~돌진 종료까지 피해 무시).
+        -- 발동이 취소되면 RequestActivate의 게이트 실패 경로가, 정상 종료면 EndDashServer가 해제한다.
+        self:SetUltInvincible(true)
+    end
+
+    @ExecSpace("Server")
+    method void RequestEndUltimate()
+        -- 외부 종료 요청(클라 → 서버): 스테이지 클리어 등으로 궁극기를 즉시 끝낸다. 활성일 때만 EndDashServer로
+        -- 속도/중력/무적을 복원하고 Active=false를 sync → 각 클라의 EndDashClient가 이펙트/부스트를 정리한다.
+        if self.Active then
+            self:EndDashServer()
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StopUltimateNow()
+        -- 스테이지 클리어 등으로 소유 클라가 궁극기를 '즉시' 멈춘다. 서버 종료(RequestEndUltimate) sync를 기다리는 동안
+        -- OnUpdate가 부스트를 되살리지 않도록 externallyStopped를 세우고, 이번 프레임에 이동/이펙트를 정지한다.
+        -- 서버 sync로 Active=false가 오면 EndDashClient가 EndBoost로 속도를 복원하고 플래그를 리셋한다.
+        if _UserService.LocalPlayer ~= self.Entity then return end
+        if not self.Active then return end
+        self.externallyStopped = true
+        self:HaltForPause()
+        self:SuspendDashVisuals()
+        self.pausedVisualsOff = true
+        self:RequestEndUltimate()
+    end
+
     method void OnUpdate(number delta)
         -- Server: fill the gauge, tick the active-window timer, apply the speed boost, destroy targets.
+        -- 일시정지(_GamePause.Paused) 중이면 궁극기를 완전히 멈춘다: 부스트 대신 HaltForPause로 speedMultiplier=0 +
+        -- 속도 0을 '능동' 적용(ApplyBoost가 남긴 DashSpeedMul 값이 남아 계속 전진하던 버그 수정), 타이머/파괴 스윕/게이지
+        -- 충전 중단, 루프 이펙트(아우라/스윙) 제거. 재개 시 부스트/이펙트를 복원한다.
+        local paused = (_GamePause ~= nil and _GamePause.Paused)
         if self:IsServer() then
-            if not self.Active and not self.AutoFillPaused and self.Gauge < self.MaxGauge then
+            if not self.Active and not self.AutoFillPaused and not paused and self.Gauge < self.MaxGauge then
                 self.Gauge = math.min(self.MaxGauge, self.Gauge + self.GaugeFillPerSec * delta)
             end
             if self.Active then
-                -- Server also drives the boost: PlayerController.OnUpdate runs server-side too and rewrites
-                -- MoveVelocity from (speed * speedMultiplier) every frame, so the boost must be re-asserted
-                -- here or the server would cancel it out.
-                self:ApplyBoost()
-                -- Advance the boss-damage throttle before the sweep so DestroyTarget can tick the boss.
-                self.bossDmgTimer = self.bossDmgTimer - delta
-                self:DestroyTargetsInPath()
-                self.remaining = self.remaining - delta
-                if self.remaining <= 0 then
-                    self:EndDashServer()
+                if paused then
+                    -- 일시정지: 부스트를 다시 걸지 않고 speedMultiplier=0 + 속도 0으로 '능동' 정지. 직전 프레임 ApplyBoost가
+                    -- 남겨둔 DashSpeedMul 값이 유지돼 계속 전진하던 문제 수정(스킵만으론 부족 — 0으로 되돌려야 멈춘다).
+                    -- 타이머/파괴 스윕도 진행하지 않는다.
+                    self:HaltForPause()
+                else
+                    -- Server also drives the boost: PlayerController.OnUpdate runs server-side too and rewrites
+                    -- MoveVelocity from (speed * speedMultiplier) every frame, so the boost must be re-asserted
+                    -- here or the server would cancel it out.
+                    self:ApplyBoost()
+                    -- Advance the boss-damage throttle before the sweep so DestroyTarget can tick the boss.
+                    self.bossDmgTimer = self.bossDmgTimer - delta
+                    self:DestroyTargetsInPath()
+                    self.remaining = self.remaining - delta
+                    if self.remaining <= 0 then
+                        self:EndDashServer()
+                    end
                 end
             end
         end
 
-        -- Client (owning player): re-assert every frame so another skill ending (e.g. Slide resetting
-        -- speedMultiplier to 1 as it finishes) can't cancel the boost mid-window.
-        if self:IsClient() and self.Active and self.isLocal then
-            self:ApplyBoost()
+        if self:IsClient() then
+            -- 일시정지(전역) 또는 외부 정지(스테이지 클리어 등)면 궁극기를 멈춘다. externallyStopped는 소유 클라 전용이라
+            -- 아우라/스윙 이펙트 정지는 paused일 때만 전 클라에 적용하고, 이동 정지는 아래 isLocal 블록에서 처리한다.
+            local halt = paused or self.externallyStopped
+            -- 루프 이펙트(아우라/전방 스윙)는 전 클라에 붙으므로 정지/재개도 전 클라에서 처리(엔진 루프는 스스로 재생되어
+            -- OnUpdate 스킵만으론 안 멈춘다 → 제거/재부착).
+            if halt then
+                if self.Active and not self.pausedVisualsOff then
+                    self:SuspendDashVisuals()
+                    self.pausedVisualsOff = true
+                end
+            elseif self.pausedVisualsOff then
+                self:ResumeDashVisuals()
+                self.pausedVisualsOff = false
+            end
+
+            -- 소유 클라(이동 권위): 정지 중엔 능동 정지, 아니면 부스트/컷씬 활공을 매 프레임 재적용.
+            if self.isLocal then
+                if halt then
+                    if self.Active then
+                        self:HaltForPause()
+                    end
+                elseif self.Active then
+                    self:ApplyBoost()
+                elseif self.cutsceneGliding and self.body ~= nil then
+                    -- 발동 직전 컷씬 활공 유지: 매 프레임 y축 잠금을 재확인해 다른 시스템(중력 등)이 되돌려도 떨어지지 않게 한다.
+                    self.body.Gravity = 0
+                    self.body.FallSpeedMaxY = 0
+                end
+            end
         end
+    end
+
+    method void HaltForPause()
+        -- 일시정지 중 궁극기 이동을 강제 정지: speedMultiplier=0 + 속도 0. ApplyBoost가 남긴 부스트값을 되돌리는
+        -- 것이 핵심(스킵만으론 직전 DashSpeedMul이 남아 계속 전진). 서버/소유 클라 양쪽에서 호출(이동 권위는 클라).
+        if self.controller == nil then
+            self.controller = self.Entity:GetComponent("script.PlayerController")
+        end
+        if self.controller ~= nil then self.controller.speedMultiplier = 0 end
+        if self.body ~= nil then self.body:SetForce(Vector2(0, 0)) end
     end
 
     @ExecSpace("ClientOnly")
@@ -330,6 +486,10 @@ script UltimateSkill extends Component
         if self.Active then return end
         if self.Gauge < self.MaxGauge then return end
         if _UltCutsceneHud ~= nil then
+            -- 컷씬 동안 러너를 멈추지 않으므로(멈춤 제거) 그 구간에서 (1) y축 하강을 막고 (2) 무적을 건다.
+            -- 활공은 소유 클라 로컬로, 무적은 서버로 위임. 실제 발동(RequestActivate)이 컷씬 종료 시 이어받는다.
+            self:BeginCutsceneGlide()
+            self:RequestBeginInvincible()
             _UltCutsceneHud:Play(self.Entity)
         else
             self:RequestActivate()
@@ -340,12 +500,18 @@ script UltimateSkill extends Component
     method void RequestActivate()
         -- Server-authoritative gate: only when the gauge is full and not already dashing.
         if self.Active then return end
-        if self.Gauge < self.MaxGauge then return end
+        if self.Gauge < self.MaxGauge then
+            -- 발동 취소(게이지 소실 등): 컷씬 시작 때 걸어둔 궁극기 무적을 해제해 무적이 남지 않게 한다(짝 맞추기).
+            self:SetUltInvincible(false)
+            return
+        end
         self.Gauge = 0
         self.Active = true
         self.remaining = self.DashDuration
         self.bossDmgTimer = 0
         self.gravityReleased = false
+        -- 궁극기 시전 무적 확정(컷씬 없이 바로 온 경로 포함). 종료(EndDashServer)에서 해제된다.
+        self:SetUltInvincible(true)
         -- 타격감용 임시 스폰: 플레이어 앞에 몬스터+장애물을 깔아 돌진(DestroyTargetsInPath)이 부수며 지나가게 한다.
         -- 정규 코스 스폰과 별개. CourseGen이 소유(현재 코스 floorY/스폰 셋업 재사용).
         local map = self.Entity.CurrentMap
@@ -465,6 +631,8 @@ script UltimateSkill extends Component
         self.remaining = 0
         -- Restore the run speed on the server side (mirrors EndDashClient on the owning client).
         self:EndBoost()
+        -- 궁극기 시전 무적 해제.
+        self:SetUltInvincible(false)
         log("[UltimateSkill] ultimate end (server)")
     end
 
@@ -484,6 +652,13 @@ script UltimateSkill extends Component
     method void StartDashClient()
         -- Attach the looped aura effect on every client (if configured); apply the speed boost only on the
         -- owning client (movement authority for a Rigidbody LocalPlayer lives there).
+        self.pausedVisualsOff = false
+        self.externallyStopped = false
+        -- 달리기 연출: 아바타 애니 재생속도를 높여 걷기 애니를 빠르게 돌린다(전 클라). 별도 달리기 클립이 없어 이 방식으로
+        -- 달리는 느낌을 준다. EndDashClient에서 1로 복원. PlayRate는 @Sync지만 서버가 값을 다시 안 써서 클라 로컬 쓰기가 유지된다.
+        if isvalid(self.Entity) and self.Entity.AvatarRendererComponent ~= nil then
+            self.Entity.AvatarRendererComponent.PlayRate = self.DashAnimPlayRate
+        end
         if self.dashEffectRUID ~= "" then
             -- 아우라: 위로 0.5 오프셋 + 2배 크기(하드코딩, 인스펙터 비노출).
             self.effectSerial = _EffectService:PlayEffectAttached(
@@ -500,6 +675,8 @@ script UltimateSkill extends Component
         end
         if _UserService.LocalPlayer == self.Entity then
             self.gravityReleased = false
+            -- 컷씬 활공을 여기서 종료(발동이 이어받음): ApplyBoost가 이후 y축 잠금/속도 부스트를 소유한다.
+            self.cutsceneGliding = false
             self:ApplyBoost()
             -- 돌진 지속 동안 화면을 가득 채우는 UI 전체화면 오버레이(소유 클라). UltCutscene의 Fx 오버레이 재사용.
             if _UltCutscene ~= nil and self.dashFullEffectRUID ~= "" then
@@ -513,8 +690,45 @@ script UltimateSkill extends Component
     end
 
     @ExecSpace("ClientOnly")
+    method void SuspendDashVisuals()
+        -- 일시정지 진입 시 루프 이펙트(아우라 + 전방 스윙)를 제거해 애니메이션을 멈춘다(엔진 루프 이펙트는 프레임
+        -- 구동이 아니라 스스로 재생되므로 OnUpdate 스킵으로는 멈추지 않는다). 재개 시 ResumeDashVisuals가 재부착.
+        if self.effectSerial ~= 0 then
+            _EffectService:RemoveEffect(self.effectSerial)
+            self.effectSerial = 0
+        end
+        if self.frontEffectSerial ~= 0 then
+            _EffectService:RemoveEffect(self.frontEffectSerial)
+            self.frontEffectSerial = 0
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void ResumeDashVisuals()
+        -- 일시정지 해제 시 루프 이펙트 재부착(StartDashClient와 동일 파라미터). 아직 궁극기 활성일 때만.
+        if not self.Active then return end
+        if self.dashEffectRUID ~= "" and self.effectSerial == 0 then
+            self.effectSerial = _EffectService:PlayEffectAttached(
+                self.dashEffectRUID, self.Entity, Vector3(0, 0.5, 0), 0,
+                Vector3(2, 2, 1), true)
+        end
+        if self.frontEffectRUID ~= "" and self.frontEffectSerial == 0 then
+            self.frontEffectSerial = _EffectService:PlayEffectAttached(
+                self.frontEffectRUID, self.Entity, Vector3(self.frontEffectOffsetX, 0, 0), 0,
+                Vector3(self.frontEffectScale, self.frontEffectScale, 1), true,
+                { ["FlipX"] = self.frontEffectFlipX })
+        end
+    end
+
+    @ExecSpace("ClientOnly")
     method void EndDashClient()
         -- Stops the looped aura effect and restores the normal run speed on the owning client.
+        self.pausedVisualsOff = false
+        self.externallyStopped = false
+        -- 달리기 연출용 애니 재생속도를 원복(전 클라).
+        if isvalid(self.Entity) and self.Entity.AvatarRendererComponent ~= nil then
+            self.Entity.AvatarRendererComponent.PlayRate = 1
+        end
         if self.effectSerial ~= 0 then
             _EffectService:RemoveEffect(self.effectSerial)
             self.effectSerial = 0
