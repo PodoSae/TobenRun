@@ -32,6 +32,18 @@ property string obstacleRuid = "af921b2251574675834981e2394e05d1"
 property number coinFloatY = 0.5
 @DisplayName("코인 RUID")
 property string coinRuid = "184093654538492ea60617c0e3dd5c51"
+-- ── 토벤코인 픽업(계정 재화) ── 메소(coin=점수)와 별개로 실제 토벤코인(coin 재화)을 지급하는 픽업. Spawn,tobencoin,x[,y]
+@DisplayName("토벤코인 픽업 RUID")
+property string tobenCoinRuid = "cf9cf3f4d48546adb9b4462dc6a34c1e"
+@DisplayName("토벤코인 기본 높이(바닥 위)")
+property number tobenCoinFloatY = 0.5
+@DisplayName("토벤코인 픽업 획득량")
+@MinValue(1)
+@MaxValue(100)
+property integer tobenCoinAmount = 1
+@DisplayName("토벤코인 획득 이펙트 RUID")
+@Description("먹었을 때 재생할 이펙트. 비우면 없음")
+property string tobenCoinPickupFx = ""
 @DisplayName("공격력 버프 아이템 RUID")
 @Description("로그라이트 공격력 증가 아이템(atkbuff) 스프라이트 (기본: '물리 공격력 상승' 아이템 스프라이트)")
 property string atkBuffRuid = "05763a97e7434f76b426fa2878395687"
@@ -83,7 +95,7 @@ property string platformRuid = "2b73e2c6c05143a192ea6d1a08966349"
 -- 코스 종점(goalX)에 세우는 깃발 스프라이트. 비우면 없음. 정적 sprite RUID여야 함(animationclip은 LoadSpriteAndWait에서 오류).
 @DisplayName("종점 깃발 스프라이트 RUID")
 @Description("맵 종점(goalX)에 세우는 깃발 장식. 비우면 배치 안 함. 마음에 안 들면 이 RUID를 교체")
-property string GoalFlagRUID = "3414a166a1124c00a93aa906346508b2"
+property string GoalFlagRUID = "ff7a9e1d06054bd1b905e715b45b7d0b"
 @DisplayName("종점 깃발 높이(월드유닛)")
 @Description("깃발을 이 높이로 스케일해 바닥에 세운다")
 @MinValue(0.5)
@@ -487,7 +499,7 @@ end
 @ExecSpace("ServerOnly")
 method boolean IsCourseEntity(string nm)
 	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_" }
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_", "TobenCoin_" }
 	for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
@@ -1031,6 +1043,28 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		local coin = _SpawnService:SpawnByModelId("coin", "Coin_" .. tostring(math.floor(x)), Vector3(x, cy, 0), map)
 		if isvalid(coin) == false then
 			log("[CourseGen] coin spawn failed @x=" .. tostring(x))
+		end
+		return
+	end
+	if kind == "tobencoin" then
+		-- 토벤코인 픽업(계정 재화). body-less runprop 스프라이트 + StageBuffItem(BuffKind=tobencoin) 런타임 부착 →
+		-- 서버 근접 판정으로 획득 시 그 플레이어에게 토벤코인 지급(메소/점수 코인과 별개). p3=y(바닥 위 높이, 선택).
+		local ty = cfg.floorY + self.tobenCoinFloatY
+		if yGiven ~= nil then
+			ty = cfg.floorY + yGiven
+		end
+		local tc = self:SpawnProp(map, "TobenCoin_" .. tostring(math.floor(x)), x, ty, self.tobenCoinRuid)
+		if isvalid(tc) then
+			---@type StageBuffItem
+			local tcc = tc:AddComponent("script.StageBuffItem")
+			if tcc ~= nil then
+				tcc.BuffKind = "tobencoin"
+				tcc.Amount = self.tobenCoinAmount
+				tcc.StatKey = ""
+				tcc.PickupEffectRUID = self.tobenCoinPickupFx
+			end
+		else
+			log("[CourseGen] tobencoin spawn failed @x=" .. tostring(x))
 		end
 		return
 	end

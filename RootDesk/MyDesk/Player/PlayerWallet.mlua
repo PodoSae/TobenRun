@@ -49,9 +49,31 @@ script PlayerWallet extends Component
         log("[PlayerWallet] +" .. tostring(amount) .. " meso -> " .. tostring(self.Meso))
     end
 
+    @ExecSpace("Server")
+    method void RequestAddMeso(number amount)
+        -- 클라(맵 코인 픽업 등)에서 요청하는 메소 적립. senderUserId로 이 지갑의 주인만 적립되게 검증 후 AddMeso.
+        -- AddMeso가 @TargetUserSync Meso를 갱신 → 소유 클라 OnSyncProperty → 인게임 HUD 메소 이벤트 갱신.
+        local pc = self.Entity.PlayerComponent
+        if pc == nil or senderUserId ~= pc.UserId then
+            return
+        end
+        self:AddMeso(amount)
+    end
+
     method number GetMeso()
         -- Current balance. Reads the synced property, so it is valid on both client and server.
         return self.Meso
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnSyncProperty(string name, any value)
+        -- Meso가 서버에서 갱신(AddMeso 등)되어 소유 클라로 동기화되면 인게임 HUD 메소 표시를 즉시 갱신(이벤트 구동).
+        -- @TargetUserSync라 이 콜백은 지갑 주인 클라에서만, 그 주인의 지갑에 대해서만 호출된다(= 로컬 플레이어 지갑).
+        if name == "Meso" then
+            if _IngameHud ~= nil then
+                _IngameHud:OnWalletMesoChanged()
+            end
+        end
     end
 
     @ExecSpace("ServerOnly")

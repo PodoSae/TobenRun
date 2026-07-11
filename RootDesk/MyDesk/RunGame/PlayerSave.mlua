@@ -1392,6 +1392,20 @@ method void ShowRewardClient(integer meso, integer coin, boolean isFirst)
 	end
 end
 
+@ExecSpace("ServerOnly")
+method void GrantCoinToUser(string userId, integer amount)
+	-- 인게임 토벤코인 픽업 획득: 지정 유저의 토벤코인(coin)을 amount 만큼 즉시 지급 + 저장 + 리싱크(로비 통화바 갱신).
+	-- 서버 권위 지점(StageBuffItem.Grant의 tobencoin 분기)에서 호출한다. 메소(gold)와 별개 재화.
+	if userId == nil or userId == "" then return end
+	if amount <= 0 then return end
+	local data = self:LoadUser(userId)
+	if data == nil then return end
+	data.coin = (data.coin or 0) + amount
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	log("[PlayerSave] toben coin pickup +" .. tostring(amount) .. " -> coin=" .. tostring(data.coin) .. " user=" .. tostring(userId))
+end
+
 @ExecSpace("Server")
 method void DebugFillCurrency(integer gold, integer coin)
 	-- TEST-ONLY helper: set the caller's 메소(gold) + 토벤코인(coin) to the given amounts, persist,

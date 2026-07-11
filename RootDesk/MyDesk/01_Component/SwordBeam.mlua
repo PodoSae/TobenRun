@@ -50,6 +50,12 @@ script SwordBeam extends Component
     -- the screen comfortably while still reaching any on-screen enemy (e.g. the boss at NormalOffsetX≈8).
     property number MaxRange = 20
 
+    -- 이동속도 사거리 반영 비율. 검기 발사 시 발사자(플레이어)의 전진 속도를 검기 Speed/MaxRange에 더해 반영한다.
+    -- 1 = 완전 반영(플레이어가 빨라져도 '플레이어 기준' 상대 사거리가 정지 시와 동일하게 유지), 0 = 반영 안 함(옛 동작).
+    -- 기본값(Speed/MaxRange)은 '멈춰 있을 때(속도 0)' 기준이다.
+    @DisplayName("이동속도 사거리 반영 비율")
+    property number SpeedRangeReflect = 1.0
+
     -- Parking spot for an idle (pooled) beam: far off any camera so it is invisible while waiting to be reused.
     property Vector3 ParkPosition = Vector3(0, 99999, 999)
 
@@ -97,6 +103,18 @@ script SwordBeam extends Component
         -- Remember where the beam was fired so recycling can be measured as distance traveled (map-independent).
         self._T.startX = startPos.x
         self._T.startY = startPos.y
+        -- 이동속도 사거리 반영: 발사자(플레이어)의 전진 속도(검기 방향 성분)를 Speed/MaxRange에 비례 반영한다.
+        -- 정지(ps=0)면 Speed/MaxRange 그대로(기본값 기준). 이동 중이면 effSpeed=Speed+ps*비율, effRange=MaxRange*(effSpeed/Speed)
+        -- → 플레이어 기준 상대 사거리가 정지 시와 동일하게 유지된다(빠르게 달려도 사거리가 짧아지지 않음).
+        local ps = 0
+        if isvalid(self.OwnerEntity) and self.OwnerEntity.RigidbodyComponent ~= nil then
+            ps = self.OwnerEntity.RigidbodyComponent.MoveVelocity.x * self._T.dirX
+        end
+        if ps < 0 then ps = 0 end
+        self._T.speed = self.Speed + ps * self.SpeedRangeReflect
+        local factor = 1
+        if self.Speed > 0 then factor = self._T.speed / self.Speed end
+        self._T.maxRange = self.MaxRange * factor
 
         local renderer = self.Entity.SpriteRendererComponent
         if renderer ~= nil then
@@ -128,15 +146,17 @@ script SwordBeam extends Component
         end
 
         -- Move. Body-less entity -> Translate (direct transform write replicates to clients).
-        self.Entity.TransformComponent:Translate(self._T.dirX * self.Speed * delta, 0)
+        -- 속도는 발사 시 이동속도가 반영된 값(_T.speed). 폴백은 기본 Speed.
+        self.Entity.TransformComponent:Translate(self._T.dirX * (self._T.speed or self.Speed) * delta, 0)
 
         local pos = self.Entity.TransformComponent.Position
 
-        -- Recycle once the beam has traveled MaxRange from its launch point (relative distance, not a fixed
-        -- world rect — works anywhere the endless runner scrolls to).
+        -- Recycle once the beam has traveled its (speed-reflected) max range from its launch point (relative
+        -- distance, not a fixed world rect — works anywhere the endless runner scrolls to).
         local dsx = pos.x - (self._T.startX or pos.x)
         local dsy = pos.y - (self._T.startY or pos.y)
-        if (dsx * dsx + dsy * dsy) >= self.MaxRange * self.MaxRange then
+        local mr = self._T.maxRange or self.MaxRange
+        if (dsx * dsx + dsy * dsy) >= mr * mr then
             self:Deactivate()
             return
         end

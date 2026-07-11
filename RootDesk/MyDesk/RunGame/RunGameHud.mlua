@@ -74,12 +74,25 @@ property Entity scoreText = "2de4eed6-7a29-4a36-be9b-57cc5f3bf397"
 -- Distance-progress HUD (how far along the course the runner is): a fill bar + "x cur / goal" label.
 property Entity progressFill = "e0c5255c-5d64-4a00-a646-26fc75c6e869"
 property Entity progressText = "2aad731c-6936-4da9-aabe-98f98371ae33"
+-- 진행도 마커 아이콘: 코스 진행도(0~1)에 따라 X 위치가 이동한다. 절대좌표 대신 '디자인한 시작 위치(prog=0)'를
+-- 그대로 기준으로 삼고(첫 갱신 시 캡처) 거기서 오른쪽으로 progressIconMoveX 만큼 이동시킨다 → 앵커/부모와 무관하게 맞음.
+property Entity progressIcon = "9a099395-b1cf-4a57-9fb6-fcbe2f47572a"
+@DisplayName("진행 아이콘 이동 거리(X, 100%). 0=자동")
+@Description("0이면 진행 바(Fill) 우측 끝 - 시작위치로 자동 계산(아이콘이 진행 바와 같은 좌표계=RunProg 자식일 때 정확). 0이 아니면 그 값(px)만큼 이동")
+property number progressIconMoveX = 0
+-- 디자인한 시작 X(첫 갱신 때 아이콘의 anchoredPosition.x를 캡처). 이 값에서 progressIconMoveX*prog 만큼 오른쪽 이동.
+@HideFromInspector property number progressIconBaseX = 0
+@HideFromInspector property boolean progressIconBaseCaptured = false
 property Entity gameOverPanel = "133f65c0-d55e-41f2-b3f2-1ae708139b40"
 property Entity finalScoreText = "e9ca9412-46a9-4874-a09e-9ff584adbcdd"
 -- 새 결과창(ResultGroup)의 로비 버튼. 옛 팝업 버튼 대신 여기로 연결한다.
 property Entity restartButton = "98cbe450-196b-46a5-96a1-c66b380b4df7"
 -- 새 결과창(ResultGroup)의 '다음 스테이지' 버튼.
 property Entity nextStageButton = "c281d540-2a2b-4eb8-8682-1896ef4338cd"
+-- 결과창 '로비' 버튼의 디자인된 좌측 X(다음 스테이지 버튼과 나란히 있을 때). 최초 배치 시 1회 캡처해, 다음 스테이지가
+-- 없으면 가운데(0)로, 있으면 이 X로 복귀시킨다.
+@HideFromInspector property number resultLobbySideX = 0
+@HideFromInspector property boolean resultLobbySideCaptured = false
 property Entity resultTitle = "77cc9c1c-ff74-4d20-a62d-d96614f6ce8d"
 -- PopupGroup root (DefaultShow=false → must be enabled for any child to render)
 -- and the generic confirm backdrop that shares the group (hidden so it never overlays the result).
@@ -156,7 +169,17 @@ property Entity dbgStats = "a889b2eb-5b8b-48b2-bbfa-824f8e597e78"
 property Entity bossFrame = "55f95385-e767-49fb-aaee-5bb2e79baf0f"
 property SpriteGUIRendererComponent bossHpFill = "fc73c19c-d92f-4665-9442-24426a4cfde8"
 property TextComponent bossHpLabel = "0e41b6c3-d1d2-4240-89fb-93c2b7b6883d"
+-- 보스 프레임의 이름/초상화(수정된 DefaultGroup.ui의 BossFrame/Name·Portrait). 프레임을 켤 때 세팅.
+property TextComponent bossName = "1848e813-5ee1-4988-a569-203ee23b1e9b"
+property SpriteGUIRendererComponent bossPortrait = "daa52923-0e8f-4f8b-9b39-562ebf32823d"
+@DisplayName("보스 이름")
+property string bossDisplayName = "머쉬맘"
+@DisplayName("보스 초상화 RUID")
+@Description("비우면 .ui에 디자인된 초상화를 그대로 유지(권장). 값을 넣으면 그 스프라이트로 덮어쓴다(정적 sprite 권장 — animationclip이면 계속 재생됨)")
+property string bossPortraitRUID = ""
 property integer score = 0
+-- 런(스테이지 진입/재플레이) 순번. OnArriveMap마다 +1. IngameHud가 '이번 스테이지에서 획득한 재화' 기준값 리셋 신호로 사용.
+property integer runSeq = 0
 property integer scoreAnimTimer = 0
 property number scoreAnimCur = 0
 property integer scoreAnimTarget = 0
@@ -185,6 +208,12 @@ method void OnBeginPlay()
 	-- Hide the game-over panel and wire the result-panel restart button at world start.
 	if isvalid(self.gameOverPanel) then
 		self.gameOverPanel.Enable = false
+	end
+	-- 보스 프레임을 월드 시작 시 강제로 숨긴다. DefaultGroup은 DefaultShow=true라 타이틀/로비부터 HUD가 떠 있고,
+	-- 보스 프레임은 UpdateBossHp(보스전)에서만 켜지므로, 시작 시 여기서 확실히 꺼두지 않으면 스테이지 진입 전
+	-- (OnArriveMap 실행 전)에 보스전이 아닌데도 보일 수 있다.
+	if isvalid(self.bossFrame) then
+		self.bossFrame.Enable = false
 	end
 	if isvalid(self.restartButton) then
 		self.restartHandler = self.restartButton:ConnectEvent(ButtonClickEvent, self.OnGoLobbyClick)
@@ -617,6 +646,8 @@ method void OnArriveMap(Entity player)
 	self.ultGaugeLastX = sx
 	self.score = 0
 	self.coinScore = 0
+	-- 새 런 시작 신호(IngameHud의 '이번 스테이지 획득 재화' 기준 잔액 재캡처용). 같은 스테이지 재플레이도 여기서 +1.
+	self.runSeq = self.runSeq + 1
 	self.goalX = cfg.goalX
 	self.courseSpeed = cfg.speed
 	self.bossMode = cfg.bossMode
@@ -637,6 +668,10 @@ method void OnArriveMap(Entity player)
 	end
 	-- Reset the ultimate gauge so it starts empty each stage (no carry-over from the previous stage).
 	self:ResetUltimate()
+	-- 궁극기 피버(전체화면 컷씬) 오버레이가 이전 스테이지에서 남지 않도록 스테이지 진입 시 강제 해지.
+	if _UltCutscene ~= nil then
+		_UltCutscene:Dismiss()
+	end
 	-- Reset roguelite stage buffs (attack up, ...) so they don't carry into the next stage.
 	self:ResetStageBuff()
 	-- 인게임 캐릭터에 장착 장비 세트(무기+방어구) 외형 적용. 매 스테이지 진입마다 재적용.
@@ -951,6 +986,24 @@ method void UpdateProgress()
 	if isvalid(self.progressText) and self.progressText.TextComponent ~= nil then
 		self.progressText.TextComponent.Text = "x " .. tostring(math.floor(self.bestX)) .. " / " .. tostring(math.floor(self.goalX))
 	end
+	-- 진행도 마커 아이콘: 디자인한 시작 위치(첫 갱신 때 캡처)를 prog=0 기준으로 삼고, 진행도만큼 오른쪽으로 이동한다.
+	-- 이동 거리는 progressIconMoveX(0=자동). 자동이면 진행 바(Fill)의 우측 끝 - 시작위치로 계산 → 100%에서 바 우측 끝에
+	-- 정확히 닿는다(아이콘이 진행 바와 같은 좌표계=RunProg 자식일 때). Y는 유지.
+	if isvalid(self.progressIcon) and self.progressIcon.UITransformComponent ~= nil then
+		local ut = self.progressIcon.UITransformComponent
+		local ap = ut.anchoredPosition
+		if self.progressIconBaseCaptured == false then
+			self.progressIconBaseX = ap.x
+			self.progressIconBaseCaptured = true
+		end
+		local travel = self.progressIconMoveX
+		if travel <= 0 and isvalid(self.progressFill) and self.progressFill.UITransformComponent ~= nil then
+			local fut = self.progressFill.UITransformComponent
+			local rightEnd = fut.anchoredPosition.x + fut.RectSize.x * 0.5
+			travel = rightEnd - self.progressIconBaseX
+		end
+		ut.anchoredPosition = Vector2(self.progressIconBaseX + travel * prog, ap.y)
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -981,23 +1034,11 @@ method void CheckBossClear()
 end
 
 method void UpdateBossHp(Component bossComp)
-	-- Shows the top-right boss frame and mirrors the boss's @Sync HP onto its bar. Runs on the client
-	-- (called from the ClientOnly OnUpdate → CheckBossClear); MushmomBoss.Hp/MaxHp are @Sync so readable here.
-	---@type MushmomBoss
-	local boss = bossComp
-	if isvalid(self.bossFrame) and self.bossFrame.Enable == false then
-		self.bossFrame.Enable = true
-	end
-	local maxHp = boss.MaxHp
-	if maxHp <= 0 then maxHp = 1 end
-	local ratio = boss.Hp / maxHp
-	if ratio < 0 then ratio = 0 end
-	if ratio > 1 then ratio = 1 end
-	if isvalid(self.bossHpFill) then
-		self.bossHpFill.FillAmount = ratio
-	end
-	if isvalid(self.bossHpLabel) then
-		self.bossHpLabel.Text = tostring(math.floor(boss.Hp + 0.5)) .. " / " .. tostring(math.floor(maxHp + 0.5))
+	-- 보스 체력 UI는 새 인게임 HUD의 중앙 하단 BossBar(IngameHud:UpdateBoss)로 일원화했다. 기존 우상단
+	-- DefaultGroup/BossFrame은 더 이상 사용하지 않으므로 항상 숨긴 상태로 둔다(중복 표시 제거). 보스 클리어
+	-- 판정은 CheckBossClear가 별도로 수행하므로 이 메서드는 프레임을 숨기는 것 외엔 아무것도 하지 않는다.
+	if isvalid(self.bossFrame) and self.bossFrame.Enable then
+		self.bossFrame.Enable = false
 	end
 end
 
@@ -1109,6 +1150,10 @@ method void Clear()
 		if ult ~= nil then
 			ult:StopUltimateNow()
 		end
+		-- 궁극기 피버(전체화면 컷씬/돌진) 오버레이 강제 해지 — 발동 중 클리어해도 결과창 위에 UI가 남지 않도록.
+		if _UltCutscene ~= nil then
+			_UltCutscene:Dismiss()
+		end
 		-- Hard stop at the finish — kill momentum so the runner doesn't slide.
 		if player.MovementComponent ~= nil then
 			player.MovementComponent:Stop()
@@ -1171,6 +1216,35 @@ method void ShowResult(string title, integer score, boolean isClear)
 			end
 		end
 		_ResultUI:Show(self.curStage, isClear, kills, hits, score, bossKilled)
+		-- 다음 스테이지 유무에 따라 결과창 버튼 배치(없으면 '다음 스테이지' 숨기고 '로비'만 가운데).
+		self:LayoutResultButtons()
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void LayoutResultButtons()
+	-- 결과창 버튼 배치: 다음 스테이지가 있으면 [로비][다음] 나란히, 없으면(마지막 스테이지) '다음 스테이지'를 숨기고
+	-- '로비' 버튼만 가운데(x=0)에 출력한다. 다음 스테이지 유무는 ScreenFlow.NextStage(""=없음)로 판단.
+	local hasNext = false
+	if _ScreenFlow ~= nil and self.curStage ~= nil and self.curStage ~= "" then
+		hasNext = (_ScreenFlow:NextStage(self.curStage) ~= "")
+	end
+	if isvalid(self.nextStageButton) then
+		self.nextStageButton.Enable = hasNext
+	end
+	if isvalid(self.restartButton) and self.restartButton.UITransformComponent ~= nil then
+		local ut = self.restartButton.UITransformComponent
+		-- 디자인된 좌측 X(다음 버튼과 나란히 있을 때)를 최초 1회 캡처 → hasNext일 때 이 위치로 복귀.
+		if self.resultLobbySideCaptured == false then
+			self.resultLobbySideX = ut.anchoredPosition.x
+			self.resultLobbySideCaptured = true
+		end
+		local ay = ut.anchoredPosition.y
+		if hasNext then
+			ut.anchoredPosition = Vector2(self.resultLobbySideX, ay)
+		else
+			ut.anchoredPosition = Vector2(0, ay)
+		end
 	end
 end
 

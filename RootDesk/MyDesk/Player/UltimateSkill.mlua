@@ -58,20 +58,20 @@ script UltimateSkill extends Component
 
     -- ── Speed multiplier (궁극기 중 이동속도 배율) ──
     @DisplayName("궁극기 이동속도 배율")
-    @Description("궁극기 발동 동안 달리기 속도에 곱하는 값. 1=변화 없음, 1.4=40% 빠름. speedMultiplier와 WalkSpeed/FallSpeedMaxX 상한을 함께 스케일해 clamp 없이 그대로 적용된다. 기준값은 발동 순간(코스 속도)에 스냅샷 후 종료 시 정확히 복원")
+    @Description("궁극기 발동 동안 달리기 속도에 곱하는 값. 1=변화 없음, 2=2배. speedMultiplier와 WalkSpeed/FallSpeedMaxX 상한을 함께 스케일해 clamp 없이 그대로 적용된다. 기준값은 발동 순간(코스 속도)에 스냅샷 후 종료 시 정확히 복원")
     @MinValue(1)
     @MaxValue(3)
     @Delta(0.1)
-    property number DashSpeedMul = 1.4
+    property number DashSpeedMul = 2.0
 
     -- 궁극기 중 아바타 애니 재생속도(달리기 연출). 아바타에는 별도 '달리기' 클립이 없고 지상 이동은 걷기(Walk)뿐이라,
     -- 걷기 애니를 빠르게 돌려(=AvatarRendererComponent.PlayRate) 달리는 것처럼 보이게 한다. 종료 시 1로 복원.
     @DisplayName("궁극기 중 애니 재생속도(달리기 연출)")
-    @Description("궁극기 발동 동안 아바타 애니 재생속도 배율. 걷기 애니가 이 배율로 빨라져 달리는 느낌을 준다. 1=변화 없음, 1.6=60% 빠름")
+    @Description("궁극기 발동 동안 아바타 애니 재생속도 배율. 걷기 애니가 이 배율로 빨라져 달리는 느낌을 준다. 이동속도(DashSpeedMul)와 맞춰 다리가 미끄러지지 않게 한다. 1=변화 없음, 2=2배")
     @MinValue(1)
     @MaxValue(3)
     @Delta(0.1)
-    property number DashAnimPlayRate = 1.6
+    property number DashAnimPlayRate = 2.0
 
     -- ── Boss damage (궁극기가 보스에게 주는 틱 데미지) ──
     @DisplayName("보스 틱 데미지 배율")

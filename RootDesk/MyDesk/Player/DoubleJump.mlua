@@ -20,8 +20,8 @@ script DoubleJump extends Component
 
 	-- 더블점프 발동 시 재생하는 이펙트(animationclip). 발동 지점에 1회 재생. 비우면 없음.
 	property string jumpEffectRUID = "93a7c6fa97e1433d8a305a165b9e309f"
-	property Vector3 jumpEffectOffset = Vector3(0, 0, 0)
-	property Vector3 jumpEffectScale = Vector3(1, 1, 1)
+	property Vector3 jumpEffectOffset = Vector3(0.2, 0, 0)
+	property Vector3 jumpEffectScale = Vector3(2, 2, 2)
 
 	-- Cached + runtime state (client / local player only).
 	property RigidbodyComponent body = nil
@@ -127,7 +127,13 @@ script DoubleJump extends Component
 		-- no-ops in mid-air — SetForce does not.
 
 		--self.body:SetForce(Vector2(self.runSpeed * self.jumpForce, self.jumpForce))
-		self.body:SetForce(Vector2(self.forwardForce, self.jumpForce * 1.5))
+		-- 점프 전방 속도 = 레벨(코스)에 고정된 달리기 속도를 반영: PlayerController.speed(= 코스 Set,speed)를 매 발동 시
+		-- 새로 읽어 쓴다. 고정 forwardForce는 폴백(컨트롤러 미확보 시).
+		local fwd = self.forwardForce
+		if self.controller ~= nil then
+			fwd = self.controller.speed
+		end
+		self.body:SetForce(Vector2(fwd, self.jumpForce * 1.5))
 
 		-- 더블점프 이펙트: 발동 지점(현재 위치)에 1회 재생(소유 클라). 발동 순간을 표시하도록 부착이 아니라 고정 재생.
 		if self.jumpEffectRUID ~= "" then

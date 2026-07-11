@@ -191,6 +191,14 @@ script StageBuffItem extends Component
             else
                 log_warning("[StageBuffItem] MagnetBuff logic or PlayerComponent missing — magnet not started")
             end
+        elseif kind == "tobencoin" then
+            -- 토벤코인 픽업 → 계정 재화(coin) 즉시 지급(서버 권위). amount = 지급 개수(정수). 메소(coin 픽업=점수)와 별개.
+            local pc = player.PlayerComponent
+            if _PlayerSave ~= nil and pc ~= nil then
+                _PlayerSave:GrantCoinToUser(pc.UserId, math.floor(amount))
+            else
+                log_warning("[StageBuffItem] PlayerSave or PlayerComponent missing — tobencoin not granted")
+            end
         else
             log_warning("[StageBuffItem] unknown BuffKind: " .. tostring(kind))
         end
