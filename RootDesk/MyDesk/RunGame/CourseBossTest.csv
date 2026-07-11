@@ -1,5 +1,5 @@
 ﻿cmd,p1,p2,p3
-Set,floorY,0,
+Set,floorY,01,
 Set,length,420,
 Set,goal,400,
 Set,speed,3,

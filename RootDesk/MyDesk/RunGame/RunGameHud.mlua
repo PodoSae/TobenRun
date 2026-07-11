@@ -16,13 +16,17 @@ property number fallDropMargin = 2.0
 -- 구덩이에 빠지면 마지막으로 밟은 땅에서 이만큼 뒤(월드유닛)로 되돌려 세운다(구덩이 앞 재시도 + 점프 활주로).
 @DisplayName("구덩이 부활 뒤로물림")
 property number gapRespawnBack = 3.0
--- 낙사(구덩이) 처리: y가 이 값 이하로 떨어지면 최근 땅 x(lastGroundedX)에 스폰하고 respawnFreezeSec만큼 정지 후 재개.
-@DisplayName("낙사 트리거 y")
-property number fallDeathY = 0.0
+-- 낙사(구덩이) 처리: py가 (spawnY - fallDropBelow) 이하로 떨어지면 최근 땅 x(lastGroundedX)에 스폰하고 정지 후 재개.
+-- 절대 y가 아니라 spawnY 기준 '상대'라 floorY가 0이 아닌 맵에서도 동일하게 동작한다(절대값은 floorY≠0에서 오작동).
+@DisplayName("낙사 트리거: spawnY 아래로 이 값")
+property number fallDropBelow = 0.3
 @DisplayName("낙사 스폰 후 정지(초)")
 property number respawnFreezeSec = 1.0
 @HideFromInspector property boolean respawnFreezing = false
 @HideFromInspector property integer respawnFreezeTimer = 0
+-- 스폰 후 한 번이라도 땅에 닿았는지. 게임 시작/스테이지 진입 직후 아직 spawnY에 안착하기 전 프레임이 낙사로 오인되는 것을
+-- 막는다. 접지 전엔 FallRespawn을 발동하지 않는다. OnArriveMap/StartGame에서 false로 리셋.
+@HideFromInspector property boolean groundedSinceSpawn = false
 -- 낙사 스폰 바닥에 1회 재생하는 이펙트(비우면 없음). y는 스폰 높이 - respawnFxYOffset(바닥 표면).
 @DisplayName("낙사 스폰 이펙트 RUID")
 property string respawnFxRUID = "64b8f9ee7c4f43ef98f77296c4ef145b"
@@ -30,6 +34,8 @@ property string respawnFxRUID = "64b8f9ee7c4f43ef98f77296c4ef145b"
 property number respawnFxYOffset = 0.3
 
 property number lastGroundedX = 0
+-- 땅에 닿아있을 때의 실제 y(스폰 높이 계산값 대신 이 값을 낙사 트리거/리스폰에 쓴다 → floorY·발판 높이와 무관하게 정확).
+@HideFromInspector property number lastGroundedY = 0
 -- 네이티브 낙사 리스폰 위치(PlayerComponent.RespawnPosition)로 마지막에 서버에 보낸 X. RPC 남발 방지 스로틀 기준.
 property number lastSentRespawnX = -99999
 
@@ -224,6 +230,8 @@ method void OnUpdate(number delta)
 	-- Remember the last x where the runner was on solid ground (to know which gap it fell into).
 	if rb:IsOnGround() then
 		self.lastGroundedX = x
+		self.lastGroundedY = player.TransformComponent.WorldPosition.y
+		self.groundedSinceSpawn = true
 	end
 	local distScore = math.floor((self.bestX - self.spawnX) * 10)
 	if distScore < 0 then
@@ -266,9 +274,10 @@ method void OnUpdate(number delta)
 		return
 	end
 
-	-- 낙사: y가 fallDeathY 이하로 떨어지면 최근 땅 x에 스폰(정지 중이면 스킵 — 중복 트리거 방지).
+	-- 낙사: py가 (최근 접지 y - fallDropBelow) 이하로 떨어지면 최근 땅에 스폰. 정지 중이거나(중복 방지) 스폰 후 아직 한 번도
+	-- 땅에 안 닿았으면(게임 시작/스테이지 진입 직후 안착 전) 발동하지 않는다. lastGroundedY = 실제 서 있던 높이.
 	local py = player.TransformComponent.WorldPosition.y
-	if self.respawnFreezing == false and py <= self.fallDeathY then
+	if self.respawnFreezing == false and self.groundedSinceSpawn == true and py <= (self.lastGroundedY - self.fallDropBelow) then
 		self:FallRespawn()
 		return
 	end
@@ -276,8 +285,8 @@ end
 
 @ExecSpace("ClientOnly")
 method void FallRespawn()
-	-- 낙사(y ≤ fallDeathY): 플레이어가 땅에 닿아있을 때 저장해 둔 최근 x(lastGroundedX)에 스폰 높이로 세운다.
-	-- 스폰 직후 respawnFreezeSec(1초) 동안 러너를 멈췄다가(SetRunnerActive) 자동 재개한다.
+	-- 낙사(py ≤ 최근 접지y - fallDropBelow): 플레이어가 땅에 닿아있을 때 저장해 둔 최근 x/y(lastGroundedX/Y)에 세운다.
+	-- 실제 서 있던 y를 그대로 받아와 적용 → floorY 계산값과 무관. 스폰 직후 respawnFreezeSec(1초) 정지 후 자동 재개.
 	local player = _UserService.LocalPlayer
 	if isvalid(player) == false or player.MovementComponent == nil then
 		return
@@ -287,12 +296,13 @@ method void FallRespawn()
 	if rx < self.spawnX then
 		rx = self.spawnX
 	end
-	-- 스폰 높이(spawnY)로 세운다 → 중력이 바로 그 땅에 안착.
+	-- 최근 접지 y로 세운다 → 중력이 바로 그 땅에 안착.
+	local ry = self.lastGroundedY
 	player.MovementComponent:Stop()
-	player.MovementComponent:SetWorldPosition(Vector2(rx, self.spawnY))
-	-- 스폰 바닥에 이펙트 1회(월드 고정). y는 스폰 높이 - 오프셋(바닥 표면).
+	player.MovementComponent:SetWorldPosition(Vector2(rx, ry))
+	-- 스폰 바닥에 이펙트 1회(월드 고정). y는 접지 y - 오프셋(바닥 표면).
 	if self.respawnFxRUID ~= "" then
-		_EffectService:PlayEffect(self.respawnFxRUID, player, Vector3(rx, self.spawnY - self.respawnFxYOffset, 0), 0, Vector3(1, 1, 1), false, { ["PlayRate"] = 0.7 })
+		_EffectService:PlayEffect(self.respawnFxRUID, player, Vector3(rx, ry - self.respawnFxYOffset, 0), 0, Vector3(1, 1, 1), false, { ["PlayRate"] = 0.7 })
 	end
 	-- 스폰 순간 캐릭터 스프라이트(아바타) + 이름표(NameTag) 끄기(클라 즉시). EndRespawnFreeze(1초 뒤)에서 다시 켠다.
 	if player.AvatarRendererComponent ~= nil then
@@ -527,6 +537,9 @@ method void OnArriveMap(Entity player)
 	self.bestX = sx
 	-- 구덩이 부활 기준점을 스테이지 시작값으로 리셋(이전 판의 값이 남지 않도록).
 	self.lastGroundedX = sx
+	self.lastGroundedY = sy
+	-- 스폰 직후 안착 전 프레임이 낙사로 오인되지 않도록 접지 플래그 리셋(한 번 땅에 닿아야 FallRespawn 허용).
+	self.groundedSinceSpawn = false
 	-- 낙사 리스폰 앵커 스로틀 리셋 → 새 스테이지 첫 프레임에 RespawnPosition을 강제로 다시 보낸다.
 	self.lastSentRespawnX = -99999
 	self.ultGaugeLastX = sx
@@ -686,6 +699,8 @@ method void StartGame()
 	self.ultGaugeLastX = self.spawnX
 	self.score = 0
 	self.coinScore = 0
+	-- 게임 시작 직후 안착 전 프레임이 낙사로 오인되지 않도록 접지 플래그 리셋(한 번 땅에 닿아야 FallRespawn 허용).
+	self.groundedSinceSpawn = false
 	-- Reset the ultimate gauge so each run begins with an empty charge.
 	self:ResetUltimate()
 	-- Reset roguelite stage buffs so a new run starts clean.
