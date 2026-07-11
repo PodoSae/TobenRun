@@ -920,8 +920,8 @@ method string BlessEffectIcon(string effectId)
 		return "8b938a9b2bec440cba0742337a036e5e"
 	elseif effectId == "swift" then         -- 속사 공격
 		return "1c4508e357784c15be1caf2828b01ef8"
-	elseif effectId == "crit" then          -- 즉사 이펙트(임시)
-		return "0224a00456c54a6bb8ae18ba9d41c66c"
+	elseif effectId == "crit" then          -- 급소 일격(즉사)
+		return "ee044e735c3148c49797f4f1a8b5f3fa"
 	end
 	return ""
 end
