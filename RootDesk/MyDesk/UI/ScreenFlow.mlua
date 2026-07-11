@@ -1468,7 +1468,7 @@ method void SelectStage(string stage)
 	local titleText = stage
 	local descText = ""
 	if _DataService ~= nil then
-		local ds = _DataService:GetTable("StageObjective")
+		local ds = _DataService:GetTable("StageSelect")
 		if ds ~= nil then
 			local row = ds:FindRow("stage", stage)
 			if row ~= nil then
