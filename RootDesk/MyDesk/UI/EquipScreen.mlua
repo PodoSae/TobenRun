@@ -199,6 +199,15 @@ method void OnBeginPlay()
 		end
 	end
 
+	-- 잠긴 장비칸(추후 출시 예정) 2개 연결.
+	for i = 0, 1 do
+		local lockEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/LockSlot_" .. tostring(i))
+		if isvalid(lockEnt) then
+			local lh = lockEnt:ConnectEvent(ButtonClickEvent, function() self:OnLockedSlotClick() end)
+			table.insert(self.cellHds, { ent = lockEnt, hd = lh })
+		end
+	end
+
 	local tabSlots = { "all", "weapon", "glove", "coat", "pants" }
 	for i = 0, 4 do
 		local ent = _EntityService:GetEntityByPath("/ui/EquipGroup/InvPanel/Tab_" .. tostring(i))
@@ -285,17 +294,28 @@ method void RefreshToben()
 	local free = _PlayerSave:GetTobenFreePoints()
 	local total = _PlayerSave:GetTobenTotalPoints()
 
-	local lvEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/LevelText")
-	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
-		lvEnt.TextComponent.Text = "토벤 레벨 " .. tostring(level)
+	-- 레벨은 상단 타이틀에 "토벤레벨 Lv. N"으로 표기(별도 LevelText는 제거함).
+	local titleEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Title")
+	if isvalid(titleEnt) and titleEnt.TextComponent ~= nil then
+		titleEnt.TextComponent.Text = "토벤레벨 Lv. " .. tostring(level)
 	end
 	local upEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/LevelUpBtn")
 	if isvalid(upEnt) and upEnt.TextComponent ~= nil then
-		upEnt.TextComponent.Text = "레벨업   ·   다음 " .. tostring(_PlayerSave:TobenLevelUpCost(level)) .. " 메소"
+		upEnt.TextComponent.Text = "레벨업"
+	end
+	-- 레벨업 비용(메소)은 버튼 왼쪽 재화 칸에 값으로 표시.
+	local upCostEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/LevelUpBtn/CostText")
+	if isvalid(upCostEnt) and upCostEnt.TextComponent ~= nil then
+		upCostEnt.TextComponent.Text = tostring(_PlayerSave:TobenLevelUpCost(level))
 	end
 	local ptEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/PointsText")
 	if isvalid(ptEnt) and ptEnt.TextComponent ~= nil then
 		ptEnt.TextComponent.Text = "보유 포인트 : " .. tostring(free) .. " / " .. tostring(total)
+	end
+	-- 토벤 포인트는 상단 CurrencyBar의 포인트 칸에도 표기(축복창과 동일).
+	local ptPill = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/PointPill/Text")
+	if isvalid(ptPill) and ptPill.TextComponent ~= nil then
+		ptPill.TextComponent.Text = tostring(free)
 	end
 
 	for _, s in ipairs(self:TobenStatList()) do
@@ -315,22 +335,29 @@ method void RefreshToben()
 				valEnt.TextComponent.Text = "+" .. string.format("%g", curVal) .. s.unit .. " › +" .. string.format("%g", nextVal) .. s.unit
 			end
 		end
+		-- 소모값 텍스트(UpCost)는 값(숫자)만, 앞의 포인트 아이콘(UpCostIcon)과 함께. 버튼 이미지 색만 여유/최대로 조절.
 		local btnEnt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/UpBtn")
-		if isvalid(btnEnt) and btnEnt.TextComponent ~= nil then
-			if elv >= maxLv then
-				btnEnt.TextComponent.Text = "최대"
-				if btnEnt.SpriteGUIRendererComponent ~= nil then
+		local costTxt = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/UpCost")
+		local costIcon = _EntityService:GetEntityByPath("/ui/EquipGroup/TobenPanel/Row_" .. s.id .. "/UpCostIcon")
+		if elv >= maxLv then
+			if isvalid(costTxt) and costTxt.TextComponent ~= nil then
+				costTxt.TextComponent.Text = "최대"
+			end
+			if isvalid(costIcon) then costIcon.Enable = false end
+			if isvalid(btnEnt) and btnEnt.SpriteGUIRendererComponent ~= nil then
+				btnEnt.SpriteGUIRendererComponent.Color = Color(0.5, 0.5, 0.5, 1)
+			end
+		else
+			local cost = _PlayerSave:TobenStatUpgradeCost(elv)
+			if isvalid(costTxt) and costTxt.TextComponent ~= nil then
+				costTxt.TextComponent.Text = tostring(cost) .. "P"
+			end
+			if isvalid(costIcon) then costIcon.Enable = true end
+			if isvalid(btnEnt) and btnEnt.SpriteGUIRendererComponent ~= nil then
+				if free >= cost then
+					btnEnt.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+				else
 					btnEnt.SpriteGUIRendererComponent.Color = Color(0.5, 0.5, 0.5, 1)
-				end
-			else
-				local cost = _PlayerSave:TobenStatUpgradeCost(elv)
-				btnEnt.TextComponent.Text = "강화 (" .. tostring(cost) .. "P)"
-				if btnEnt.SpriteGUIRendererComponent ~= nil then
-					if free >= cost then
-						btnEnt.SpriteGUIRendererComponent.Color = Color(0.85, 0.7, 0.4, 1)
-					else
-						btnEnt.SpriteGUIRendererComponent.Color = Color(0.5, 0.44, 0.3, 1)
-					end
 				end
 			end
 		end
@@ -401,6 +428,10 @@ method void FillCell(integer idx, string id, table d)
 	if isvalid(cell) == false then
 		return
 	end
+	cell.Enable = true -- 소유 무기가 있는 칸은 활성화(authored enable=false여도 표시).
+	if cell.SpriteGUIRendererComponent ~= nil then
+		cell.SpriteGUIRendererComponent.ImageRUID = DataRef("d055ea2df2ec429aa198edf5f2016b3d") -- 칸 배경(슬롯 프레임).
+	end
 	local icon = cell:GetChildByName("Icon", false)
 	if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
 		icon.SpriteGUIRendererComponent.ImageRUID = DataRef("thumbnail://" .. d.ruid)
@@ -408,7 +439,7 @@ method void FillCell(integer idx, string id, table d)
 	end
 	local nameEnt = cell:GetChildByName("Name", false)
 	if isvalid(nameEnt) and nameEnt.TextComponent ~= nil then
-		nameEnt.TextComponent.Text = d.name
+		nameEnt.TextComponent.Text = "" -- 인벤 칸에는 장비 이름 표시 안 함.
 	end
 	local lvEnt = cell:GetChildByName("Lv", false)
 	if isvalid(lvEnt) and lvEnt.TextComponent ~= nil then
@@ -437,11 +468,8 @@ method void SetCellEquipped(any cell, boolean isEq)
 		badgeBg.Enable = isEq
 	end
 	if cell.SpriteGUIRendererComponent ~= nil then
-		if isEq then
-			cell.SpriteGUIRendererComponent.Color = Color(0.16, 0.32, 0.22, 1)
-		else
-			cell.SpriteGUIRendererComponent.Color = Color(0.13, 0.17, 0.27, 1)
-		end
+		-- d055 슬롯 프레임이 보이도록 밝게 유지(장착 표시는 뱃지로).
+		cell.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
 	end
 end
 
@@ -451,6 +479,7 @@ method void ClearCell(integer idx)
 	if isvalid(cell) == false then
 		return
 	end
+	cell.Enable = false -- 빈 칸은 숨김.
 	local icon = cell:GetChildByName("Icon", false)
 	if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
 		icon.SpriteGUIRendererComponent.ImageRUID = DataRef("")
@@ -475,14 +504,20 @@ method void RefreshSlots()
 			local icon = ent:GetChildByName("Icon", false)
 			local lbl = ent:GetChildByName("Label", false)
 			local id = self.equipped[s.slot]
-			if id ~= nil and id ~= "" and self.defs[id] ~= nil then
+			local hasItem = (id ~= nil and id ~= "" and self.defs[id] ~= nil)
+			-- 장착 여부에 따라 EquipEmpty(빈 슬롯 표시) 토글: 장착=끔, 미장착=켬.
+			local emptyEnt = ent:GetChildByName("EquipEmpty", false)
+			if isvalid(emptyEnt) then
+				emptyEnt.Enable = (not hasItem)
+			end
+			if hasItem then
 				local d = self.defs[id]
 				if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
 					icon.SpriteGUIRendererComponent.ImageRUID = DataRef("thumbnail://" .. d.ruid)
 					icon.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
 				end
 				if isvalid(lbl) and lbl.TextComponent ~= nil then
-					lbl.TextComponent.Text = d.name
+					lbl.TextComponent.Text = s.label -- 이름은 스탯 상단 헤더로 이동
 				end
 			else
 				if isvalid(icon) and icon.SpriteGUIRendererComponent ~= nil then
@@ -501,12 +536,25 @@ end
 method void RefreshSlotDesc()
 	-- 장착칸 오른쪽: 현재 장착 무기의 이름/등급 + 스탯 설명(장비스탯 + 궁극기/자동공격).
 	local id = self.equipped["weapon"]
-	local txt = "장착된 무기가 없습니다."
+	local name = "장착된 무기 없음"
+	local atk, aspd, hp, def, ult, skill = "-", "-", "-", "-", "-", "-"
 	if id ~= nil and id ~= "" and self.defs[id] ~= nil then
 		local d = self.defs[id]
-		txt = tostring(d.name) .. "  (" .. self:GradeName(d.grade) .. ")\n" .. self:WeaponStatSummary(d)
+		name = tostring(d.name) .. "  (" .. self:GradeName(d.grade) .. ")"
+		atk = self:Fmt(d.atk or 0)
+		aspd = self:Fmt(d.aspd or 0) .. "%"
+		hp = self:Fmt(d.hp or 0)
+		def = self:Fmt(d.def or 0)
+		ult = tostring(d.ultCount or 0) .. "회"
+		skill = self:Fmt(d.autoDmg or 0)
 	end
-	self:SetText("/ui/EquipGroup/CharPanel/SlotStatDesc", txt)
+	self:SetText("/ui/EquipGroup/CharPanel/WeaponName", name)
+	self:SetText("/ui/EquipGroup/CharPanel/WVal_attack", atk)
+	self:SetText("/ui/EquipGroup/CharPanel/WVal_atkspeed", aspd)
+	self:SetText("/ui/EquipGroup/CharPanel/WVal_defense", def)
+	self:SetText("/ui/EquipGroup/CharPanel/WVal_hp", hp)
+	self:SetText("/ui/EquipGroup/CharPanel/WVal_ult", ult)
+	self:SetText("/ui/EquipGroup/CharPanel/WVal_skill", skill)
 end
 
 method string IdToRuid(string id)
@@ -705,8 +753,11 @@ method void RefreshStats()
 	local totalAspd = aspd + tAspd
 	local totalHp = hp + tHp
 	local totalDef = def + tDef
-	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Values",
-		"공격력 " .. self:Fmt(totalAtk) .. "    공속 " .. self:Fmt(totalAspd) .. "%    체력 " .. self:Fmt(totalHp) .. "    방어력 " .. self:Fmt(totalDef))
+	-- 각 스탯을 개별 값 텍스트에 넣어 값이 늘어나도 라벨이 밀리지 않게(값은 좌측정렬 → 오른쪽으로 늘어남).
+	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Val_attack", self:Fmt(totalAtk))
+	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Val_atkspeed", self:Fmt(totalAspd) .. "%")
+	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Val_defense", self:Fmt(totalDef))
+	self:SetText("/ui/EquipGroup/CharPanel/StatBar/Val_hp", self:Fmt(totalHp))
 end
 
 method void RefreshTabs()
@@ -804,11 +855,11 @@ method void RefreshWeaponPopup(string id, table d)
 	local eqBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/EquipBtn")
 	if isEq then
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착 해제")
-		self:SetBtnColor(eqBtn, 0.42, 0.42, 0.48)
+		self:SetBtnColor(eqBtn, 1, 1, 1)
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "장착중")
 	else
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착")
-		self:SetBtnColor(eqBtn, 0.2, 0.5, 0.85)
+		self:SetBtnColor(eqBtn, 1, 1, 1)
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "")
 	end
 	-- 등급업 버튼(잠금): 회색으로 표시하고 눌러도 기능 없음(토스트).
@@ -847,11 +898,11 @@ method void RefreshPopup()
 	local eqBtn = _EntityService:GetEntityByPath("/ui/EquipPopupGroup/Panel/EquipBtn")
 	if isEq then
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착 해제")
-		self:SetBtnColor(eqBtn, 0.42, 0.42, 0.48)
+		self:SetBtnColor(eqBtn, 1, 1, 1)
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "장착중")
 	else
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipBtn", "장착")
-		self:SetBtnColor(eqBtn, 0.2, 0.5, 0.85)
+		self:SetBtnColor(eqBtn, 1, 1, 1)
 		self:SetText("/ui/EquipPopupGroup/Panel/EquipState", "")
 	end
 	-- action button (강화 / 진화 / 최종)
@@ -885,6 +936,14 @@ method void OnCellClick(integer idx)
 		return
 	end
 	self:OpenPopup(id)
+end
+
+@ExecSpace("ClientOnly")
+method void OnLockedSlotClick()
+	-- 잠긴 장비칸: 추후 출시 예정 안내.
+	if _UIToast ~= nil then
+		_UIToast:ShowMessage("추후 출시 예정입니다")
+	end
 end
 
 method void OnSlotClick(string slot)
