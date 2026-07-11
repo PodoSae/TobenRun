@@ -17,6 +17,13 @@ property any startGameHandler = nil
 property any stageHandlers = nil
 property any stageSelectOpenHandler = nil
 property any stageSelectBackHandler = nil
+-- 스테이지 선택 흐름: 맵 버튼은 '선택'만 하고, Desc 패널의 출발 버튼으로 진입한다.
+property string selectedStage = ""
+property any stageDepartHandler = nil
+-- Desc 패널 슬라이드: 선택 전엔 화면 아래(descHiddenY), 선택 시 원위치(descShownY)로 올라온다.
+property number descShownY = 0
+property number descCurY = -720
+property number descTargetY = -720
 property any equipHandler = nil
 property any equipBackHandler = nil
 property any blessHandler = nil
@@ -86,6 +93,16 @@ method void OnBeginPlay()
 			table.insert(self.stageHandlers, { ent = btn, hd = h })
 		end
 	end
+	-- Desc 패널의 출발 버튼 → 선택된 스테이지로 진입. 원위치(y) 기억 후 화면 아래로 숨긴다.
+	local descPanel = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
+	if isvalid(descPanel) and descPanel.UITransformComponent ~= nil then
+		self.descShownY = descPanel.UITransformComponent.anchoredPosition.y
+	end
+	local departBtn = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/UIButton")
+	if isvalid(departBtn) then
+		self.stageDepartHandler = departBtn:ConnectEvent(ButtonClickEvent, self.OnStageDepartClick)
+	end
+	self:HideStageDesc()
 	-- "모험 시작!" button opens the StageSelect screen (game start -> pick a stage).
 	local startBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StartBtn")
 	if isvalid(startBtn) then
@@ -217,6 +234,16 @@ end
 method void OnUpdate(number delta)
 	-- 축복 icon idle animation (runs regardless of the title-hint early-return below).
 	self:AnimateBlessIcon(delta)
+	-- Desc 패널 슬라이드(선택 시 아래→원위치). 스테이지 선택 화면이 열려 있을 때만.
+	if isvalid(self.stageSelectRoot) and self.stageSelectRoot.Enable then
+		if math.abs(self.descCurY - self.descTargetY) > 0.5 then
+			self.descCurY = self.descCurY + (self.descTargetY - self.descCurY) * math.min(1, delta * 12)
+			local d = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
+			if isvalid(d) and d.UITransformComponent ~= nil then
+				d.UITransformComponent.anchoredPosition = Vector2(0, self.descCurY)
+			end
+		end
+	end
 	-- Pulse the title "터치하여 시작" prompt's alpha up and down while the title screen is visible.
 	if isvalid(self.titleHint) == false or self.titleHint.TextComponent == nil then
 		return
@@ -389,14 +416,14 @@ method void RefreshSavedUI()
 				reqEnt.TextComponent.Text = self:PrevStage(stage) .. " 클리어 필요"
 			end
 		end
-		local best = _PlayerSave:GetStageBest(stage)
-		local lbl = _EntityService:GetEntityByPath(btnPath .. "/Best")
-		if isvalid(lbl) and lbl.TextComponent ~= nil then
-			if best > 0 then
-				lbl.TextComponent.Text = "최고 " .. tostring(best)
-			else
-				lbl.TextComponent.Text = ""
-			end
+		-- 점수 대신 스테이지별 획득 별(0~3)을 3개의 별 스프라이트로 표시(빈 별 / 찬 별).
+		local stars = _PlayerSave:GetStageStars(stage)
+		self:SetStageStars(btnPath, stars)
+		-- 보스 코스면 왼쪽 상단 보스 아이콘 표시(맵 정보에서 판정).
+		local isBoss = self:IsBossStage(stage)
+		local bossEnt = _EntityService:GetEntityByPath(btnPath .. "/BossIcon")
+		if isvalid(bossEnt) then
+			bossEnt.Enable = isBoss
 		end
 	end
 	-- Apply the saved sound volumes to the SoundManager (restores the user's setting on login).
@@ -1379,6 +1406,33 @@ method string AbbreviateNumber(number value)
 	return text .. units[unitIndex]
 end
 
+@ExecSpace("ClientOnly")
+method void SetStageStars(string btnPath, integer stars)
+	-- Fill this stage button's 3 star sprites: index <= earned → 찬 별, else 빈 별.
+	for i = 1, 3 do
+		local st = _EntityService:GetEntityByPath(btnPath .. "/Star" .. tostring(i))
+		if isvalid(st) and st.SpriteGUIRendererComponent ~= nil then
+			if i <= stars then
+				st.SpriteGUIRendererComponent.ImageRUID = DataRef("5e9c50c63e9e459293074f5c42096ef0")
+			else
+				st.SpriteGUIRendererComponent.ImageRUID = DataRef("f507d22e76f64dcf8e9c3d236899b22f")
+			end
+		end
+	end
+end
+
+method boolean IsBossStage(string stage)
+	-- Whether this stage's course is a boss course (Set,goal,boss). Reuses RunGameHud's client resolver.
+	if _RunGameHud == nil then
+		return false
+	end
+	local cfg = _RunGameHud:ResolveStageConfig(stage)
+	if cfg == nil then
+		return false
+	end
+	return cfg.bossMode == true
+end
+
 method boolean IsStageUnlocked(string stage)
 	-- Sequential unlock: the first stage is always open; every later stage opens once the
 	-- PREVIOUS stage has been cleared (goal reached, persisted server-side as c_<stage>).
@@ -1394,9 +1448,7 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnStageClick(string stage)
-	-- Stage button → enter the run. All stages share the RunStage map; per-stage visuals
-	-- (background, tiles, layout) come from the course data (Course<stage>), so there is no
-	-- stage→map dataset anymore.
+	-- 맵 버튼 클릭 = '선택'만 한다(진입은 Desc 패널의 출발 버튼). 잠금 스테이지는 토스트 후 무시.
 	if self:IsStageUnlocked(stage) == false then
 		local prev = self:PrevStage(stage)
 		if _UIToast ~= nil then
@@ -1405,9 +1457,94 @@ method void OnStageClick(string stage)
 		log("[ScreenFlow] stage " .. tostring(stage) .. " locked (needs clear of " .. tostring(prev) .. ")")
 		return
 	end
-	local mapName = "RunStage"
-	self:EnterGameWithLoading(stage, mapName)
-	log("[ScreenFlow] stage " .. tostring(stage) .. " -> map " .. tostring(mapName))
+	self:SelectStage(stage)
+end
+
+@ExecSpace("ClientOnly")
+method void SelectStage(string stage)
+	-- 선택된 스테이지 정보를 Desc 패널에 채우고 패널을 원위치로 올린다.
+	self.selectedStage = stage
+	-- 타이틀(스테이지 명)과 설명: StageObjective의 name/desc 열이 있으면 사용, 없으면 각각 stage id / 빈값.
+	local titleText = stage
+	local descText = ""
+	if _DataService ~= nil then
+		local ds = _DataService:GetTable("StageObjective")
+		if ds ~= nil then
+			local row = ds:FindRow("stage", stage)
+			if row ~= nil then
+				-- name/desc 열은 선택적 — 없는 열을 GetItem하면 LEA-3011이라 Columns로 존재 여부부터 확인한다.
+				if self:DataSetHasColumn(ds, "name") then
+					local nm = row:GetItem("name")
+					if nm ~= nil and nm ~= "" then
+						titleText = nm
+					end
+				end
+				if self:DataSetHasColumn(ds, "desc") then
+					local dc = row:GetItem("desc")
+					if dc ~= nil and dc ~= "" then
+						descText = dc
+					end
+				end
+			end
+		end
+	end
+	local titleEnt = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/title")
+	if isvalid(titleEnt) and titleEnt.TextGUIRendererComponent ~= nil then
+		titleEnt.TextGUIRendererComponent.Text = titleText
+	end
+	local descEnt = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/desc")
+	if isvalid(descEnt) and descEnt.TextGUIRendererComponent ~= nil then
+		descEnt.TextGUIRendererComponent.Text = descText
+	end
+	local starEnt = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/star")
+	if isvalid(starEnt) and starEnt.TextGUIRendererComponent ~= nil then
+		local starText = ""
+		if _ResultUI ~= nil then
+			starText = _ResultUI:ObjectivesText(stage)
+		end
+		starEnt.TextGUIRendererComponent.Text = starText
+	end
+	-- Desc 패널을 원위치(descShownY)로 슬라이드 업.
+	self.descTargetY = self.descShownY
+	log("[ScreenFlow] stage selected: " .. tostring(stage))
+end
+
+@ExecSpace("ClientOnly")
+method void OnStageDepartClick(ButtonClickEvent event)
+	-- 출발 버튼: 선택된 스테이지로 진입. 선택이 없으면 안내 토스트.
+	if self.selectedStage == nil or self.selectedStage == "" then
+		if _UIToast ~= nil then
+			_UIToast:ShowMessage("먼저 스테이지를 선택하세요")
+		end
+		return
+	end
+	self:EnterGameWithLoading(self.selectedStage, "RunStage")
+	log("[ScreenFlow] depart -> stage " .. tostring(self.selectedStage))
+end
+
+method boolean DataSetHasColumn(any ds, string col)
+	-- 데이터셋에 해당 열이 존재하는지(없는 열 GetItem은 LEA-3011 에러라 사전 확인용).
+	if ds == nil or ds.Columns == nil then
+		return false
+	end
+	for _, c in ipairs(ds.Columns:ToTable()) do
+		if c == col then
+			return true
+		end
+	end
+	return false
+end
+
+@ExecSpace("ClientOnly")
+method void HideStageDesc()
+	-- Desc 패널을 화면 아래(descHiddenY=-720)로 내리고 선택을 해제한다.
+	self.selectedStage = ""
+	self.descCurY = -720
+	self.descTargetY = -720
+	local d = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
+	if isvalid(d) and d.UITransformComponent ~= nil then
+		d.UITransformComponent.anchoredPosition = Vector2(0, -720)
+	end
 end
 
 @ExecSpace("ClientOnly")
@@ -1445,6 +1582,8 @@ method void OnStageSelectOpenClick(ButtonClickEvent event)
 	if isvalid(self.stageSelectRoot) then
 		self.stageSelectRoot.Enable = true
 	end
+	-- 화면을 열 때는 아직 선택 전 → Desc 패널을 화면 아래에 숨겨 둔다.
+	self:HideStageDesc()
 	self:RefreshSavedUI()
 	log("[ScreenFlow] -> StageSelect")
 end
@@ -1452,6 +1591,7 @@ end
 @ExecSpace("ClientOnly")
 method void OnStageSelectBackClick(ButtonClickEvent event)
 	-- StageSelect → Lobby.
+	self:HideStageDesc()
 	if isvalid(self.stageSelectRoot) then
 		self.stageSelectRoot.Enable = false
 	end
@@ -1603,6 +1743,11 @@ method void OnEndPlay()
 			end
 		end
 		self.stageHandlers = nil
+	end
+	local departBtn = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/UIButton")
+	if isvalid(departBtn) and self.stageDepartHandler ~= nil then
+		departBtn:DisconnectEvent(ButtonClickEvent, self.stageDepartHandler)
+		self.stageDepartHandler = nil
 	end
 	local startBtn = _EntityService:GetEntityByPath("/ui/LobbyGroup/StartBtn")
 	if isvalid(startBtn) and self.stageSelectOpenHandler ~= nil then
