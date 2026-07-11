@@ -78,6 +78,13 @@ script MonsterUnit extends Component
     -- 급소 일격 즉사 시 몬스터 위치에 1회 재생하는 이펙트(animationclip). 비우면 없음.
     @DisplayName("즉사 이펙트 RUID")
     property string InstakillEffectRUID = "0224a00456c54a6bb8ae18ba9d41c66c"
+    -- 피격 시 카메라 쉐이크(타격감). 연타 스팸을 막으려 몬스터별 HitShakeCooldown 간격으로만 발동.
+    @DisplayName("피격 카메라 쉐이크 세기")
+    property number HitShakeIntensity = 0.4
+    @DisplayName("피격 카메라 쉐이크 시간(초)")
+    property number HitShakeDuration = 0.12
+    @DisplayName("피격 쉐이크 쿨다운(초)")
+    property number HitShakeCooldown = 0.1
 
     -- ── 피격 애니메이션(히트 플래시) ──
     -- 스프라이트 몬스터는 상태-애니메이션 파이프라인이 없어 아바타식 ChangeState("HIT")를 못 쓴다. 대신 피격 순간
@@ -248,6 +255,14 @@ script MonsterUnit extends Component
         self:ApplyAttackerDebuffs(event.AttackerEntity, event.TotalDamage)
         -- 몬스터 전용 피격 타격 이펙트(전 클라). 캐릭터 피격(빨간 스파크)과 구분되는 노란 사방 스파크.
         self:PlayHitParticle(self.Entity.TransformComponent.WorldPosition)
+        -- 피격 카메라 쉐이크(타격감). 연타 스팸 방지를 위해 이 몬스터 기준 HitShakeCooldown 간격으로만.
+        if self.HitShakeIntensity > 0 then
+            local now = _UtilLogic.ServerElapsedSeconds
+            if (self._T.lastHitShake or 0) + self.HitShakeCooldown <= now then
+                self._T.lastHitShake = now
+                self:ShakeCameraOnMonsterHit()
+            end
+        end
         -- 피격 애니메이션: hit 클립이 있으면 스프라이트 스왑(정식), 없으면 히트 플래시로 폴백.
         if self.HitAnimRUID ~= "" and self.baseSpriteRUID ~= "" then
             self:PlayHitAnim()
@@ -287,6 +302,15 @@ script MonsterUnit extends Component
         local pos = self.Entity.TransformComponent.WorldPosition
         _EffectService:PlayEffect(self.InstakillEffectRUID, self.Entity,
             Vector3(pos.x, pos.y + self.HitParticleOffsetY, pos.z), 0, Vector3(1, 1, 1), false)
+    end
+
+    @ExecSpace("Multicast")
+    method void ShakeCameraOnMonsterHit()
+        -- 몬스터 피격 시 각 클라의 현재 카메라를 살짝 흔든다(타격감). GetCurrentCameraComponent/ShakeCamera는 클라측이라 Multicast.
+        local cam = _CameraService:GetCurrentCameraComponent()
+        if isvalid(cam) then
+            cam:ShakeCamera(self.HitShakeIntensity, self.HitShakeDuration)
+        end
     end
 
     @ExecSpace("Multicast")

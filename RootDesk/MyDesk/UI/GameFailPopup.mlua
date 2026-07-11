@@ -1,0 +1,128 @@
+@Logic
+@ExecSpace("ClientOnly")
+script GameFailPopup extends Logic
+
+    -- 스테이지 실패(HP 0 사망) 시 뜨는 게임오버 팝업(클라 전용 @Logic). PlayerHealth(server)가 사망을 감지해
+    -- ShowFailClient → 이 팝업의 Show()를 호출한다. 부활(제자리 회복+런 재개) / 메인으로(회복+로비) 두 버튼.
+    -- UI는 사용자가 구성한 ui/GameFailGroup.ui. 엔티티는 경로(_EntityService:GetEntityByPath)로 참조한다
+    -- (ScreenFlow/PausePopup와 동일 방식이라 UUID 주입 불필요). 정지/재개/로비는 RunGameHud의 기존 메서드 재사용.
+
+    property any reviveHandler = nil
+    property any mainHandler = nil
+
+    method void OnBeginPlay()
+        -- 버튼 이벤트 연결 후 팝업을 숨긴다(시작 시 비표시).
+        if not self:IsClient() then return end
+        local revive = _EntityService:GetEntityByPath("/ui/GameFailGroup/Panel/Revive")
+        if isvalid(revive) then
+            self.reviveHandler = revive:ConnectEvent(ButtonClickEvent, self.OnReviveClick)
+        end
+        local main = _EntityService:GetEntityByPath("/ui/GameFailGroup/Panel/ToMain")
+        if isvalid(main) then
+            self.mainHandler = main:ConnectEvent(ButtonClickEvent, self.OnMainClick)
+        end
+        self:Hide()
+        log("[GameFailPopup] ready")
+    end
+
+    method boolean IsShown()
+        -- 팝업이 현재 열려 있는지.
+        local root = _EntityService:GetEntityByPath("/ui/GameFailGroup")
+        return isvalid(root) and root.Enable == true
+    end
+
+    @ExecSpace("ClientOnly")
+    method void Show()
+        -- 스테이지 실패: 런/스코어 정지(RunGameHud) + 통화 표시 갱신 + 팝업 노출. 중복 호출 무시.
+        if self:IsShown() then return end
+        if _RunGameHud ~= nil then
+            _RunGameHud:PauseForDeath()
+        end
+        local root = _EntityService:GetEntityByPath("/ui/GameFailGroup")
+        if isvalid(root) then
+            root.Enable = true
+        end
+        self:RefreshCurrency()
+        log("[GameFailPopup] shown")
+    end
+
+    method void Hide()
+        -- 팝업 숨김.
+        local root = _EntityService:GetEntityByPath("/ui/GameFailGroup")
+        if isvalid(root) then
+            root.Enable = false
+        end
+    end
+
+    method void RefreshCurrency()
+        -- 보유 메소/토벤코인 잔액을 표시(로비 통화바와 동일 소스). 없으면 0.
+        local gold = 0
+        local coin = 0
+        if _PlayerSave ~= nil then
+            gold = _PlayerSave:GetGold()
+            coin = _PlayerSave:GetCoin()
+        end
+        local mesoEnt = _EntityService:GetEntityByPath("/ui/GameFailGroup/Panel/MesoText")
+        if isvalid(mesoEnt) and mesoEnt.TextComponent ~= nil then
+            mesoEnt.TextComponent.Text = tostring(gold)
+        end
+        local coinEnt = _EntityService:GetEntityByPath("/ui/GameFailGroup/Panel/CoinText")
+        if isvalid(coinEnt) and coinEnt.TextComponent ~= nil then
+            coinEnt.TextComponent.Text = tostring(coin)
+        end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnReviveClick(ButtonClickEvent event)
+        -- 부활: 제자리 회복(서버) 후 런 재개.
+        self:Hide()
+        self:ReviveLocalPlayer()
+        if _RunGameHud ~= nil then
+            _RunGameHud:ResumeAfterRevive()
+        end
+        log("[GameFailPopup] revive chosen")
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnMainClick(ButtonClickEvent event)
+        -- 메인으로: 회복(로비에서 준비된 상태로) 후 로비 화면으로.
+        self:Hide()
+        self:ReviveLocalPlayer()
+        if _RunGameHud ~= nil then
+            _RunGameHud:GoLobby()
+        end
+        log("[GameFailPopup] to main -> lobby")
+    end
+
+    method void ReviveLocalPlayer()
+        -- 서버에 로컬 플레이어 HP 완충 + dead 플래그 해제 요청(RevivePopup과 동일).
+        local player = _UserService.LocalPlayer
+        if isvalid(player) == false then
+            return
+        end
+        ---@type PlayerHealth
+        local hp = player:GetComponent("script.PlayerHealth")
+        if isvalid(hp) then
+            hp:RequestRevive()
+        end
+    end
+
+    method void OnEndPlay()
+        -- 버튼 구독 해제.
+        if self.reviveHandler ~= nil then
+            local revive = _EntityService:GetEntityByPath("/ui/GameFailGroup/Panel/Revive")
+            if isvalid(revive) then
+                revive:DisconnectEvent(ButtonClickEvent, self.reviveHandler)
+            end
+            self.reviveHandler = nil
+        end
+        if self.mainHandler ~= nil then
+            local main = _EntityService:GetEntityByPath("/ui/GameFailGroup/Panel/ToMain")
+            if isvalid(main) then
+                main:DisconnectEvent(ButtonClickEvent, self.mainHandler)
+            end
+            self.mainHandler = nil
+        end
+    end
+
+end

@@ -1,9 +1,9 @@
 @Component
 script HitEffectOnHit extends Component
 
-	property number ParticleScaleX = 0.8
+	property number ParticleScaleX = 1.5
 
-	property number ParticleScaleY = 0.8
+	property number ParticleScaleY = 1.5
 
 	property number ParticleScaleZ = 0.8
 

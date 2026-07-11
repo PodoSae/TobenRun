@@ -79,6 +79,22 @@ property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
 @DisplayName("발판(플랫폼) 스프라이트 RUID")
 @Description("Spawn,platform,x,y 로 배치하는 밟는 발판의 스프라이트")
 property string platformRuid = "2b73e2c6c05143a192ea6d1a08966349"
+-- ── 종점 깃발(장식) ──
+-- 코스 종점(goalX)에 세우는 깃발 스프라이트. 비우면 없음. 정적 sprite RUID여야 함(animationclip은 LoadSpriteAndWait에서 오류).
+@DisplayName("종점 깃발 스프라이트 RUID")
+@Description("맵 종점(goalX)에 세우는 깃발 장식. 비우면 배치 안 함. 마음에 안 들면 이 RUID를 교체")
+property string GoalFlagRUID = "3414a166a1124c00a93aa906346508b2"
+@DisplayName("종점 깃발 높이(월드유닛)")
+@Description("깃발을 이 높이로 스케일해 바닥에 세운다")
+@MinValue(0.5)
+@MaxValue(10)
+@Delta(0.5)
+property number GoalFlagHeight = 3.0
+@DisplayName("종점 깃발 x오프셋")
+@Description("goalX 기준 앞(+)/뒤(-) 미세 조정")
+property number GoalFlagXOffset = 0.0
+@DisplayName("종점 깃발 y오프셋(바닥 위 추가)")
+property number GoalFlagYOffset = 0.0
 @DisplayName("발판 너비(월드유닛)")
 @Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
 property number platformWidth = 3.0
@@ -109,6 +125,9 @@ property string UltObstacleKind = "obstacle"
 property number UltTargetLifetime = 3.0
 -- 현재 코스 바닥 y(BuildCourse에서 갱신). 궁극기 스폰의 몬스터/장애물 높이 기준.
 @HideFromInspector property number curFloorY = 0
+-- 현재 코스의 solid 바닥 구간 목록({s,e} 배열, BuildCourse에서 갱신). 궁극기 스폰이 구덩이/코스밖(어느 구간에도
+-- 속하지 않는 x)에는 스폰하지 않도록 HasFloorAt(x)로 판정한다. nil이면(세그먼트 미빌드 맵) 바닥 있음으로 간주.
+@HideFromInspector property any curSegments = nil
 @DisplayName("진흙 안착 높이 보정")
 @Description("진흙 웅덩이 중심이 바닥에서 이만큼 위에 놓인다(바닥에 깔린 것처럼 보이도록 낮게)")
 property number mudYRest = 0.15
@@ -468,7 +487,7 @@ end
 @ExecSpace("ServerOnly")
 method boolean IsCourseEntity(string nm)
 	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_" }
+	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_" }
 	for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
@@ -544,9 +563,13 @@ method void BuildCourse(string stage, Entity map)
 	-- Solid segments (course extent minus gaps) drive BOTH the real collision footholds and the
 	-- visual floor tiles, so the visible hole and the real fall-through hole always line up.
 	local segs = self:ComputeSegments(cfg, gaps)
+	-- 궁극기 스폰 바닥 판정용으로 이번 코스의 solid 구간을 저장(HasFloorAt).
+	self.curSegments = segs
 	self:SpawnSegmentFootholds(map, cfg, segs)
 	self:SpawnVisualFloor(map, cfg, segs)
 	self:Dispatch(map, cfg, cmds)
+	-- 코스 종점(goalX)에 깃발 장식 배치(보스 코스 제외).
+	self:SpawnGoalFlag(map, cfg)
 	-- Register the arena so OnUpdate extends the floor forever and spawns the boss once the runner arrives.
 	if cfg.bossMode == true then
 		self:StartBossArena(map, cfg)
@@ -832,6 +855,32 @@ method void Dispatch(Entity map, table cfg, table cmds)
 end
 
 @ExecSpace("ServerOnly")
+method void SpawnGoalFlag(Entity map, table cfg)
+	-- 코스 종점(goalX)에 깃발 스프라이트를 세운다(장식, 충돌 없음). 보스 코스(고정 종점 없음)나 goalX가 없으면 생략.
+	-- 스프라이트 실제 높이를 재서 GoalFlagHeight로 스케일하고, 밑동이 바닥(floorY)에 오도록 접지한다.
+	if self.GoalFlagRUID == nil or self.GoalFlagRUID == "" then return end
+	if cfg.bossMode == true then return end
+	if cfg.goalX == nil or cfg.goalX <= cfg.startX then return end
+	local hUnit = 2.0
+	local sp = _ResourceService:LoadSpriteAndWait(self.GoalFlagRUID)
+	if sp ~= nil and sp.PixelPerUnit > 0 then
+		hUnit = sp.Height / sp.PixelPerUnit
+	end
+	if hUnit < 0.2 then hUnit = 2.0 end
+	local scale = 1.0
+	if self.GoalFlagHeight > 0 then
+		scale = self.GoalFlagHeight / hUnit
+	end
+	-- 피벗이 대략 중앙이라 중심 y = 바닥 + 높이/2 로 두면 밑동이 floorY에 접지된다.
+	local cy = cfg.floorY + self.GoalFlagHeight * 0.5 + self.GoalFlagYOffset
+	local flag = self:SpawnProp(map, "GoalFlag_0", cfg.goalX + self.GoalFlagXOffset, cy, self.GoalFlagRUID)
+	if isvalid(flag) then
+		flag.TransformComponent.Scale = Vector3(scale, scale, 1)
+	end
+	log("[CourseGen] goal flag placed @goalX=" .. tostring(cfg.goalX) .. " scale=" .. string.format("%.2f", scale))
+end
+
+@ExecSpace("ServerOnly")
 method Entity SpawnProp(Entity map, string name, number x, number worldY, string ruid)
 	-- Spawn a body-less visual prop (runprop) with a sprite; interaction is handled client-side by RunGameHud.
 	local prop = _SpawnService:SpawnByModelId("runprop", name, Vector3(x, worldY, 0), map)
@@ -896,6 +945,19 @@ method number ObstacleVisualHalfHeight(Entity o)
 	return (sp.Height / sp.PixelPerUnit) * math.abs(sy) * 0.5
 end
 
+method boolean HasFloorAt(number x)
+	-- x 위치에 solid 바닥이 있는지(현재 코스 세그먼트 기준). 어느 세그먼트에도 속하지 않으면 구덩이(gap)이거나 코스
+	-- 밖이라 false. curSegments가 없으면(세그먼트 미빌드 맵) 판정 불가라 true(바닥 있음)로 폴백해 스폰을 막지 않는다.
+	local segs = self.curSegments
+	if segs == nil then return true end
+	for _, seg in ipairs(segs) do
+		if x >= seg[1] and x <= seg[2] then
+			return true
+		end
+	end
+	return false
+end
+
 @ExecSpace("ServerOnly")
 method void SpawnUltimateTargets(Entity map, number startX)
 	-- 궁극기 발동 시 타격감용으로 플레이어 앞(+X)에 몬스터+장애물을 임시 스폰(정규 코스와 별개). 돌진의 DestroyTargetsInPath가
@@ -913,20 +975,23 @@ method void SpawnUltimateTargets(Entity map, number startX)
 	for i = 1, self.UltTargetCount do
 		local bx = startX + self.UltSpawnAheadX + self.UltTargetGap * i
 		-- 몬스터(Rigidbody → 중력으로 발판에 안착). kind는 목록에서 번갈아. 접촉 데미지 0, 수명 뒤 자동 제거.
+		-- 바닥이 없는 x(구덩이/코스밖)면 스폰 생략 → 허공/구덩이 아래로 떨어지는 타겟 방지.
 		local mkind = kinds[((i - 1) % #kinds) + 1]
-		local mon = _SpawnService:SpawnByModelId("normalmonster", "UltMon_" .. tostring(i), Vector3(bx, fY + self.monsterYOff, 0), map)
-		if isvalid(mon) then
-			---@type MonsterUnit
-			local mu = mon:GetComponent("script.MonsterUnit")
-			if mu ~= nil then
-				mu:SetMonster(mkind)
-				mu.ContactDamage = 0
+		if self:HasFloorAt(bx) then
+			local mon = _SpawnService:SpawnByModelId("normalmonster", "UltMon_" .. tostring(i), Vector3(bx, fY + self.monsterYOff, 0), map)
+			if isvalid(mon) then
+				---@type MonsterUnit
+				local mu = mon:GetComponent("script.MonsterUnit")
+				if mu ~= nil then
+					mu:SetMonster(mkind)
+					mu.ContactDamage = 0
+				end
+				mon:Destroy(self.UltTargetLifetime)
 			end
-			mon:Destroy(self.UltTargetLifetime)
 		end
-		-- 장애물(바닥 접지). 접촉 데미지 0, 자동 despawn 끄고(Lifetime 크게) 수명 뒤 명시적 제거.
-		if omodel ~= "" then
-			local ox = bx + self.UltTargetGap * 0.5
+		-- 장애물(바닥 접지). 접촉 데미지 0, 자동 despawn 끄고(Lifetime 크게) 수명 뒤 명시적 제거. 바닥 없으면 생략.
+		local ox = bx + self.UltTargetGap * 0.5
+		if omodel ~= "" and self:HasFloorAt(ox) then
 			local o = _SpawnService:SpawnByModelId(omodel, "UltObs_" .. tostring(i), Vector3(ox, fY + self.obstacleYRest, 0), map)
 			if isvalid(o) then
 				---@type Obstacle

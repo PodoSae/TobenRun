@@ -28,6 +28,10 @@ script PlayerHealth extends Component
     -- 무적 종료 시각(ServerElapsedSeconds 기준, 0=비활성). @Sync — 클라 HUD가 remain = invincibleEnd - ServerElapsedSeconds로 표시.
     @HideFromInspector @Sync property number invincibleEnd = 0
 
+    -- 궁극기 시전 중 완전 무적(피해 무시). UltimateSkill이 발동 시 on, 종료 시 off로 토글한다. 무적 아이템
+    -- (invincibleEnd, 시간제 + HUD 아이콘)과는 별개의 채널이며 우상단 버프 아이콘을 띄우지 않는다(궁극기 자체 연출로 충분).
+    @HideFromInspector property boolean ultInvincible = false
+
     -- ── 로그라이트 스테이지 체력 버프(모두 transient, RunGameHud가 스테이지마다 ResetStageHealthBuffs로 초기화) ──
     -- 스테이지를 벗어나면 효과 소멸. 서버 권위.
     @HideFromInspector property number baseMaxHp = 0            -- 최초 MaxHp 스냅샷(최대체력 버프 복원 기준)
@@ -103,6 +107,10 @@ script PlayerHealth extends Component
     @DisplayName("체력 회복 이펙트 RUID")
     property string healEffectRUID = "e81f0ba3f2b545d7895b98b1cf9be879"
 
+    -- 사망 후 부활 시 캐릭터에 1회 재생하는 이펙트(animationclip). 비우면 없음.
+    @DisplayName("부활 이펙트 RUID")
+    property string reviveEffectRUID = "c6f54657879448b496daecc8a15c2918"
+
     -- 보호막 오라: stageShieldCharges > 0인 동안 플레이어를 감싸 루프 재생되는 이펙트(animationclip). 보호막이
     -- 생기면(0→>0) 붙이고, 마지막 충전이 소진되거나 스테이지 리셋 시 제거한다.
     @DisplayName("보호막 오라 이펙트 RUID")
@@ -137,6 +145,7 @@ script PlayerHealth extends Component
         self.dead = false
         self.invulnRemain = 0
         self.invincibleEnd = 0
+        self.ultInvincible = false
         local wp = self.Entity.TransformComponent.WorldPosition
         self.respawnX = wp.x
         self.respawnY = wp.y
@@ -219,6 +228,8 @@ script PlayerHealth extends Component
         -- Server-side damage entry point. Ignored while dead, invulnerable, or for non-positive damage.
         if self.dead then return end
         if amount <= 0 then return end
+        -- 궁극기 시전 중이면 모든 피해 무시(경직/HP 감소 없음). 시전 시작~종료를 UltimateSkill이 토글.
+        if self.ultInvincible then return end
         if self.invulnRemain > 0 then return end
         -- 무적 아이템 지속 중이면 모든 피해 무시(보호막보다 우선, 충전 소모 없음).
         if self.invincibleEnd > 0 and _UtilLogic.ServerElapsedSeconds < self.invincibleEnd then return end
@@ -261,6 +272,14 @@ script PlayerHealth extends Component
             -- A1 피격 경직: 이동정지 + 입력잠금 (기획 §5.1/§6.2). 사망 시엔 부활 팝업이 정지를 담당하므로 제외.
             self:ApplyStunToPlayer()
         end
+    end
+
+    @ExecSpace("ServerOnly")
+    method void SetUltimateInvincible(boolean on)
+        -- 궁극기 시전 무적 on/off. UltimateSkill(발동 시 on / 종료·취소 시 off)이 호출한다. TakeDamage가 이 플래그를
+        -- 최우선으로 확인해 시전 동안 모든 피해를 무시한다. 무적 아이템과 독립적이라 HUD 아이콘에는 영향을 주지 않는다.
+        self.ultInvincible = on
+        log("[PlayerHealth] ultimate invincible=" .. tostring(on))
     end
 
     @ExecSpace("ServerOnly")
@@ -462,8 +481,11 @@ script PlayerHealth extends Component
     @ExecSpace("Client")
     method void ShowReviveClient()
         -- Runs only on the dead player's client (targetUserId passed as the last call-site arg).
-        -- Opens the revive popup (which pauses the run and shows 부활 / 포기).
-        if _RevivePopup ~= nil then
+        -- 스테이지 실패(HP 0) 팝업을 연다: 사용자가 구성한 게임오버 팝업(GameFailPopup, 부활/메인으로)을 우선 사용하고,
+        -- 없으면 기존 RevivePopup(부활/포기)으로 폴백한다. 둘 다 런 정지 + 부활/로비 처리를 한다.
+        if _GameFailPopup ~= nil then
+            _GameFailPopup:Show()
+        elseif _RevivePopup ~= nil then
             _RevivePopup:Show()
         end
     end
@@ -475,7 +497,18 @@ script PlayerHealth extends Component
         self.dead = false
         self.CurrentHp = self.MaxHp
         self.invulnRemain = self.invulnTime
+        -- 부활 이펙트 1회 재생(전 클라).
+        self:PlayReviveEffect()
         log("[PlayerHealth] revived HP=" .. tostring(self.CurrentHp))
+    end
+
+    @ExecSpace("Multicast")
+    method void PlayReviveEffect()
+        -- 사망 후 부활 시 캐릭터에 붙여 1회 재생(전 클라). RequestRevive(서버)에서 호출 → Multicast로 전 클라 재생.
+        if self.reviveEffectRUID == "" then return end
+        local e = self.Entity
+        if not isvalid(e) then return end
+        _EffectService:PlayEffectAttached(self.reviveEffectRUID, e, Vector3(0, 0.5, 0), 0, Vector3(1, 1, 1), false)
     end
 
     @ExecSpace("Server")

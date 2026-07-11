@@ -1,0 +1,10 @@
+﻿cmd,p1,p2,p3
+Set,size,50,
+Spawn,slime,10,
+Spawn,spike,,
+Spawn,slime,20,
+Spawn,spike,25,
+Spawn,slime,30,
+Spawn,slime,35,
+Spawn,slime,15,
+Spawn,,,
