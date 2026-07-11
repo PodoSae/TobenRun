@@ -1,0 +1,73 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "model://3bd08a63-afee-4fa0-93de-c66d4f6706d2",
+  "ContentType": "x-mod/model",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "0.1.0.0",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "Version": 1,
+      "Name": "TobenCoin",
+      "BaseModelId": null,
+      "Id": "3bd08a63-afee-4fa0-93de-c66d4f6706d2",
+      "Components": [
+        "MOD.Core.TransformComponent",
+        "MOD.Core.SpriteRendererComponent",
+        "script.Coin"
+      ],
+      "Properties": [],
+      "Values": [
+        {
+          "TargetType": "MOD.Core.SpriteRendererComponent",
+          "Name": "SpriteRUID",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": "184093654538492ea60617c0e3dd5c51"
+        },
+        {
+          "TargetType": "MOD.Core.SpriteRendererComponent",
+          "Name": "SortingLayer",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": "MapLayer0"
+        },
+        {
+          "TargetType": "MOD.Core.SpriteRendererComponent",
+          "Name": "OrderInLayer",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": 2
+        },
+        {
+          "TargetType": "MOD.Core.TransformComponent",
+          "Name": "Scale",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "MOD.Core.MODVector3, MOD.Core, Version=26.5.0.0, Culture=neutral, PublicKeyToken=null"
+          },
+          "Value": {
+            "$type": "MOD.Core.MODVector3, MOD.Core",
+            "x": 2.0,
+            "y": 2.0,
+            "z": 1.0
+          }
+        }
+      ],
+      "EventLinks": [],
+      "Children": []
+    }
+  }
+}

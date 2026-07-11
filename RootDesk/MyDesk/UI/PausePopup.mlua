@@ -23,6 +23,8 @@ script PausePopup extends Logic
             self.content.Enable = false
         end
         if isvalid(self.pauseBtn) then
+            -- 우상단 정지 버튼은 스테이지(활성 런) 중에만 보이게 한다. 시작(로비)엔 숨김, OnUpdate가 런 상태에 맞춰 토글.
+            self.pauseBtn.Enable = false
             self.pauseHandler = self.pauseBtn:ConnectEvent(ButtonClickEvent, self.OnPauseClick)
         end
         if isvalid(self.continueBtn) then
@@ -33,6 +35,17 @@ script PausePopup extends Logic
         end
         self.keyHandler = _InputService:ConnectEvent(KeyDownEvent, self.OnKeyDown)
         log("[PausePopup] ready")
+    end
+
+    method void OnUpdate(number delta)
+        -- 우상단 정지 버튼을 스테이지(활성 런) 중에만 표시. 로비/결과/사망/일시정지 중엔 숨김(_RunGameHud.isAlive 기준).
+        -- 일시정지 중엔 isAlive=false라 버튼도 숨지만, 그때는 팝업(content)이 열려 있어 여는 버튼이 필요 없다.
+        if not self:IsClient() then return end
+        if not isvalid(self.pauseBtn) then return end
+        local show = (_RunGameHud ~= nil and _RunGameHud.isAlive == true)
+        if self.pauseBtn.Enable ~= show then
+            self.pauseBtn.Enable = show
+        end
     end
 
     method boolean IsShown()

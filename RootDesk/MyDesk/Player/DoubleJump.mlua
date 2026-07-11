@@ -18,6 +18,11 @@ script DoubleJump extends Component
 	-- matching the single ground jump's forward distance.
 	property number forwardForce = 3.5
 
+	-- 더블점프 발동 시 재생하는 이펙트(animationclip). 발동 지점에 1회 재생. 비우면 없음.
+	property string jumpEffectRUID = "93a7c6fa97e1433d8a305a165b9e309f"
+	property Vector3 jumpEffectOffset = Vector3(0, 0, 0)
+	property Vector3 jumpEffectScale = Vector3(1, 1, 1)
+
 	-- Cached + runtime state (client / local player only).
 	property RigidbodyComponent body = nil
 	property boolean airJumpUsed = false
@@ -123,6 +128,13 @@ script DoubleJump extends Component
 
 		--self.body:SetForce(Vector2(self.runSpeed * self.jumpForce, self.jumpForce))
 		self.body:SetForce(Vector2(self.forwardForce, self.jumpForce * 1.5))
+
+		-- 더블점프 이펙트: 발동 지점(현재 위치)에 1회 재생(소유 클라). 발동 순간을 표시하도록 부착이 아니라 고정 재생.
+		if self.jumpEffectRUID ~= "" then
+			local pos = self.Entity.TransformComponent.WorldPosition
+			local ep = Vector3(pos.x + self.jumpEffectOffset.x, pos.y + self.jumpEffectOffset.y, pos.z + self.jumpEffectOffset.z)
+			_EffectService:PlayEffect(self.jumpEffectRUID, self.Entity, ep, 0, self.jumpEffectScale, false)
+		end
 
 		-- Skill SFX through the central SoundManager (Logic): the dash / "burst forward" sound.
 		if _SoundManager ~= nil then
