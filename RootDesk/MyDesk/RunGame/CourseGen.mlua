@@ -1,239 +1,285 @@
 @Logic
 script CourseGen extends Logic
 
--- The RUN MAP provides a flat NATIVE foothold floor at y=0 (collision). This logic only
--- spawns the VISUAL floor sprite (body-less) + data-driven content. Runtime CustomFootholds
--- snap the player to x=0 on a tile-less map, so we never generate footholds here.
-@DisplayName("바닥 높이 Y(네이티브 풋홀드와 일치)")
-property number defFloorY = 0.0
-@DisplayName("기본 시작 X")
-property number defStartX = 0.0
-@DisplayName("기본 코스 길이")
-property number defLength = 120.0
-@DisplayName("기본 골인 X")
-property number defGoalX = 110.0
-@DisplayName("바닥 시각 높이(아래로 채움)")
-property number floorVisualHeight = 2.0
-@DisplayName("바닥 윗면 보정(잔디면을 발높이에)")
-property number floorTopPad = 0.2
-@DisplayName("바닥 타일 겹침(빈틈 방지)")
-property number floorOverlap = 0.3
-@DisplayName("바닥 아래 채움 깊이")
-property number floorFillDepth = 5.0
-@DisplayName("바닥 줄 세로 겹침(잔디 숨김)")
-property number floorRowOverlap = 0.4
-@DisplayName("스테이지 데이터셋 접두어")
-property string dataSetPrefix = "Course"
-@DisplayName("묶음(패턴) 데이터셋 접두어")
-property string patternPrefix = "Pattern"
-@DisplayName("장애물 RUID")
-property string obstacleRuid = "af921b2251574675834981e2394e05d1"
-@DisplayName("코인 기본 높이(바닥 위)")
-property number coinFloatY = 0.5
-@DisplayName("코인 RUID")
-property string coinRuid = "184093654538492ea60617c0e3dd5c51"
--- ── 토벤코인 픽업(계정 재화) ── 메소(coin=점수)와 별개로 실제 토벤코인(coin 재화)을 지급하는 픽업. Spawn,tobencoin,x[,y]
-@DisplayName("토벤코인 픽업 RUID")
-property string tobenCoinRuid = "cf9cf3f4d48546adb9b4462dc6a34c1e"
-@DisplayName("토벤코인 기본 높이(바닥 위)")
-property number tobenCoinFloatY = 0.5
-@DisplayName("토벤코인 픽업 획득량")
-@MinValue(1)
-@MaxValue(100)
-property integer tobenCoinAmount = 1
-@DisplayName("토벤코인 획득 이펙트 RUID")
-@Description("먹었을 때 재생할 이펙트. 비우면 없음")
-property string tobenCoinPickupFx = ""
-@DisplayName("공격력 버프 아이템 RUID")
-@Description("로그라이트 공격력 증가 아이템(atkbuff) 스프라이트 (기본: '물리 공격력 상승' 아이템 스프라이트)")
-property string atkBuffRuid = "05763a97e7434f76b426fa2878395687"
-@DisplayName("공격속도 버프 아이템 RUID")
-@Description("로그라이트 공격속도 증가 아이템(aspdbuff) 스프라이트 (기본: '공격속도 +1' 아이템 스프라이트)")
-property string aspdBuffRuid = "39dfb7d3137a48beb17bd428aaf3fea9"
-@DisplayName("관통 버프 아이템 RUID")
-@Description("로그라이트 관통 수 증가 아이템(piercebuff) 스프라이트 (기본: '관통의 비약' 아이템 스프라이트)")
-property string pierceBuffRuid = "1276af77877246568ebae9b4b4f19f54"
-@DisplayName("체력 재생 아이템 RUID")
-@Description("로그라이트 체력 재생 아이템(regenbuff) 스프라이트 (기본: 'HP 회복' 아이템 스프라이트)")
-property string regenBuffRuid = "13111d76481843aca7ef1c0b67e1a608"
-@DisplayName("최대체력 아이템 RUID")
-@Description("로그라이트 최대체력 증가 아이템(maxhpbuff) 스프라이트 (기본: 'MaxHP 상승' 아이템 스프라이트)")
-property string maxHpBuffRuid = "043d30b5581945e2a21f061a0cfc64b3"
-@DisplayName("보호막 아이템 RUID")
-@Description("로그라이트 보호막 아이템(shieldbuff) 스프라이트 (기본: '슈페리얼 프로텍트 실드' 아이템 스프라이트)")
-property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
-@DisplayName("즉시 회복 아이템 RUID")
-@Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
-property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
-@DisplayName("자석 아이템 RUID")
-@Description("자석(magnet) 스프라이트 (기본: '검은 자석')")
-property string magnetRuid = "08b6bdf6f8a44eb9ac23a3b97b3c906d"
-@DisplayName("슬로우검 아이템 RUID")
-@Description("슬로우검(slowsword) 스프라이트")
-property string slowSwordRuid = "a88caa5fbd8646b8aeb331896f7d286d"
-@DisplayName("도트검 아이템 RUID")
-@Description("도트검(dotsword) 스프라이트 (기본: '좋아보이는 검')")
-property string dotSwordRuid = "7c92e0752a8342bb9fc05c2bafebdeae"
-@DisplayName("궁극기 게이지 물약 RUID")
-@Description("궁극기 게이지 물약(ultgauge) 스프라이트 (기본: '마나 엘릭서')")
-property string ultPotionRuid = "3b778fe9d0b64a52a038b1c72cb58454"
-@DisplayName("궁극기 물약 획득 이펙트 RUID")
-@Description("ultgauge 아이템 획득 시 재생하는 이펙트(animationclip)")
-property string ultPickupEffectRuid = "bda67354085345fa9da5087671e26f72"
-@DisplayName("무적 아이템 RUID")
-@Description("무적(invincible) 스프라이트 (기본: '무적')")
-property string invincibleRuid = "52616cd70c2943c5b632ec687dd2a452"
-@DisplayName("타수 아이템 RUID")
-@Description("타수 증가(hitbuff) 스프라이트 (기본: 타격/연타 아이콘)")
-property string hitBuffRuid = "66cccfa4ee3846ea9fa3e7e641be771a"
-@DisplayName("기본 바닥 타일 RUID")
-property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
-@DisplayName("발판(플랫폼) 스프라이트 RUID")
-@Description("Spawn,platform,x,y 로 배치하는 밟는 발판의 스프라이트")
-property string platformRuid = "2b73e2c6c05143a192ea6d1a08966349"
--- ── 종점 깃발(장식) ──
--- 코스 종점(goalX)에 세우는 깃발 스프라이트. 비우면 없음. 정적 sprite RUID여야 함(animationclip은 LoadSpriteAndWait에서 오류).
-@DisplayName("종점 깃발 스프라이트 RUID")
-@Description("맵 종점(goalX)에 세우는 깃발 장식. 비우면 배치 안 함. 마음에 안 들면 이 RUID를 교체")
-property string GoalFlagRUID = "ff7a9e1d06054bd1b905e715b45b7d0b"
-@DisplayName("종점 깃발 높이(월드유닛)")
-@Description("깃발을 이 높이로 스케일해 바닥에 세운다")
-@MinValue(0.5)
-@MaxValue(10)
-@Delta(0.5)
-property number GoalFlagHeight = 1.5
-@DisplayName("종점 깃발 x오프셋")
-@Description("goalX 기준 앞(+)/뒤(-) 미세 조정")
-property number GoalFlagXOffset = 0.0
-@DisplayName("종점 깃발 y오프셋(바닥 위 추가)")
-property number GoalFlagYOffset = 0.2
-@DisplayName("발판 너비(월드유닛)")
-@Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
-property number platformWidth = 3.0
-@DisplayName("발판 두께(월드유닛)")
-@Description("발판 시각 스프라이트의 세로 두께(작을수록 얇음). 윗면은 항상 배치 y에 맞춰진다")
-property number platformThickness = 0.4
-@DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
-property number monsterYOff = 1.0
-@DisplayName("장애물 안착 높이 보정")
-property number obstacleYRest = 0.5
+	@DisplayName("바닥 높이 Y(네이티브 풋홀드와 일치)")
+	property number defFloorY = 0.0
 
--- ── 궁극기 타격감용 임시 스폰(정규 코스와 별개) ──
--- 궁극기 발동 시 플레이어 앞에 몬스터+장애물을 임시로 깔아 돌진이 부수며 지나가게 한다(UltimateSkill.RequestActivate가 호출).
-@DisplayName("궁극기 스폰 개수")
-property integer UltTargetCount = 5
-@DisplayName("궁극기 스폰 간격(월드유닛)")
-property number UltTargetGap = 2.0
-@DisplayName("궁극기 스폰 전방 기준거리(월드유닛)")
-@Description("플레이어 x에서 이만큼 앞부터 타겟을 깐다")
-property number UltSpawnAheadX = 5.0
-@DisplayName("궁극기 스폰 몬스터 kind 목록(쉼표구분)")
-@Description("스폰 순서대로 번갈아 사용. MonsterTable id 기준. 기본 spore,slime,orange")
-property string UltMonsterKinds = "spore,slime,orange"
-@DisplayName("궁극기 스폰 장애물 kind")
-property string UltObstacleKind = "obstacle"
-@DisplayName("궁극기 스폰 타겟 수명(초)")
-@Description("돌진이 놓쳐도 이 시간 뒤 자동 제거되어 잔존/자해를 막는다")
-property number UltTargetLifetime = 3.0
--- 현재 코스 바닥 y(BuildCourse에서 갱신). 궁극기 스폰의 몬스터/장애물 높이 기준.
-@HideFromInspector property number curFloorY = 0
--- 현재 코스의 solid 바닥 구간 목록({s,e} 배열, BuildCourse에서 갱신). 궁극기 스폰이 구덩이/코스밖(어느 구간에도
--- 속하지 않는 x)에는 스폰하지 않도록 HasFloorAt(x)로 판정한다. nil이면(세그먼트 미빌드 맵) 바닥 있음으로 간주.
-@HideFromInspector property any curSegments = nil
-@DisplayName("진흙 안착 높이 보정")
-@Description("진흙 웅덩이 중심이 바닥에서 이만큼 위에 놓인다(바닥에 깔린 것처럼 보이도록 낮게)")
-property number mudYRest = 0.15
-@DisplayName("진흙 모델 id(짧은 버전)")
-property string mudModelId = "Mud"
-@DisplayName("진흙 모델 id(긴 버전)")
-@Description("코스 키워드 mudlong 으로 배치되는 긴 진흙 모델 id. MudObstacle이 스프라이트 폭에 맞춰 감속 범위 자동 확장")
-property string mudLongModelId = "MudLong"
-@DisplayName("포자 탄막 모델 id")
-property string barrageModelId = "ScreenSporeBarrage"
-@DisplayName("포자 탄막 발사점 높이 보정")
-@Description("보이지 않는 발사점의 기준 Y가 바닥에서 이만큼 위. 상/중/하 레인 높이는 여기서부터의 오프셋")
-property number barrageYRest = 0.0
+	@DisplayName("기본 시작 X")
+	property number defStartX = 0.0
 
--- Server registry: mapName -> stage currently generated on that map.
-property any mapStage = nil
--- Server registry: mapName -> boss-arena state (for a course whose goal == "boss"): infinite floor
--- generation + one-time boss spawn. { cfg, floorX, triggerX, bossSpawned }.
-property any bossState = nil
--- Server registry: mapName -> 고정 x 보스 대기 상태(비-아레나 Boss,,x). { x, bossId, cfg, warned, spawned }.
--- 빌드 시 즉시 스폰하지 않고, 플레이어가 접근하면 경고음 → 스폰(낙하)으로 이어간다.
-property any pendingBoss = nil
-@DisplayName("보스전 바닥 미리생성 여유거리")
-property number bossLookahead = 25.0
-@DisplayName("보스전 바닥 청크 길이")
-property number bossChunk = 20.0
-@DisplayName("보스 등장 접근 거리")
-property number bossApproach = 12.0
-@DisplayName("보스 등장 시 앞쪽 거리")
-@Description("보스 스폰 X = 플레이어 X + 이 값. 화면 가시 반폭(PC≈6.4)보다 작아야 등장 낙하 연출이 화면에 보인다. 낙하 중 러너가 더 다가오므로 6이면 화면 중앙우측에 확실히 보임")
-property number bossAheadX = 6.0
--- 고정 x 보스(Boss,,x, 비-아레나): 플레이어가 보스 x의 이만큼 왼쪽에 오면 경고음/스폰. 경고가 스폰보다 먼저 울리도록 warn > spawn.
-@DisplayName("고정보스 경고 선행거리")
-@Description("플레이어가 보스 x - 이 값 지점에 오면 경고음 1회 재생(스폰보다 먼저)")
-property number bossPendingWarnAhead = 14.0
-@DisplayName("고정보스 스폰 선행거리")
-@Description("플레이어가 보스 x - 이 값 지점에 오면 보스 스폰(하늘에서 낙하). 화면에 보이도록 가시 반폭보다 작게")
-property number bossPendingSpawnAhead = 6.0
+	@DisplayName("기본 코스 길이")
+	property number defLength = 120.0
 
-@ExecSpace("ServerOnly")
-method void OnBeginPlay()
-	-- Init the per-map registries on the server.
-	self.mapStage = {}
-	self.bossState = {}
-	self.pendingBoss = {}
-end
+	@DisplayName("기본 골인 X")
+	property number defGoalX = 110.0
 
-@ExecSpace("ServerOnly")
-method void StartBossArena(Entity map, table cfg)
-	-- Register a boss arena for this map: the floor has been built up to startX+length+4; from here
-	-- OnUpdate keeps extending it (infinite) and spawns the boss once the runner reaches the end.
-	if self.bossState == nil then
+	@DisplayName("바닥 시각 높이(아래로 채움)")
+	property number floorVisualHeight = 2.0
+
+	@DisplayName("바닥 윗면 보정(잔디면을 발높이에)")
+	property number floorTopPad = 0.2
+
+	@DisplayName("바닥 타일 겹침(빈틈 방지)")
+	property number floorOverlap = 0.3
+
+	@DisplayName("바닥 아래 채움 깊이")
+	property number floorFillDepth = 5.0
+
+	@DisplayName("바닥 줄 세로 겹침(잔디 숨김)")
+	property number floorRowOverlap = 0.4
+
+	@DisplayName("스테이지 데이터셋 접두어")
+	property string dataSetPrefix = "Course"
+
+	@DisplayName("묶음(패턴) 데이터셋 접두어")
+	property string patternPrefix = "Pattern"
+
+	@DisplayName("장애물 RUID")
+	property string obstacleRuid = "af921b2251574675834981e2394e05d1"
+
+	@DisplayName("코인 기본 높이(바닥 위)")
+	property number coinFloatY = 0.5
+
+	@DisplayName("코인 RUID")
+	property string coinRuid = "184093654538492ea60617c0e3dd5c51"
+
+	@DisplayName("토벤코인 픽업 RUID")
+	property string tobenCoinRuid = "3bd08a63-afee-4fa0-93de-c66d4f6706d2"
+
+	@DisplayName("토벤코인 기본 높이(바닥 위)")
+	property number tobenCoinFloatY = 0.5
+
+	@DisplayName("토벤코인 픽업 획득량")
+	@MinValue(1)
+	@MaxValue(100)
+	property integer tobenCoinAmount = 1
+
+	@DisplayName("토벤코인 획득 이펙트 RUID")
+	@Description("먹었을 때 재생할 이펙트. 비우면 없음")
+	property string tobenCoinPickupFx = ""
+
+	@DisplayName("공격력 버프 아이템 RUID")
+	@Description("로그라이트 공격력 증가 아이템(atkbuff) 스프라이트 (기본: '물리 공격력 상승' 아이템 스프라이트)")
+	property string atkBuffRuid = "05763a97e7434f76b426fa2878395687"
+
+	@DisplayName("공격속도 버프 아이템 RUID")
+	@Description("로그라이트 공격속도 증가 아이템(aspdbuff) 스프라이트 (기본: '공격속도 +1' 아이템 스프라이트)")
+	property string aspdBuffRuid = "39dfb7d3137a48beb17bd428aaf3fea9"
+
+	@DisplayName("관통 버프 아이템 RUID")
+	@Description("로그라이트 관통 수 증가 아이템(piercebuff) 스프라이트 (기본: '관통의 비약' 아이템 스프라이트)")
+	property string pierceBuffRuid = "1276af77877246568ebae9b4b4f19f54"
+
+	@DisplayName("체력 재생 아이템 RUID")
+	@Description("로그라이트 체력 재생 아이템(regenbuff) 스프라이트 (기본: 'HP 회복' 아이템 스프라이트)")
+	property string regenBuffRuid = "13111d76481843aca7ef1c0b67e1a608"
+
+	@DisplayName("최대체력 아이템 RUID")
+	@Description("로그라이트 최대체력 증가 아이템(maxhpbuff) 스프라이트 (기본: 'MaxHP 상승' 아이템 스프라이트)")
+	property string maxHpBuffRuid = "043d30b5581945e2a21f061a0cfc64b3"
+
+	@DisplayName("보호막 아이템 RUID")
+	@Description("로그라이트 보호막 아이템(shieldbuff) 스프라이트 (기본: '슈페리얼 프로텍트 실드' 아이템 스프라이트)")
+	property string shieldBuffRuid = "b15442fc292c43b4aa4740d394f93e18"
+
+	@DisplayName("즉시 회복 아이템 RUID")
+	@Description("먹으면 피가 바로 차는 아이템(healbuff) 스프라이트 (기본: 'HP 회복' 물약 스프라이트)")
+	property string healBuffRuid = "09ce54e6dda040dcac8a2cdf2d558579"
+
+	@DisplayName("자석 아이템 RUID")
+	@Description("자석(magnet) 스프라이트 (기본: '검은 자석')")
+	property string magnetRuid = "08b6bdf6f8a44eb9ac23a3b97b3c906d"
+
+	@DisplayName("슬로우검 아이템 RUID")
+	@Description("슬로우검(slowsword) 스프라이트")
+	property string slowSwordRuid = "a88caa5fbd8646b8aeb331896f7d286d"
+
+	@DisplayName("도트검 아이템 RUID")
+	@Description("도트검(dotsword) 스프라이트 (기본: '좋아보이는 검')")
+	property string dotSwordRuid = "7c92e0752a8342bb9fc05c2bafebdeae"
+
+	@DisplayName("궁극기 게이지 물약 RUID")
+	@Description("궁극기 게이지 물약(ultgauge) 스프라이트 (기본: '마나 엘릭서')")
+	property string ultPotionRuid = "3b778fe9d0b64a52a038b1c72cb58454"
+
+	@DisplayName("궁극기 물약 획득 이펙트 RUID")
+	@Description("ultgauge 아이템 획득 시 재생하는 이펙트(animationclip)")
+	property string ultPickupEffectRuid = "bda67354085345fa9da5087671e26f72"
+
+	@DisplayName("무적 아이템 RUID")
+	@Description("무적(invincible) 스프라이트 (기본: '무적')")
+	property string invincibleRuid = "52616cd70c2943c5b632ec687dd2a452"
+
+	@DisplayName("타수 아이템 RUID")
+	@Description("타수 증가(hitbuff) 스프라이트 (기본: 타격/연타 아이콘)")
+	property string hitBuffRuid = "66cccfa4ee3846ea9fa3e7e641be771a"
+
+	@DisplayName("기본 바닥 타일 RUID")
+	property string defaultTileRuid = "55b80c636aa242b6add9c1eb2808a9d1"
+
+	@DisplayName("발판(플랫폼) 스프라이트 RUID")
+	@Description("Spawn,platform,x,y 로 배치하는 밟는 발판의 스프라이트")
+	property string platformRuid = "2b73e2c6c05143a192ea6d1a08966349"
+
+	@DisplayName("종점 깃발 스프라이트 RUID")
+	@Description("맵 종점(goalX)에 세우는 깃발 장식. 비우면 배치 안 함. 마음에 안 들면 이 RUID를 교체")
+	property string GoalFlagRUID = "ff7a9e1d06054bd1b905e715b45b7d0b"
+
+	@DisplayName("종점 깃발 높이(월드유닛)")
+	@Description("깃발을 이 높이로 스케일해 바닥에 세운다")
+	@MinValue(0.5)
+	@MaxValue(10)
+	@Delta(0.5)
+	property number GoalFlagHeight = 1.5
+
+	@DisplayName("종점 깃발 x오프셋")
+	@Description("goalX 기준 앞(+)/뒤(-) 미세 조정")
+	property number GoalFlagXOffset = 0.0
+
+	@DisplayName("종점 깃발 y오프셋(바닥 위 추가)")
+	property number GoalFlagYOffset = 0.2
+
+	@DisplayName("발판 너비(월드유닛)")
+	@Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
+	property number platformWidth = 3.0
+
+	@DisplayName("발판 두께(월드유닛)")
+	@Description("발판 시각 스프라이트의 세로 두께(작을수록 얇음). 윗면은 항상 배치 y에 맞춰진다")
+	property number platformThickness = 0.4
+
+	@DisplayName("몬스터/보스 스폰 바닥 높이 보정(중력 안착)")
+	property number monsterYOff = 1.0
+
+	@DisplayName("장애물 안착 높이 보정")
+	property number obstacleYRest = 0.5
+
+	@DisplayName("궁극기 스폰 개수")
+	property integer UltTargetCount = 5
+
+	@DisplayName("궁극기 스폰 간격(월드유닛)")
+	property number UltTargetGap = 2.0
+
+	@DisplayName("궁극기 스폰 전방 기준거리(월드유닛)")
+	@Description("플레이어 x에서 이만큼 앞부터 타겟을 깐다")
+	property number UltSpawnAheadX = 5.0
+
+	@DisplayName("궁극기 스폰 몬스터 kind 목록(쉼표구분)")
+	@Description("스폰 순서대로 번갈아 사용. MonsterTable id 기준. 기본 spore,slime,orange")
+	property string UltMonsterKinds = "spore,slime,orange"
+
+	@DisplayName("궁극기 스폰 장애물 kind")
+	property string UltObstacleKind = "obstacle"
+
+	@DisplayName("궁극기 스폰 타겟 수명(초)")
+	@Description("돌진이 놓쳐도 이 시간 뒤 자동 제거되어 잔존/자해를 막는다")
+	property number UltTargetLifetime = 3.0
+
+	@HideFromInspector
+	property number curFloorY = 0
+
+	@HideFromInspector
+	property any curSegments = nil
+
+	@DisplayName("진흙 안착 높이 보정")
+	@Description("진흙 웅덩이 중심이 바닥에서 이만큼 위에 놓인다(바닥에 깔린 것처럼 보이도록 낮게)")
+	property number mudYRest = 0.15
+
+	@DisplayName("진흙 모델 id(짧은 버전)")
+	property string mudModelId = "Mud"
+
+	@DisplayName("진흙 모델 id(긴 버전)")
+	@Description("코스 키워드 mudlong 으로 배치되는 긴 진흙 모델 id. MudObstacle이 스프라이트 폭에 맞춰 감속 범위 자동 확장")
+	property string mudLongModelId = "MudLong"
+
+	@DisplayName("포자 탄막 모델 id")
+	property string barrageModelId = "ScreenSporeBarrage"
+
+	@DisplayName("포자 탄막 발사점 높이 보정")
+	@Description("보이지 않는 발사점의 기준 Y가 바닥에서 이만큼 위. 상/중/하 레인 높이는 여기서부터의 오프셋")
+	property number barrageYRest = 0.0
+
+	property any mapStage = nil
+
+	property any bossState = nil
+
+	property any pendingBoss = nil
+
+	@DisplayName("보스전 바닥 미리생성 여유거리")
+	property number bossLookahead = 25.0
+
+	@DisplayName("보스전 바닥 청크 길이")
+	property number bossChunk = 20.0
+
+	@DisplayName("보스 등장 접근 거리")
+	property number bossApproach = 12.0
+
+	@DisplayName("보스 등장 시 앞쪽 거리")
+	@Description("보스 스폰 X = 플레이어 X + 이 값. 화면 가시 반폭(PC≈6.4)보다 작아야 등장 낙하 연출이 화면에 보인다. 낙하 중 러너가 더 다가오므로 6이면 화면 중앙우측에 확실히 보임")
+	property number bossAheadX = 6.0
+
+	@DisplayName("고정보스 경고 선행거리")
+	@Description("플레이어가 보스 x - 이 값 지점에 오면 경고음 1회 재생(스폰보다 먼저)")
+	property number bossPendingWarnAhead = 14.0
+
+	@DisplayName("고정보스 스폰 선행거리")
+	@Description("플레이어가 보스 x - 이 값 지점에 오면 보스 스폰(하늘에서 낙하). 화면에 보이도록 가시 반폭보다 작게")
+	property number bossPendingSpawnAhead = 6.0
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		-- Init the per-map registries on the server.
+		self.mapStage = {}
 		self.bossState = {}
+		self.pendingBoss = {}
 	end
-	local bid = cfg.bossId
-	if bid == nil or bid == "" then
+
+	@ExecSpace("ServerOnly")
+	method void StartBossArena(Entity map, table cfg)
+		-- Register a boss arena for this map: the floor has been built up to startX+length+4; from here
+		-- OnUpdate keeps extending it (infinite) and spawns the boss once the runner reaches the end.
+		if self.bossState == nil then
+		self.bossState = {}
+		end
+		local bid = cfg.bossId
+		if bid == nil or bid == "" then
 		bid = "mushmom"   -- default boss when goal=boss but no explicit "Boss,<id>,x" row
-	end
-	self.bossState[map.Name] = {
+		end
+		self.bossState[map.Name] = {
 		cfg = cfg,
 		floorX = cfg.startX + cfg.length + 4,   -- furthest x that already has floor
 		triggerX = cfg.startX + cfg.length,     -- runner reaching here → boss appears
 		bossSpawned = false,
 		bossId = bid,
-	}
-	log("[CourseGen] boss arena armed on " .. tostring(map.Name) .. " triggerX=" .. tostring(cfg.startX + cfg.length) .. " boss=" .. tostring(bid))
-end
+		}
+		log("[CourseGen] boss arena armed on " .. tostring(map.Name) .. " triggerX=" .. tostring(cfg.startX + cfg.length) .. " boss=" .. tostring(bid))
+	end
 
-@ExecSpace("ServerOnly")
-method Entity FindPlayerOnMap(Entity map)
-	-- First player currently on the given map (nil if none).
-	if isvalid(map) == false or map.MapComponent == nil then
+	@ExecSpace("ServerOnly")
+	method Entity FindPlayerOnMap(Entity map)
+		-- First player currently on the given map (nil if none).
+		if isvalid(map) == false or map.MapComponent == nil then
 		return nil
-	end
-	local users = _UserService:GetUsersByMapComponent(map.MapComponent)
-	if users == nil then
+		end
+		local users = _UserService:GetUsersByMapComponent(map.MapComponent)
+		if users == nil then
 		return nil
-	end
-	for _, u in ipairs(users) do
+		end
+		for _, u in ipairs(users) do
 		if isvalid(u) then
 			return u
 		end
+		end
+		return nil
 	end
-	return nil
-end
 
-@ExecSpace("ServerOnly")
-method void OnUpdate(number delta)
-	-- Drives every armed boss arena: keep the floor generated ahead of the runner (infinite), and
-	-- spawn the boss once the runner reaches the authored end.
-	if self.bossState == nil then
+	@ExecSpace("ServerOnly")
+	method void OnUpdate(number delta)
+		-- Drives every armed boss arena: keep the floor generated ahead of the runner (infinite), and
+		-- spawn the boss once the runner reaches the authored end.
+		if self.bossState == nil then
 		return
-	end
-	for mapName, st in pairs(self.bossState) do
+		end
+		for mapName, st in pairs(self.bossState) do
 		if st ~= nil then
 			local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
 			local player = self:FindPlayerOnMap(map)
@@ -249,10 +295,10 @@ method void OnUpdate(number delta)
 				-- longer auto-spawn here — this loop only keeps the floor extending ahead of the runner.
 			end
 		end
-	end
-
-	-- 고정 x 보스(비-아레나 Boss,,x): 플레이어가 접근하면 경고음(선행) → 스폰(하늘에서 낙하)으로 연출을 이어간다.
-	if self.pendingBoss ~= nil then
+		end
+		
+		-- 고정 x 보스(비-아레나 Boss,,x): 플레이어가 접근하면 경고음(선행) → 스폰(하늘에서 낙하)으로 연출을 이어간다.
+		if self.pendingBoss ~= nil then
 		for mapName, pb in pairs(self.pendingBoss) do
 			if pb ~= nil and pb.spawned == false then
 				local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
@@ -274,45 +320,45 @@ method void OnUpdate(number delta)
 				end
 			end
 		end
+		end
 	end
-end
 
-@ExecSpace("Multicast")
-method void PlayBossWarningSound()
-	-- 전 클라: 코스 보스 접근/등장 경고음(1회). _SoundManager/_SoundService는 클라 공간이라 Multicast로 재생.
-	if _SoundManager ~= nil then
+	@ExecSpace("Multicast")
+	method void PlayBossWarningSound()
+		-- 전 클라: 코스 보스 접근/등장 경고음(1회). _SoundManager/_SoundService는 클라 공간이라 Multicast로 재생.
+		if _SoundManager ~= nil then
 		_SoundManager:PlayBossWarningOnce()
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method void SpawnFloorChunk(Entity map, table cfg, number x1, number x2)
-	-- Lay one collision foothold + a row of visual tiles for [x1, x2] (used to grow the boss-arena floor).
-	self:SpawnSegmentFootholds(map, cfg, { { x1, x2 } })
-	local ruid = cfg.tileRuid
-	if ruid == nil or ruid == "" then
+	@ExecSpace("ServerOnly")
+	method void SpawnFloorChunk(Entity map, table cfg, number x1, number x2)
+		-- Lay one collision foothold + a row of visual tiles for [x1, x2] (used to grow the boss-arena floor).
+		self:SpawnSegmentFootholds(map, cfg, { { x1, x2 } })
+		local ruid = cfg.tileRuid
+		if ruid == nil or ruid == "" then
 		ruid = self.defaultTileRuid
-	end
-	local tw = 1.0
-	local th = 1.0
-	local sprite = _ResourceService:LoadSpriteAndWait(ruid)
-	if sprite ~= nil and sprite.PixelPerUnit > 0 then
+		end
+		local tw = 1.0
+		local th = 1.0
+		local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+		if sprite ~= nil and sprite.PixelPerUnit > 0 then
 		tw = sprite.Width / sprite.PixelPerUnit
 		th = sprite.Height / sprite.PixelPerUnit
-	end
-	if tw < 0.2 then tw = 1.0 end
-	if th < 0.2 then th = 1.0 end
-	local topY = cfg.floorY + self.floorTopPad - th / 2
-	local rowStep = th - self.floorRowOverlap
-	if rowStep < 0.2 then
+		end
+		if tw < 0.2 then tw = 1.0 end
+		if th < 0.2 then th = 1.0 end
+		local topY = cfg.floorY + self.floorTopPad - th / 2
+		local rowStep = th - self.floorRowOverlap
+		if rowStep < 0.2 then
 		rowStep = th
-	end
-	local fillRows = math.ceil(self.floorFillDepth / rowStep)
-	if fillRows < 0 then
+		end
+		local fillRows = math.ceil(self.floorFillDepth / rowStep)
+		if fillRows < 0 then
 		fillRows = 0
-	end
-	local x = x1
-	while x < x2 - 0.01 do
+		end
+		local x = x1
+		while x < x2 - 0.01 do
 		local w = x2 - x
 		if w > tw then
 			w = tw
@@ -337,124 +383,124 @@ method void SpawnFloorChunk(Entity map, table cfg, number x1, number x2)
 			row = row + 1
 		end
 		x = x + w
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method string BossModelForId(string id)
-	-- Map a boss id (from a "Boss,<id>,x" course row) to its .model, the same way a "Spawn,normal,x" monster
-	-- id resolves to its model. Only "mushmom" exists today; add a branch per new boss.
-	-- (mushmom stats — HP / contact / meso — come from the MonsterTable row "mushmom", read by MushmomBoss.)
-	return "MushmomBoss"
-end
+	@ExecSpace("ServerOnly")
+	method string BossModelForId(string id)
+		-- Map a boss id (from a "Boss,<id>,x" course row) to its .model, the same way a "Spawn,normal,x" monster
+		-- id resolves to its model. Only "mushmom" exists today; add a branch per new boss.
+		-- (mushmom stats — HP / contact / meso — come from the MonsterTable row "mushmom", read by MushmomBoss.)
+		return "MushmomBoss"
+	end
 
-@ExecSpace("ServerOnly")
-method void SpawnBossById(Entity map, table cfg, number x, string bossId)
-	-- Spawn a boss (by id) at x. The MushmomBoss follow bounds are hardcoded to map01 (-4..40), so widen
-	-- them to the whole running course; otherwise the boss can't follow the runner past x=40.
-	local model = self:BossModelForId(bossId)
-	local my = cfg.floorY + self.monsterYOff
-	local boss = _SpawnService:SpawnByModelId(model, "Boss_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
-	if isvalid(boss) == false then
+	@ExecSpace("ServerOnly")
+	method void SpawnBossById(Entity map, table cfg, number x, string bossId)
+		-- Spawn a boss (by id) at x. The MushmomBoss follow bounds are hardcoded to map01 (-4..40), so widen
+		-- them to the whole running course; otherwise the boss can't follow the runner past x=40.
+		local model = self:BossModelForId(bossId)
+		local my = cfg.floorY + self.monsterYOff
+		local boss = _SpawnService:SpawnByModelId(model, "Boss_" .. tostring(math.floor(x)), Vector3(x, my, 0), map)
+		if isvalid(boss) == false then
 		log("[CourseGen] boss spawn FAILED id=" .. tostring(bossId) .. " @x=" .. tostring(x))
 		return
-	end
-	---@type MushmomBoss
-	local mb = boss:GetComponent("script.MushmomBoss")
-	if mb ~= nil then
+		end
+		---@type MushmomBoss
+		local mb = boss:GetComponent("script.MushmomBoss")
+		if mb ~= nil then
 		mb.StageMinX = cfg.startX - 10
 		mb.StageMaxX = 999999
+		end
+		log("[CourseGen] boss '" .. tostring(bossId) .. "' spawned @x=" .. tostring(math.floor(x)))
 	end
-	log("[CourseGen] boss '" .. tostring(bossId) .. "' spawned @x=" .. tostring(math.floor(x)))
-end
 
-@ExecSpace("Server")
-method void RequestBossSpawn(string mapName)
-	-- Called by the client (RunGameHud) at the end of the boss-intro cutscene. Spawns the arena boss
-	-- once, at the runner's current x + bossAheadX (the same forward distance the old auto-spawn used).
-	if mapName == nil or mapName == "" or self.bossState == nil then
+	@ExecSpace("Server")
+	method void RequestBossSpawn(string mapName)
+		-- Called by the client (RunGameHud) at the end of the boss-intro cutscene. Spawns the arena boss
+		-- once, at the runner's current x + bossAheadX (the same forward distance the old auto-spawn used).
+		if mapName == nil or mapName == "" or self.bossState == nil then
 		return
-	end
-	local st = self.bossState[mapName]
-	if st == nil or st.bossSpawned then
+		end
+		local st = self.bossState[mapName]
+		if st == nil or st.bossSpawned then
 		return
-	end
-	st.bossSpawned = true
-	local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
-	if isvalid(map) == false then
+		end
+		st.bossSpawned = true
+		local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
+		if isvalid(map) == false then
 		return
-	end
-	local player = self:FindPlayerOnMap(map)
-	local sx = st.triggerX
-	if isvalid(player) then
+		end
+		local player = self:FindPlayerOnMap(map)
+		local sx = st.triggerX
+		if isvalid(player) then
 		sx = player.TransformComponent.WorldPosition.x
+		end
+		self:SpawnBossById(map, st.cfg, sx + self.bossAheadX, st.bossId)
+		log("[CourseGen] boss spawn requested on " .. tostring(mapName) .. " @x=" .. tostring(math.floor(sx + self.bossAheadX)))
 	end
-	self:SpawnBossById(map, st.cfg, sx + self.bossAheadX, st.bossId)
-	log("[CourseGen] boss spawn requested on " .. tostring(mapName) .. " @x=" .. tostring(math.floor(sx + self.bossAheadX)))
-end
 
-method string TableNameForStage(string stage)
-	-- A stage "1-1" maps to its own DataSet named e.g. "Course1_1".
-	-- No @ExecSpace: pure string helper, runs locally on whichever side calls it (server build +
-	-- client interaction lists both need it).
-	return self.dataSetPrefix .. string.gsub(stage, "-", "_")
-end
+	method string TableNameForStage(string stage)
+		-- A stage "1-1" maps to its own DataSet named e.g. "Course1_1".
+		-- No @ExecSpace: pure string helper, runs locally on whichever side calls it (server build +
+		-- client interaction lists both need it).
+		return self.dataSetPrefix .. string.gsub(stage, "-", "_")
+	end
 
-@ExecSpace("Server")
-method void ForceRebuildCourse(string stage, string mapName)
-	-- 디버그용 강제 재빌드: mapStage 가드를 초기화해 같은 스테이지라도 매번 코스를 새로 짓는다(BossTestMap 재진입 시
-	-- 몬스터/버프/보스가 항상 새로 생성되도록 RunGameHud가 이 경로를 쓴다).
-	if self.mapStage ~= nil then
+	@ExecSpace("Server")
+	method void ForceRebuildCourse(string stage, string mapName)
+		-- 디버그용 강제 재빌드: mapStage 가드를 초기화해 같은 스테이지라도 매번 코스를 새로 짓는다(BossTestMap 재진입 시
+		-- 몬스터/버프/보스가 항상 새로 생성되도록 RunGameHud가 이 경로를 쓴다).
+		if self.mapStage ~= nil then
 		self.mapStage[mapName] = nil
+		end
+		self:RequestBuildCourse(stage, mapName)
 	end
-	self:RequestBuildCourse(stage, mapName)
-end
 
-@ExecSpace("Server")
-method void RequestBuildCourse(string stage, string mapName)
-	-- Entry point: build (or rebuild) a stage's course on the given map. Clears the previous one.
-	if stage == nil or stage == "" or mapName == nil or mapName == "" then
+	@ExecSpace("Server")
+	method void RequestBuildCourse(string stage, string mapName)
+		-- Entry point: build (or rebuild) a stage's course on the given map. Clears the previous one.
+		if stage == nil or stage == "" or mapName == nil or mapName == "" then
 		return
-	end
-	if self.mapStage == nil then
+		end
+		if self.mapStage == nil then
 		self.mapStage = {}
-	end
-	local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
-	if isvalid(map) == false then
+		end
+		local map = _EntityService:GetEntityByPath("/maps/" .. mapName)
+		if isvalid(map) == false then
 		log("[CourseGen] map not found: " .. mapName)
 		return
-	end
-	-- 로그라이트 스테이지 버프는 스테이지 한정(transient)이다. 스테이지에 (재)진입할 때마다 서버 권위적으로 이 맵의
-	-- 모든 플레이어 버프를 초기화한다. 빌드 가드(같은 스테이지 재진입 → 코스 재생성 skip)보다 먼저 실행하므로, 코스를
-	-- 다시 안 짓는 재진입에서도 리셋은 항상 수행된다. 기존 RunGameHud의 클라 주도 ResetStageBuff는 맵 전환 중
-	-- LocalPlayer/컴포넌트가 잠깐 nil이면 유실될 수 있어(그때 서버 버프가 그대로 남아 "나갔다 들어오면 재적용"),
-	-- 버프를 적용하는 곳과 같은 서버(ServerOnly)에서 한 번 더 확실히 초기화한다.
-	self:ResetStageBuffsOnMap(map)
-	if self.mapStage[mapName] == stage then
+		end
+		-- 로그라이트 스테이지 버프는 스테이지 한정(transient)이다. 스테이지에 (재)진입할 때마다 서버 권위적으로 이 맵의
+		-- 모든 플레이어 버프를 초기화한다. 빌드 가드(같은 스테이지 재진입 → 코스 재생성 skip)보다 먼저 실행하므로, 코스를
+		-- 다시 안 짓는 재진입에서도 리셋은 항상 수행된다. 기존 RunGameHud의 클라 주도 ResetStageBuff는 맵 전환 중
+		-- LocalPlayer/컴포넌트가 잠깐 nil이면 유실될 수 있어(그때 서버 버프가 그대로 남아 "나갔다 들어오면 재적용"),
+		-- 버프를 적용하는 곳과 같은 서버(ServerOnly)에서 한 번 더 확실히 초기화한다.
+		self:ResetStageBuffsOnMap(map)
+		if self.mapStage[mapName] == stage then
 		return
+		end
+		self.mapStage[mapName] = stage
+		self:ClearCourse(map)
+		self:BuildCourse(stage, map)
 	end
-	self.mapStage[mapName] = stage
-	self:ClearCourse(map)
-	self:BuildCourse(stage, map)
-end
 
-@ExecSpace("ServerOnly")
-method void ResetStageBuffsOnMap(Entity map)
-	-- 이 맵의 모든 플레이어의 로그라이트 스테이지 버프(PowerStrike 공격계열 + PlayerHealth 체력계열)를 서버측에서
-	-- 초기화한다. StageBuffItem이 서버(ServerOnly)에서 버프를 적용하는 것과 동일한 권위 지점이므로 RPC 타이밍/맵
-	-- 전환 레이스가 없다. ResetStageBuff / ResetStageHealthBuffs는 @Server 메서드라 서버에서 호출하면 즉시 실행된다.
-	if isvalid(map) == false then
+	@ExecSpace("ServerOnly")
+	method void ResetStageBuffsOnMap(Entity map)
+		-- 이 맵의 모든 플레이어의 로그라이트 스테이지 버프(PowerStrike 공격계열 + PlayerHealth 체력계열)를 서버측에서
+		-- 초기화한다. StageBuffItem이 서버(ServerOnly)에서 버프를 적용하는 것과 동일한 권위 지점이므로 RPC 타이밍/맵
+		-- 전환 레이스가 없다. ResetStageBuff / ResetStageHealthBuffs는 @Server 메서드라 서버에서 호출하면 즉시 실행된다.
+		if isvalid(map) == false then
 		return
-	end
-	local mapComp = map.MapComponent
-	if isvalid(mapComp) == false then
+		end
+		local mapComp = map.MapComponent
+		if isvalid(mapComp) == false then
 		return
-	end
-	local users = _UserService:GetUsersByMapComponent(mapComp)
-	if users == nil then
+		end
+		local users = _UserService:GetUsersByMapComponent(mapComp)
+		if users == nil then
 		return
-	end
-	for _, user in ipairs(users) do
+		end
+		for _, user in ipairs(users) do
 		if isvalid(user) then
 			---@type PowerStrike
 			local ps = user:GetComponent("script.PowerStrike")
@@ -483,43 +529,43 @@ method void ResetStageBuffsOnMap(Entity map)
 				_PlayerSave:ApplyWeaponToPlayer(user, plc.UserId)
 			end
 		end
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method void ClearCourse(Entity map)
-	-- Destroy any previously generated course entities on this map + drop its boss-arena state.
-	for _, e in ipairs(map.Children:ToTable()) do
+	@ExecSpace("ServerOnly")
+	method void ClearCourse(Entity map)
+		-- Destroy any previously generated course entities on this map + drop its boss-arena state.
+		for _, e in ipairs(map.Children:ToTable()) do
 		if self:IsCourseEntity(e.Name) then
 			e:Destroy()
 		end
-	end
-	if self.bossState ~= nil and isvalid(map) then
+		end
+		if self.bossState ~= nil and isvalid(map) then
 		self.bossState[map.Name] = nil
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method boolean IsCourseEntity(string nm)
-	-- True if the entity name is one this system generated.
-	local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_", "TobenCoin_" }
-	for _, p in ipairs(prefixes) do
+	@ExecSpace("ServerOnly")
+	method boolean IsCourseEntity(string nm)
+		-- True if the entity name is one this system generated.
+		local prefixes = { "FloorVis_", "Foothold_", "Haz_", "Obstacle_", "Monster_", "Coin_", "Pit_", "Spawn_", "Boss_", "Mud_", "Spore_", "AtkBuff_", "Platform_", "GoalFlag_", "TobenCoin_" }
+		for _, p in ipairs(prefixes) do
 		if string.find(nm, p) == 1 then
 			return true
 		end
+		end
+		return false
 	end
-	return false
-end
 
-@ExecSpace("ServerOnly")
-method void BuildCourse(string stage, Entity map)
-	-- Read this stage's command rows (Place bundles expanded), resolve config, lay the visual floor,
-	-- then run the commands.
-	local rows = self:ExpandCourseRows(stage)
-	local cfg = { floorY = self.defFloorY, startX = self.defStartX, length = self.defLength, goalX = self.defGoalX, tileRuid = self.defaultTileRuid }
-	local gaps = {}
-	local cmds = {}
-	for _, r in ipairs(rows) do
+	@ExecSpace("ServerOnly")
+	method void BuildCourse(string stage, Entity map)
+		-- Read this stage's command rows (Place bundles expanded), resolve config, lay the visual floor,
+		-- then run the commands.
+		local rows = self:ExpandCourseRows(stage)
+		local cfg = { floorY = self.defFloorY, startX = self.defStartX, length = self.defLength, goalX = self.defGoalX, tileRuid = self.defaultTileRuid }
+		local gaps = {}
+		local cmds = {}
+		for _, r in ipairs(rows) do
 		if r.cmd == "Set" then
 			self:ApplySet(cfg, r.p1, r.p2)
 		elseif r.cmd == "Gap" then
@@ -530,14 +576,14 @@ method void BuildCourse(string stage, Entity map)
 		else
 			table.insert(cmds, r)
 		end
-	end
-	-- 낙사 사망선 내리기: 기본(UseCustomBound=false) 맵 영역 하단이 바닥 바로 아래라, 구덩이에 빠지면 커스텀
-	-- 리스폰(RunGameHud.FallIntoGap, floorY-0.5에서 발동)보다 엔진 네이티브 out-of-bounds 사망이 먼저 선점한다.
-	-- MapComponent를 커스텀 바운드로 바꾸고 하단 y를 floorY보다 훨씬 아래(-30)로 내려, 플레이어가 floorY-0.5를
-	-- 통과할 때 FallIntoGap이 먼저 되돌리도록 한다(네이티브 사망은 안전망으로만 남는다). X는 엔드리스 러너가 잘리지
-	-- 않도록 매우 넓게 잡는다. LeftBottom/RightTop/UseCustomBound는 @Sync라 서버(BuildCourse)에서 세팅→전 클라 전파.
-	-- 문서: MapComponent.UseCustomBound "Works only when TileMapMode is MapleTile" — 이 맵이 MapleTile(0)이라 유효.
-	if isvalid(map) and map.MapComponent ~= nil then
+		end
+		-- 낙사 사망선 내리기: 기본(UseCustomBound=false) 맵 영역 하단이 바닥 바로 아래라, 구덩이에 빠지면 커스텀
+		-- 리스폰(RunGameHud.FallIntoGap, floorY-0.5에서 발동)보다 엔진 네이티브 out-of-bounds 사망이 먼저 선점한다.
+		-- MapComponent를 커스텀 바운드로 바꾸고 하단 y를 floorY보다 훨씬 아래(-30)로 내려, 플레이어가 floorY-0.5를
+		-- 통과할 때 FallIntoGap이 먼저 되돌리도록 한다(네이티브 사망은 안전망으로만 남는다). X는 엔드리스 러너가 잘리지
+		-- 않도록 매우 넓게 잡는다. LeftBottom/RightTop/UseCustomBound는 @Sync라 서버(BuildCourse)에서 세팅→전 클라 전파.
+		-- 문서: MapComponent.UseCustomBound "Works only when TileMapMode is MapleTile" — 이 맵이 MapleTile(0)이라 유효.
+		if isvalid(map) and map.MapComponent ~= nil then
 		local mc = map.MapComponent
 		-- ⚠ mc.InstanceMap = true 를 런타임에 세팅하면 맵이 재-인스턴싱되어 코스 생성(발판 스폰 등)이 깨진다 → 절대 코드에서
 		-- 켜지 말 것. InstanceMap은 Maker에서 디자인 타임에 켜야 한다(공식 문서: UseCustomBound는 InstanceMap이 켜져 있어야 적용).
@@ -545,13 +591,13 @@ method void BuildCourse(string stage, Entity map)
 		mc.LeftBottom = Vector2(-100000, cfg.floorY - 100)
 		mc.RightTop = Vector2(1000000, cfg.floorY + 1000)
 		log("[CourseGen] custom map bound: fall death y=" .. tostring(cfg.floorY - 100) .. " (floorY=" .. tostring(cfg.floorY) .. ")")
-	end
-	-- 궁극기 타격감 스폰의 바닥 높이 기준(정규 코스의 이 스테이지 floorY).
-	self.curFloorY = cfg.floorY
-	-- Stage background (Set,bg,<templateRUID>). BackgroundComponent lives on the map's "Background"
-	-- child entity and is @Sync, so applying it here (server) propagates to every client. Stages with
-	-- no Set,bg row keep whatever background the map already had.
-	if cfg.bgRuid ~= nil and cfg.bgRuid ~= "" and isvalid(map) then
+		end
+		-- 궁극기 타격감 스폰의 바닥 높이 기준(정규 코스의 이 스테이지 floorY).
+		self.curFloorY = cfg.floorY
+		-- Stage background (Set,bg,<templateRUID>). BackgroundComponent lives on the map's "Background"
+		-- child entity and is @Sync, so applying it here (server) propagates to every client. Stages with
+		-- no Set,bg row keep whatever background the map already had.
+		if cfg.bgRuid ~= nil and cfg.bgRuid ~= "" and isvalid(map) then
 		local bgEnt = map:GetChildByName("Background", true)
 		if isvalid(bgEnt) and bgEnt.BackgroundComponent ~= nil then
 			bgEnt.BackgroundComponent:ChangeBackgroundByTemplateRUID(cfg.bgRuid)
@@ -559,12 +605,12 @@ method void BuildCourse(string stage, Entity map)
 		else
 			log("[CourseGen] bg skip stage=" .. tostring(stage) .. " (no Background entity/component)")
 		end
-	end
-	-- Boss course (Set,goal,boss): the boss is placed with a "Boss,<id>,<x>" row like a monster is placed
-	-- with "Spawn,normal,<x>". In arena mode we DON'T spawn it immediately at build time — we remember its
-	-- id and let OnUpdate spawn it (near the player) once the runner reaches the arena, then keep extending
-	-- the floor. So pull the Boss rows out of the immediate dispatch list here.
-	if cfg.bossMode == true then
+		end
+		-- Boss course (Set,goal,boss): the boss is placed with a "Boss,<id>,<x>" row like a monster is placed
+		-- with "Spawn,normal,<x>". In arena mode we DON'T spawn it immediately at build time — we remember its
+		-- id and let OnUpdate spawn it (near the player) once the runner reaches the arena, then keep extending
+		-- the floor. So pull the Boss rows out of the immediate dispatch list here.
+		if cfg.bossMode == true then
 		local rest = {}
 		for _, c in ipairs(cmds) do
 			if c.cmd == "Boss" then
@@ -574,51 +620,51 @@ method void BuildCourse(string stage, Entity map)
 			end
 		end
 		cmds = rest
-	end
-	-- Solid segments (course extent minus gaps) drive BOTH the real collision footholds and the
-	-- visual floor tiles, so the visible hole and the real fall-through hole always line up.
-	local segs = self:ComputeSegments(cfg, gaps)
-	-- 궁극기 스폰 바닥 판정용으로 이번 코스의 solid 구간을 저장(HasFloorAt).
-	self.curSegments = segs
-	self:SpawnSegmentFootholds(map, cfg, segs)
-	self:SpawnVisualFloor(map, cfg, segs)
-	self:Dispatch(map, cfg, cmds)
-	-- 코스 종점(goalX)에 깃발 장식 배치(보스 코스 제외).
-	self:SpawnGoalFlag(map, cfg)
-	-- Register the arena so OnUpdate extends the floor forever and spawns the boss once the runner arrives.
-	if cfg.bossMode == true then
+		end
+		-- Solid segments (course extent minus gaps) drive BOTH the real collision footholds and the
+		-- visual floor tiles, so the visible hole and the real fall-through hole always line up.
+		local segs = self:ComputeSegments(cfg, gaps)
+		-- 궁극기 스폰 바닥 판정용으로 이번 코스의 solid 구간을 저장(HasFloorAt).
+		self.curSegments = segs
+		self:SpawnSegmentFootholds(map, cfg, segs)
+		self:SpawnVisualFloor(map, cfg, segs)
+		self:Dispatch(map, cfg, cmds)
+		-- 코스 종점(goalX)에 깃발 장식 배치(보스 코스 제외).
+		self:SpawnGoalFlag(map, cfg)
+		-- Register the arena so OnUpdate extends the floor forever and spawns the boss once the runner arrives.
+		if cfg.bossMode == true then
 		self:StartBossArena(map, cfg)
+		end
+		log("[CourseGen] built stage=" .. stage .. " rows=" .. tostring(#rows) .. " cmds=" .. tostring(#cmds) .. " segs=" .. tostring(#segs) .. " gaps=" .. tostring(#gaps) .. " boss=" .. tostring(cfg.bossMode == true))
 	end
-	log("[CourseGen] built stage=" .. stage .. " rows=" .. tostring(#rows) .. " cmds=" .. tostring(#cmds) .. " segs=" .. tostring(#segs) .. " gaps=" .. tostring(#gaps) .. " boss=" .. tostring(cfg.bossMode == true))
-end
 
-method table ReadDataSetRows(string name)
-	-- Read every command row (cols: cmd, p1, p2, p3) from a DataSet by name; empty table if missing.
-	-- No @ExecSpace: DataSets exist on both sides, so this runs locally on the caller (server or client).
-	local out = {}
-	local ds = _DataService:GetTable(name)
-	if ds == nil then
+	method table ReadDataSetRows(string name)
+		-- Read every command row (cols: cmd, p1, p2, p3) from a DataSet by name; empty table if missing.
+		-- No @ExecSpace: DataSets exist on both sides, so this runs locally on the caller (server or client).
+		local out = {}
+		local ds = _DataService:GetTable(name)
+		if ds == nil then
 		return out
-	end
-	local n = ds:GetRowCount()
-	for i = 1, n do
+		end
+		local n = ds:GetRowCount()
+		for i = 1, n do
 		table.insert(out, {
 			cmd = ds:GetCell(i, "cmd"),
 			p1 = ds:GetCell(i, "p1"),
 			p2 = ds:GetCell(i, "p2"),
 			p3 = ds:GetCell(i, "p3"),
 		})
+		end
+		return out
 	end
-	return out
-end
 
-method number PatternSize(table prows)
-	-- A bundle's declared x-footprint (in relative units): an explicit "Set,size,<n>" row if present,
-	-- otherwise the widest item's relative x. Used only for overlap / out-of-bounds warnings — placement
-	-- is always the manual baseX from the Course's Place row.
-	local size = nil
-	local maxX = 0
-	for _, pr in ipairs(prows) do
+	method number PatternSize(table prows)
+		-- A bundle's declared x-footprint (in relative units): an explicit "Set,size,<n>" row if present,
+		-- otherwise the widest item's relative x. Used only for overlap / out-of-bounds warnings — placement
+		-- is always the manual baseX from the Course's Place row.
+		local size = nil
+		local maxX = 0
+		for _, pr in ipairs(prows) do
 		if pr.cmd == "Set" and pr.p1 == "size" then
 			size = tonumber(pr.p2)
 		elseif pr.cmd ~= nil and pr.cmd ~= "" and pr.cmd ~= "Place" and pr.cmd ~= "Set" then
@@ -627,27 +673,27 @@ method number PatternSize(table prows)
 				maxX = rx
 			end
 		end
-	end
-	if size ~= nil then
+		end
+		if size ~= nil then
 		return size
+		end
+		return maxX
 	end
-	return maxX
-end
 
-method table ExpandCourseRows(string stage)
-	-- Read a stage's rows and expand each "Place,<pattern>,<baseX>" into that pattern's own DataSet
-	-- rows, offsetting every row's x (p2 is ALWAYS the x-coordinate) by baseX. Returns the flat,
-	-- expanded row list. No @ExecSpace so BOTH the server course-build and the client interaction
-	-- list get the identical result. Patterns are authored one-file-per-bundle as "Pattern<Name>".
-	local name = self:TableNameForStage(stage)
-	local rows = self:ReadDataSetRows(name)
-	if #rows == 0 then
+	method table ExpandCourseRows(string stage)
+		-- Read a stage's rows and expand each "Place,<pattern>,<baseX>" into that pattern's own DataSet
+		-- rows, offsetting every row's x (p2 is ALWAYS the x-coordinate) by baseX. Returns the flat,
+		-- expanded row list. No @ExecSpace so BOTH the server course-build and the client interaction
+		-- list get the identical result. Patterns are authored one-file-per-bundle as "Pattern<Name>".
+		local name = self:TableNameForStage(stage)
+		local rows = self:ReadDataSetRows(name)
+		if #rows == 0 then
 		log("[CourseGen] no dataset '" .. name .. "' for stage " .. tostring(stage) .. " (bare floor only)")
-	end
-	local out = {}
-	-- Footprints of already-placed bundles, for overlap warnings (position is manual; size = occupancy).
-	local placed = {}
-	for _, r in ipairs(rows) do
+		end
+		local out = {}
+		-- Footprints of already-placed bundles, for overlap warnings (position is manual; size = occupancy).
+		local placed = {}
+		for _, r in ipairs(rows) do
 		if r.cmd == "Place" then
 			-- p1 = pattern name (→ DataSet "Pattern<name>"), p2 = base X to lay the bundle at,
 			-- p3 = optional base Y (height above floor) that lifts the WHOLE bundle. When given, each
@@ -696,103 +742,103 @@ method table ExpandCourseRows(string stage)
 		else
 			table.insert(out, r)
 		end
+		end
+		return out
 	end
-	return out
-end
 
-@ExecSpace("ServerOnly")
-method void ApplySet(table cfg, string key, string val)
-	-- "Set" command — p1=key, p2=value. (floorY should match the map's native foothold height.)
-	-- "tile" takes a string RUID (the repeating floor tile sprite), not a number.
-	if key == "tile" then
+	@ExecSpace("ServerOnly")
+	method void ApplySet(table cfg, string key, string val)
+		-- "Set" command — p1=key, p2=value. (floorY should match the map's native foothold height.)
+		-- "tile" takes a string RUID (the repeating floor tile sprite), not a number.
+		if key == "tile" then
 		if val ~= nil and val ~= "" then
 			cfg.tileRuid = val
 		end
 		return
-	end
-	if key == "bg" then
+		end
+		if key == "bg" then
 		-- Stage background: a Template-type background RUID (string). Applied to the map's
 		-- BackgroundComponent in BuildCourse. Handled before the tonumber gate below.
 		if val ~= nil and val ~= "" then
 			cfg.bgRuid = val
 		end
 		return
-	end
-	if key == "goal" and val == "boss" then
+		end
+		if key == "goal" and val == "boss" then
 		-- Boss course: no fixed clear line. The floor auto-extends forever and a boss appears at the end.
 		cfg.bossMode = true
 		return
-	end
-	local v = tonumber(val)
-	if v == nil then
+		end
+		local v = tonumber(val)
+		if v == nil then
 		return
-	end
-	if key == "floorY" then
+		end
+		if key == "floorY" then
 		cfg.floorY = v
-	elseif key == "startX" then
+		elseif key == "startX" then
 		cfg.startX = v
-	elseif key == "length" then
+		elseif key == "length" then
 		cfg.length = v
-	elseif key == "goal" then
+		elseif key == "goal" then
 		cfg.goalX = v
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method table ComputeSegments(table cfg, table gaps)
-	-- Solid floor segments = [startX-4, startX+length+4] minus every gap range. Shared by the collision
-	-- footholds (SpawnSegmentFootholds) and the visual tiles (SpawnVisualFloor) so both use identical spans.
-	table.sort(gaps, function(a, b)
+	@ExecSpace("ServerOnly")
+	method table ComputeSegments(table cfg, table gaps)
+		-- Solid floor segments = [startX-4, startX+length+4] minus every gap range. Shared by the collision
+		-- footholds (SpawnSegmentFootholds) and the visual tiles (SpawnVisualFloor) so both use identical spans.
+		table.sort(gaps, function(a, b)
 		return a.x1 < b.x1
-	end)
-	local segs = {}
-	local cursor = cfg.startX - 4
-	local endX = cfg.startX + cfg.length + 4
-	for _, g in ipairs(gaps) do
+		end)
+		local segs = {}
+		local cursor = cfg.startX - 4
+		local endX = cfg.startX + cfg.length + 4
+		for _, g in ipairs(gaps) do
 		if g.x1 > cursor then
 			table.insert(segs, { cursor, g.x1 })
 		end
 		if g.x2 > cursor then
 			cursor = g.x2
 		end
-	end
-	if endX > cursor then
+		end
+		if endX > cursor then
 		table.insert(segs, { cursor, endX })
+		end
+		return segs
 	end
-	return segs
-end
 
-@ExecSpace("ServerOnly")
-method void SpawnVisualFloor(Entity map, table cfg, table segs)
-	-- Body-less VISUAL floor. Collision is the runtime CustomFootholds from SpawnSegmentFootholds, which
-	-- span these SAME segments, so the visible hole and the real fall-through hole always match the gaps.
-	-- Tiles are laid per solid segment; the last tile of each segment is scaled horizontally to end
-	-- exactly at the gap edge, so the visual hole lines up with the segment boundary.
-	local ruid = cfg.tileRuid
-	if ruid == nil or ruid == "" then
+	@ExecSpace("ServerOnly")
+	method void SpawnVisualFloor(Entity map, table cfg, table segs)
+		-- Body-less VISUAL floor. Collision is the runtime CustomFootholds from SpawnSegmentFootholds, which
+		-- span these SAME segments, so the visible hole and the real fall-through hole always match the gaps.
+		-- Tiles are laid per solid segment; the last tile of each segment is scaled horizontally to end
+		-- exactly at the gap edge, so the visual hole lines up with the segment boundary.
+		local ruid = cfg.tileRuid
+		if ruid == nil or ruid == "" then
 		ruid = self.defaultTileRuid
-	end
-	local tw = 1.0
-	local th = 1.0
-	local sprite = _ResourceService:LoadSpriteAndWait(ruid)
-	if sprite ~= nil and sprite.PixelPerUnit > 0 then
+		end
+		local tw = 1.0
+		local th = 1.0
+		local sprite = _ResourceService:LoadSpriteAndWait(ruid)
+		if sprite ~= nil and sprite.PixelPerUnit > 0 then
 		tw = sprite.Width / sprite.PixelPerUnit
 		th = sprite.Height / sprite.PixelPerUnit
-	end
-	if tw < 0.2 then tw = 1.0 end
-	if th < 0.2 then th = 1.0 end
-	-- Vertical fill so the background doesn't show below the floor.
-	local topY = cfg.floorY + self.floorTopPad - th / 2
-	local rowStep = th - self.floorRowOverlap
-	if rowStep < 0.2 then
+		end
+		if tw < 0.2 then tw = 1.0 end
+		if th < 0.2 then th = 1.0 end
+		-- Vertical fill so the background doesn't show below the floor.
+		local topY = cfg.floorY + self.floorTopPad - th / 2
+		local rowStep = th - self.floorRowOverlap
+		if rowStep < 0.2 then
 		rowStep = th
-	end
-	local fillRows = math.ceil(self.floorFillDepth / rowStep)
-	if fillRows < 0 then
+		end
+		local fillRows = math.ceil(self.floorFillDepth / rowStep)
+		if fillRows < 0 then
 		fillRows = 0
-	end
-	local i = 0
-	for _, seg in ipairs(segs) do
+		end
+		local i = 0
+		for _, seg in ipairs(segs) do
 		local s = seg[1]
 		local e = seg[2]
 		local x = s
@@ -821,17 +867,17 @@ method void SpawnVisualFloor(Entity map, table cfg, table segs)
 			end
 			x = x + w
 		end
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method void SpawnSegmentFootholds(Entity map, table cfg, table segs)
-	-- Spawn one collision-only foothold entity per solid segment. The `runfloor` model carries a
-	-- CustomFootholdComponent; its foothold path (edgeLists) is empty by default, so we set a single
-	-- horizontal edge spanning the segment at the walking-surface height. The visual is drawn
-	-- separately by the runfloorvisual tiles, so this entity's own sprite is disabled.
-	local surfaceY = cfg.floorY + self.floorTopPad
-	for _, seg in ipairs(segs) do
+	@ExecSpace("ServerOnly")
+	method void SpawnSegmentFootholds(Entity map, table cfg, table segs)
+		-- Spawn one collision-only foothold entity per solid segment. The `runfloor` model carries a
+		-- CustomFootholdComponent; its foothold path (edgeLists) is empty by default, so we set a single
+		-- horizontal edge spanning the segment at the walking-surface height. The visual is drawn
+		-- separately by the runfloorvisual tiles, so this entity's own sprite is disabled.
+		local surfaceY = cfg.floorY + self.floorTopPad
+		for _, seg in ipairs(segs) do
 		local s = seg[1]
 		local e = seg[2]
 		local fh = _SpawnService:SpawnByModelId("runfloor", "Foothold_" .. tostring(math.floor(s)), Vector3(0, 0, 0), map)
@@ -848,13 +894,13 @@ method void SpawnSegmentFootholds(Entity map, table cfg, table segs)
 				spr.Enable = false
 			end
 		end
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method void Dispatch(Entity map, table cfg, table cmds)
-	-- Command dispatcher. Add a new verb by adding an "elseif" branch + a Cmd* method (params in p1/p2/p3).
-	for _, c in ipairs(cmds) do
+	@ExecSpace("ServerOnly")
+	method void Dispatch(Entity map, table cfg, table cmds)
+		-- Command dispatcher. Add a new verb by adding an "elseif" branch + a Cmd* method (params in p1/p2/p3).
+		for _, c in ipairs(cmds) do
 		if c.cmd == "Spawn" then
 			self:CmdSpawn(map, cfg, c)
 		elseif c.cmd == "Goal" then
@@ -866,128 +912,128 @@ method void Dispatch(Entity map, table cfg, table cmds)
 		elseif c.cmd ~= nil and c.cmd ~= "" then
 			log("[CourseGen] unknown command: " .. tostring(c.cmd))
 		end
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method void SpawnGoalFlag(Entity map, table cfg)
-	-- 코스 종점(goalX)에 깃발 스프라이트를 세운다(장식, 충돌 없음). 보스 코스(고정 종점 없음)나 goalX가 없으면 생략.
-	-- 스프라이트 실제 높이를 재서 GoalFlagHeight로 스케일하고, 밑동이 바닥(floorY)에 오도록 접지한다.
-	if self.GoalFlagRUID == nil or self.GoalFlagRUID == "" then return end
-	if cfg.bossMode == true then return end
-	if cfg.goalX == nil or cfg.goalX <= cfg.startX then return end
-	local hUnit = 2.0
-	local sp = _ResourceService:LoadSpriteAndWait(self.GoalFlagRUID)
-	if sp ~= nil and sp.PixelPerUnit > 0 then
+	@ExecSpace("ServerOnly")
+	method void SpawnGoalFlag(Entity map, table cfg)
+		-- 코스 종점(goalX)에 깃발 스프라이트를 세운다(장식, 충돌 없음). 보스 코스(고정 종점 없음)나 goalX가 없으면 생략.
+		-- 스프라이트 실제 높이를 재서 GoalFlagHeight로 스케일하고, 밑동이 바닥(floorY)에 오도록 접지한다.
+		if self.GoalFlagRUID == nil or self.GoalFlagRUID == "" then return end
+		if cfg.bossMode == true then return end
+		if cfg.goalX == nil or cfg.goalX <= cfg.startX then return end
+		local hUnit = 2.0
+		local sp = _ResourceService:LoadSpriteAndWait(self.GoalFlagRUID)
+		if sp ~= nil and sp.PixelPerUnit > 0 then
 		hUnit = sp.Height / sp.PixelPerUnit
-	end
-	if hUnit < 0.2 then hUnit = 2.0 end
-	local scale = 1.0
-	if self.GoalFlagHeight > 0 then
+		end
+		if hUnit < 0.2 then hUnit = 2.0 end
+		local scale = 1.0
+		if self.GoalFlagHeight > 0 then
 		scale = self.GoalFlagHeight / hUnit
-	end
-	-- 피벗이 대략 중앙이라 중심 y = 바닥 + 높이/2 로 두면 밑동이 floorY에 접지된다.
-	local cy = cfg.floorY + self.GoalFlagHeight * 0.5 + self.GoalFlagYOffset
-	local flag = self:SpawnProp(map, "GoalFlag_0", cfg.goalX + self.GoalFlagXOffset, cy, self.GoalFlagRUID)
-	if isvalid(flag) then
+		end
+		-- 피벗이 대략 중앙이라 중심 y = 바닥 + 높이/2 로 두면 밑동이 floorY에 접지된다.
+		local cy = cfg.floorY + self.GoalFlagHeight * 0.5 + self.GoalFlagYOffset
+		local flag = self:SpawnProp(map, "GoalFlag_0", cfg.goalX + self.GoalFlagXOffset, cy, self.GoalFlagRUID)
+		if isvalid(flag) then
 		flag.TransformComponent.Scale = Vector3(scale, scale, 1)
+		end
+		log("[CourseGen] goal flag placed @goalX=" .. tostring(cfg.goalX) .. " scale=" .. string.format("%.2f", scale))
 	end
-	log("[CourseGen] goal flag placed @goalX=" .. tostring(cfg.goalX) .. " scale=" .. string.format("%.2f", scale))
-end
 
-@ExecSpace("ServerOnly")
-method Entity SpawnProp(Entity map, string name, number x, number worldY, string ruid)
-	-- Spawn a body-less visual prop (runprop) with a sprite; interaction is handled client-side by RunGameHud.
-	local prop = _SpawnService:SpawnByModelId("runprop", name, Vector3(x, worldY, 0), map)
-	if isvalid(prop) == false then
+	@ExecSpace("ServerOnly")
+	method Entity SpawnProp(Entity map, string name, number x, number worldY, string ruid)
+		-- Spawn a body-less visual prop (runprop) with a sprite; interaction is handled client-side by RunGameHud.
+		local prop = _SpawnService:SpawnByModelId("runprop", name, Vector3(x, worldY, 0), map)
+		if isvalid(prop) == false then
 		return nil
-	end
-	local spr = prop.SpriteRendererComponent
-	if spr ~= nil and ruid ~= nil and ruid ~= "" then
+		end
+		local spr = prop.SpriteRendererComponent
+		if spr ~= nil and ruid ~= nil and ruid ~= "" then
 		spr.SpriteRUID = ruid
+		end
+		return prop
 	end
-	return prop
-end
 
-@ExecSpace("ServerOnly")
-method boolean IsMonster(string id)
-	-- True if `id` is a monster row in the sjy MonsterTable DataSet (normal / mushmom / ...).
-	local ds = _DataService:GetTable("MonsterTable")
-	if ds == nil then
+	@ExecSpace("ServerOnly")
+	method boolean IsMonster(string id)
+		-- True if `id` is a monster row in the sjy MonsterTable DataSet (normal / mushmom / ...).
+		local ds = _DataService:GetTable("MonsterTable")
+		if ds == nil then
 		return false
+		end
+		return ds:FindRow("id", id) ~= nil
 	end
-	return ds:FindRow("id", id) ~= nil
-end
 
-@ExecSpace("ServerOnly")
-method number ObstacleDamage(string id)
-	-- Contact damage for a hazard type from the ObstacleDef DataSet (default 10).
-	local ds = _DataService:GetTable("ObstacleDef")
-	if ds == nil then
+	@ExecSpace("ServerOnly")
+	method number ObstacleDamage(string id)
+		-- Contact damage for a hazard type from the ObstacleDef DataSet (default 10).
+		local ds = _DataService:GetTable("ObstacleDef")
+		if ds == nil then
 		return 10
-	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
+		end
+		local row = ds:FindRow("id", id)
+		if row == nil then
 		return 10
+		end
+		return tonumber(row:GetItem("damage")) or 10
 	end
-	return tonumber(row:GetItem("damage")) or 10
-end
 
-@ExecSpace("ServerOnly")
-method string ObstacleModel(string id)
-	-- Look up a hazard type's dedicated .model name from the ObstacleDef DataSet (returns "" if not defined).
-	local ds = _DataService:GetTable("ObstacleDef")
-	if ds == nil then
+	@ExecSpace("ServerOnly")
+	method string ObstacleModel(string id)
+		-- Look up a hazard type's dedicated .model name from the ObstacleDef DataSet (returns "" if not defined).
+		local ds = _DataService:GetTable("ObstacleDef")
+		if ds == nil then
 		return ""
-	end
-	local row = ds:FindRow("id", id)
-	if row == nil then
+		end
+		local row = ds:FindRow("id", id)
+		if row == nil then
 		return ""
+		end
+		return tostring(row:GetItem("model"))
 	end
-	return tostring(row:GetItem("model"))
-end
 
-@ExecSpace("ServerOnly")
-method number ObstacleVisualHalfHeight(Entity o)
-	-- 장애물 스프라이트의 실제 반높이(월드유닛) = (height / PixelPerUnit) * |scale.y| * 0.5. 바닥 접지 계산용.
-	-- Obstacle.AutoSizeHitbox와 동일하게 LoadSpriteAndWait로 스프라이트를 읽는다(장애물은 static sprite라 안전).
-	-- 로드 실패 시 기존 고정값(obstacleYRest)으로 폴백해 최소한 배치는 되게 한다.
-	local spr = o.SpriteRendererComponent
-	if spr == nil then return self.obstacleYRest end
-	local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
-	if sp == nil or sp.PixelPerUnit <= 0 then return self.obstacleYRest end
-	local sy = o.TransformComponent.Scale.y
-	return (sp.Height / sp.PixelPerUnit) * math.abs(sy) * 0.5
-end
+	@ExecSpace("ServerOnly")
+	method number ObstacleVisualHalfHeight(Entity o)
+		-- 장애물 스프라이트의 실제 반높이(월드유닛) = (height / PixelPerUnit) * |scale.y| * 0.5. 바닥 접지 계산용.
+		-- Obstacle.AutoSizeHitbox와 동일하게 LoadSpriteAndWait로 스프라이트를 읽는다(장애물은 static sprite라 안전).
+		-- 로드 실패 시 기존 고정값(obstacleYRest)으로 폴백해 최소한 배치는 되게 한다.
+		local spr = o.SpriteRendererComponent
+		if spr == nil then return self.obstacleYRest end
+		local sp = _ResourceService:LoadSpriteAndWait(spr.SpriteRUID)
+		if sp == nil or sp.PixelPerUnit <= 0 then return self.obstacleYRest end
+		local sy = o.TransformComponent.Scale.y
+		return (sp.Height / sp.PixelPerUnit) * math.abs(sy) * 0.5
+	end
 
-method boolean HasFloorAt(number x)
-	-- x 위치에 solid 바닥이 있는지(현재 코스 세그먼트 기준). 어느 세그먼트에도 속하지 않으면 구덩이(gap)이거나 코스
-	-- 밖이라 false. curSegments가 없으면(세그먼트 미빌드 맵) 판정 불가라 true(바닥 있음)로 폴백해 스폰을 막지 않는다.
-	local segs = self.curSegments
-	if segs == nil then return true end
-	for _, seg in ipairs(segs) do
+	method boolean HasFloorAt(number x)
+		-- x 위치에 solid 바닥이 있는지(현재 코스 세그먼트 기준). 어느 세그먼트에도 속하지 않으면 구덩이(gap)이거나 코스
+		-- 밖이라 false. curSegments가 없으면(세그먼트 미빌드 맵) 판정 불가라 true(바닥 있음)로 폴백해 스폰을 막지 않는다.
+		local segs = self.curSegments
+		if segs == nil then return true end
+		for _, seg in ipairs(segs) do
 		if x >= seg[1] and x <= seg[2] then
 			return true
 		end
+		end
+		return false
 	end
-	return false
-end
 
-@ExecSpace("ServerOnly")
-method void SpawnUltimateTargets(Entity map, number startX)
-	-- 궁극기 발동 시 타격감용으로 플레이어 앞(+X)에 몬스터+장애물을 임시 스폰(정규 코스와 별개). 돌진의 DestroyTargetsInPath가
-	-- 이걸 넉백(LaunchKnockback)하며 지나간다. 정규 코스 배치(CmdSpawn, Lifetime=999999)와 달리 여기선 "안전한 타격감 타겟"으로
-	-- 만든다: (1) 접촉 데미지 0(자해 방지), (2) UltTargetLifetime 뒤 자동 제거(돌진이 놓쳐도 잔존 안 함). startX=플레이어 x, 스폰은 그 앞부터.
-	if not isvalid(map) then return end
-	local fY = self.curFloorY
-	local omodel = self:ObstacleModel(self.UltObstacleKind)
-	-- 몬스터 kind 목록 파싱(쉼표구분). 스폰 순서대로 번갈아 사용. 비면 normal 폴백.
-	local kinds = {}
-	for k in string.gmatch(self.UltMonsterKinds, "[^,]+") do
+	@ExecSpace("ServerOnly")
+	method void SpawnUltimateTargets(Entity map, number startX)
+		-- 궁극기 발동 시 타격감용으로 플레이어 앞(+X)에 몬스터+장애물을 임시 스폰(정규 코스와 별개). 돌진의 DestroyTargetsInPath가
+		-- 이걸 넉백(LaunchKnockback)하며 지나간다. 정규 코스 배치(CmdSpawn, Lifetime=999999)와 달리 여기선 "안전한 타격감 타겟"으로
+		-- 만든다: (1) 접촉 데미지 0(자해 방지), (2) UltTargetLifetime 뒤 자동 제거(돌진이 놓쳐도 잔존 안 함). startX=플레이어 x, 스폰은 그 앞부터.
+		if not isvalid(map) then return end
+		local fY = self.curFloorY
+		local omodel = self:ObstacleModel(self.UltObstacleKind)
+		-- 몬스터 kind 목록 파싱(쉼표구분). 스폰 순서대로 번갈아 사용. 비면 normal 폴백.
+		local kinds = {}
+		for k in string.gmatch(self.UltMonsterKinds, "[^,]+") do
 		table.insert(kinds, k)
-	end
-	if #kinds == 0 then table.insert(kinds, "normal") end
-	for i = 1, self.UltTargetCount do
+		end
+		if #kinds == 0 then table.insert(kinds, "normal") end
+		for i = 1, self.UltTargetCount do
 		local bx = startX + self.UltSpawnAheadX + self.UltTargetGap * i
 		-- 몬스터(Rigidbody → 중력으로 발판에 안착). kind는 목록에서 번갈아. 접촉 데미지 0, 수명 뒤 자동 제거.
 		-- 바닥이 없는 x(구덩이/코스밖)면 스폰 생략 → 허공/구덩이 아래로 떨어지는 타겟 방지.
@@ -1018,25 +1064,25 @@ method void SpawnUltimateTargets(Entity map, number startX)
 				o:Destroy(self.UltTargetLifetime)
 			end
 		end
-	end
-	log("[CourseGen] ultimate targets spawned startX=" .. string.format("%.1f", startX)
+		end
+		log("[CourseGen] ultimate targets spawned startX=" .. string.format("%.1f", startX)
 		.. " count=" .. tostring(self.UltTargetCount) .. " floorY=" .. tostring(fY))
-end
-
-@ExecSpace("ServerOnly")
-method void CmdSpawn(Entity map, table cfg, table c)
-	-- "Spawn" command — p1=type, p2=x, p3=optional Y (height ABOVE the floor).
-	-- p1 is a hazard id defined in the ObstacleDef DataSet (spike/obstacle/monster/...),
-	-- or "coin", or a raw registered modelId.
-	-- p3 (yGiven): if provided, the entity is placed at worldY = floorY + yGiven (explicit height,
-	-- e.g. a floating coin arc). If omitted, each type keeps its own auto-grounding behavior.
-	local kind = c.p1
-	local x = tonumber(c.p2) or 0
-	local yGiven = tonumber(c.p3)
-	if kind == nil or kind == "" then
-		return
 	end
-	if kind == "coin" then
+
+	@ExecSpace("ServerOnly")
+	method void CmdSpawn(Entity map, table cfg, table c)
+		-- "Spawn" command — p1=type, p2=x, p3=optional Y (height ABOVE the floor).
+		-- p1 is a hazard id defined in the ObstacleDef DataSet (spike/obstacle/monster/...),
+		-- or "coin", or a raw registered modelId.
+		-- p3 (yGiven): if provided, the entity is placed at worldY = floorY + yGiven (explicit height,
+		-- e.g. a floating coin arc). If omitted, each type keeps its own auto-grounding behavior.
+		local kind = c.p1
+		local x = tonumber(c.p2) or 0
+		local yGiven = tonumber(c.p3)
+		if kind == nil or kind == "" then
+		return
+		end
+		if kind == "coin" then
 		-- Coin is its own model (Models/Pickups/Coin.model, modelId "coin") — sprite + script.Coin baked
 		-- in. The in-model Coin script self-sizes its pickup box and collects on real box-overlap.
 		local cy = cfg.floorY + self.coinFloatY
@@ -1048,8 +1094,8 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			log("[CourseGen] coin spawn failed @x=" .. tostring(x))
 		end
 		return
-	end
-	if kind == "tobencoin" then
+		end
+		if kind == "tobencoin" then
 		-- 토벤코인 픽업(계정 재화). body-less runprop 스프라이트 + StageBuffItem(BuffKind=tobencoin) 런타임 부착 →
 		-- 서버 근접 판정으로 획득 시 그 플레이어에게 토벤코인 지급(메소/점수 코인과 별개). p3=y(바닥 위 높이, 선택).
 		local ty = cfg.floorY + self.tobenCoinFloatY
@@ -1070,12 +1116,12 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			log("[CourseGen] tobencoin spawn failed @x=" .. tostring(x))
 		end
 		return
-	end
-	-- Mud patch (non-lethal terrain): a ground puddle that SLOWS the runner while walking through it
-	-- (MudObstacle sends a terrain-slow RPC to the player's client). Sits flat on the floor; jumping over
-	-- it avoids the slow. Fixed course placement, so it must not auto-despawn before the runner arrives.
-	-- mud = 짧은 버전(mudModelId), mudlong = 긴 버전(mudLongModelId). 감속 폭은 MudObstacle이 스프라이트에서 자동 산정.
-	if kind == "mud" or kind == "mudlong" then
+		end
+		-- Mud patch (non-lethal terrain): a ground puddle that SLOWS the runner while walking through it
+		-- (MudObstacle sends a terrain-slow RPC to the player's client). Sits flat on the floor; jumping over
+		-- it avoids the slow. Fixed course placement, so it must not auto-despawn before the runner arrives.
+		-- mud = 짧은 버전(mudModelId), mudlong = 긴 버전(mudLongModelId). 감속 폭은 MudObstacle이 스프라이트에서 자동 산정.
+		if kind == "mud" or kind == "mudlong" then
 		local mid = self.mudModelId
 		if kind == "mudlong" then mid = self.mudLongModelId end
 		if mid == nil or mid == "" then
@@ -1094,12 +1140,12 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			log("[CourseGen] mud spawn failed @x=" .. tostring(x) .. " model=" .. tostring(mid))
 		end
 		return
-	end
-	-- Roguelite STAGE-BUFF pickups (로그라이트 아이템): atkbuff(공격력) / aspdbuff(공격속도) / piercebuff(관통 수).
-	-- Reuse the body-less `runprop` visual + attach the generic StageBuffItem script at runtime (§builder-protocol
-	-- 2.5). On contact it applies a stage-scoped buff to PowerStrike (RunGameHud resets per stage → 스테이지 이탈 시
-	-- 소멸). p3 = optional 증가량 override. Fixed placement → no auto-despawn.
-	if kind == "atkbuff" or kind == "aspdbuff" or kind == "piercebuff"
+		end
+		-- Roguelite STAGE-BUFF pickups (로그라이트 아이템): atkbuff(공격력) / aspdbuff(공격속도) / piercebuff(관통 수).
+		-- Reuse the body-less `runprop` visual + attach the generic StageBuffItem script at runtime (§builder-protocol
+		-- 2.5). On contact it applies a stage-scoped buff to PowerStrike (RunGameHud resets per stage → 스테이지 이탈 시
+		-- 소멸). p3 = optional 증가량 override. Fixed placement → no auto-despawn.
+		if kind == "atkbuff" or kind == "aspdbuff" or kind == "piercebuff"
 			or kind == "regenbuff" or kind == "maxhpbuff" or kind == "shieldbuff" or kind == "healbuff"
 			or kind == "magnet" or kind == "slowsword" or kind == "dotsword"
 			or kind == "ultgauge" or kind == "invincible" or kind == "hitbuff" then
@@ -1186,12 +1232,12 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			log("[CourseGen] " .. tostring(kind) .. " spawn failed @x=" .. tostring(x))
 		end
 		return
-	end
-	-- Screen spore barrage (ranged hazard): an INVISIBLE emitter that fires spores from the FRONT of the screen
-	-- toward the runner, cycling 상/중/하 screen-height lanes. The runner dodges each incoming spore by jump
-	-- timing. Keyword is "sporewall" (NOT "spore" — "spore" is a MonsterTable id, 스포아 monster, spawned via the
-	-- IsMonster branch below). p3 = optional spore damage override. Fixed placement, so no early auto-despawn.
-	if kind == "sporewall" then
+		end
+		-- Screen spore barrage (ranged hazard): an INVISIBLE emitter that fires spores from the FRONT of the screen
+		-- toward the runner, cycling 상/중/하 screen-height lanes. The runner dodges each incoming spore by jump
+		-- timing. Keyword is "sporewall" (NOT "spore" — "spore" is a MonsterTable id, 스포아 monster, spawned via the
+		-- IsMonster branch below). p3 = optional spore damage override. Fixed placement, so no early auto-despawn.
+		if kind == "sporewall" then
 		local sy = cfg.floorY + self.barrageYRest
 		local sm = _SpawnService:SpawnByModelId(self.barrageModelId, "Spore_" .. tostring(math.floor(x)), Vector3(x, sy, 0), map)
 		if isvalid(sm) then
@@ -1206,14 +1252,14 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			log("[CourseGen] sporewall spawn failed @x=" .. tostring(x))
 		end
 		return
-	end
-	-- A monster type (MonsterTable id) → spawn the sjy NormalMonster model. Its in-model MonsterUnit
-	-- reads stats/sprite from MonsterTable by MonsterId (default "normal"), patrols on the foothold, and
-	-- deals contact damage to PlayerHealth server-side. Spawn above the floor so gravity settles it.
-	-- Standable PLATFORM (밟는 발판): 플레이어가 더블점프로 올라설 수 있는 공중 발판. p2=x, p3=y(바닥 위 높이).
-	-- 충돌은 runfloor의 CustomFootholdComponent 수평 라인(바닥과 동일 방식), 시각은 runprop 스프라이트.
-	-- MapleTile 풋홀드라 아래에서 점프해 통과한 뒤 윗면에 착지한다(원웨이 플랫폼).
-	if kind == "platform" then
+		end
+		-- A monster type (MonsterTable id) → spawn the sjy NormalMonster model. Its in-model MonsterUnit
+		-- reads stats/sprite from MonsterTable by MonsterId (default "normal"), patrols on the foothold, and
+		-- deals contact damage to PlayerHealth server-side. Spawn above the floor so gravity settles it.
+		-- Standable PLATFORM (밟는 발판): 플레이어가 더블점프로 올라설 수 있는 공중 발판. p2=x, p3=y(바닥 위 높이).
+		-- 충돌은 runfloor의 CustomFootholdComponent 수평 라인(바닥과 동일 방식), 시각은 runprop 스프라이트.
+		-- MapleTile 풋홀드라 아래에서 점프해 통과한 뒤 윗면에 착지한다(원웨이 플랫폼).
+		if kind == "platform" then
 		local surfaceY = cfg.floorY + (yGiven or 0)   -- 발판 윗면 = 플레이어가 서는 높이
 		local pruid = self.platformRuid
 		if pruid == nil or pruid == "" then pruid = self.defaultTileRuid end
@@ -1244,8 +1290,8 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			if pspr ~= nil then pspr.Enable = false end
 		end
 		return
-	end
-	if self:IsMonster(kind) then
+		end
+		if self:IsMonster(kind) then
 		local my = cfg.floorY + self.monsterYOff
 		if yGiven ~= nil then
 			my = cfg.floorY + yGiven
@@ -1261,12 +1307,12 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			log("[CourseGen] monster spawn failed for '" .. tostring(kind) .. "'")
 		end
 		return
-	end
-	-- An obstacle type (ObstacleDef id) → spawn its dedicated per-type .model (sprite + size baked in,
-	-- named by the ObstacleDef "model" column). The in-model Obstacle script self-sizes its contact box
-	-- from its sprite and damages PlayerHealth on contact; only damage / rest height are set post-spawn.
-	local omodel = self:ObstacleModel(kind)
-	if omodel ~= "" then
+		end
+		-- An obstacle type (ObstacleDef id) → spawn its dedicated per-type .model (sprite + size baked in,
+		-- named by the ObstacleDef "model" column). The in-model Obstacle script self-sizes its contact box
+		-- from its sprite and damages PlayerHealth on contact; only damage / rest height are set post-spawn.
+		local omodel = self:ObstacleModel(kind)
+		if omodel ~= "" then
 		local restY = cfg.floorY + self.obstacleYRest
 		if yGiven ~= nil then
 			restY = cfg.floorY + yGiven
@@ -1298,34 +1344,34 @@ method void CmdSpawn(Entity map, table cfg, table c)
 			-- sprite + size are baked into the per-type model; Obstacle self-sizes its hitbox.
 		end
 		return
-	end
-	-- Otherwise treat p1 as a registered model id and spawn it directly (custom entities).
-	local gy = cfg.floorY + 1.0
-	if yGiven ~= nil then
+		end
+		-- Otherwise treat p1 as a registered model id and spawn it directly (custom entities).
+		local gy = cfg.floorY + 1.0
+		if yGiven ~= nil then
 		gy = cfg.floorY + yGiven
-	end
-	local e = _SpawnService:SpawnByModelId(kind, "Spawn_" .. tostring(math.floor(x)), Vector3(x, gy, 0), map)
-	if isvalid(e) == false then
+		end
+		local e = _SpawnService:SpawnByModelId(kind, "Spawn_" .. tostring(math.floor(x)), Vector3(x, gy, 0), map)
+		if isvalid(e) == false then
 		log("[CourseGen] Spawn: unknown type/model '" .. tostring(kind) .. "'")
+		end
 	end
-end
 
-@ExecSpace("ServerOnly")
-method void CmdCutscene(Entity map, table cfg, table c)
-	-- "Cutscene" command — p1=cutscene id, p2=x. Reserved for future use.
-	log("[CourseGen] Cutscene '" .. tostring(c.p1) .. "' @x=" .. tostring(c.p2) .. " (TODO: not implemented yet)")
-end
+	@ExecSpace("ServerOnly")
+	method void CmdCutscene(Entity map, table cfg, table c)
+		-- "Cutscene" command — p1=cutscene id, p2=x. Reserved for future use.
+		log("[CourseGen] Cutscene '" .. tostring(c.p1) .. "' @x=" .. tostring(c.p2) .. " (TODO: not implemented yet)")
+	end
 
-@ExecSpace("ServerOnly")
-method void CmdBoss(Entity map, table cfg, table c)
-	-- "Boss,<id>,<x>" command — place a boss at a FIXED x (non-arena course, goal=number).
-	-- 빌드 시 즉시 스폰하면 플레이어가 도달하기 전 화면 밖에서 등장 연출이 소모된다. 대신 대기 등록만 하고,
-	-- OnUpdate가 플레이어 접근을 감지해 경고음 → 스폰(하늘에서 낙하)으로 이어간다.
-	-- (boss course(Set,goal,boss)에서는 Boss 행이 BuildCourse에서 걸러져 아레나 경로로 가므로 여기 안 옴.)
-	local x = tonumber(c.p2) or 0
-	if self.pendingBoss == nil then self.pendingBoss = {} end
-	self.pendingBoss[map.Name] = { x = x, bossId = c.p1, cfg = cfg, warned = false, spawned = false }
-	log("[CourseGen] boss pending (approach-spawn) @x=" .. tostring(x))
-end
+	@ExecSpace("ServerOnly")
+	method void CmdBoss(Entity map, table cfg, table c)
+		-- "Boss,<id>,<x>" command — place a boss at a FIXED x (non-arena course, goal=number).
+		-- 빌드 시 즉시 스폰하면 플레이어가 도달하기 전 화면 밖에서 등장 연출이 소모된다. 대신 대기 등록만 하고,
+		-- OnUpdate가 플레이어 접근을 감지해 경고음 → 스폰(하늘에서 낙하)으로 이어간다.
+		-- (boss course(Set,goal,boss)에서는 Boss 행이 BuildCourse에서 걸러져 아레나 경로로 가므로 여기 안 옴.)
+		local x = tonumber(c.p2) or 0
+		if self.pendingBoss == nil then self.pendingBoss = {} end
+		self.pendingBoss[map.Name] = { x = x, bossId = c.p1, cfg = cfg, warned = false, spawned = false }
+		log("[CourseGen] boss pending (approach-spawn) @x=" .. tostring(x))
+	end
 
 end

@@ -1,9 +1,9 @@
 ﻿cmd,p1,p2,p3
 Set,size,30,
 Spawn,mud,5,
-Spawn,mud,6,
-Spawn,mud,7,
-Spawn,mud,8,
+Spawn,,,1
+Spawn,,,1
+Spawn,,,1
 Spawn,coin,5,2
 Spawn,coin,6,2
 Spawn,coin,7,2
