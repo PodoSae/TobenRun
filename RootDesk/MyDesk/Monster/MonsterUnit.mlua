@@ -115,6 +115,16 @@ script MonsterUnit extends Component
     @HideFromInspector property boolean movingRight = true
     @HideFromInspector property number spawnX = 0
 
+    -- ── 몬스터 크기 배율(MonsterTable.scale) ── 스프라이트와 검기 피격 콜라이더(HitComponent)는 트랜스폼 스케일을
+    -- 함께 따라 커진다(큰 몬스터 = 큰 피격 대상, 의도된 동작). 발밑 피벗이라 위로 커져 바닥 접지가 유지된다.
+    -- 좌우 반전(ApplyFacing)이 스케일을 매번 덮어쓰므로, 모델 원본 스케일(baseS*)을 최초 1회 캡처해 SizeScale과 곱한다.
+    -- 몸박 박스(ContactCheck)는 코드상 수동 박스라 자동으로 안 커진다 → SizeScale을 곱해 함께 키운다.
+    @HideFromInspector property number SizeScale = 1.0
+    @HideFromInspector property boolean baseScaleCaptured = false
+    @HideFromInspector property number baseSX = 1.0
+    @HideFromInspector property number baseSY = 1.0
+    @HideFromInspector property number baseSZ = 1.0
+
     -- Server-only caches / guards.
     property any movement = nil
     property any body = nil
@@ -225,6 +235,10 @@ script MonsterUnit extends Component
         -- 피격 애니메이션클립(있으면). 비면 히트 플래시 폴백.
         local hitRuid = row:GetItem("hitAnimRUID")
         self.HitAnimRUID = (hitRuid ~= nil) and hitRuid or ""
+
+        -- 크기: MonsterTable.scale (없거나 빈 값이면 현재값 유지). 트랜스폼 스케일 + 몸박 박스에 반영.
+        self.SizeScale = tonumber(row:GetItem("scale")) or self.SizeScale
+        self:ApplySize()
 
         log("[MonsterUnit] Loaded '" .. tostring(self.MonsterId) .. "' hp=" .. tostring(self.MaxHp)
             .. " contact=" .. tostring(self.ContactDamage) .. " meso=" .. tostring(self.MesoReward)
@@ -673,13 +687,32 @@ script MonsterUnit extends Component
     end
 
     @ExecSpace("ServerOnly")
+    method void ApplySize()
+        -- MonsterTable.scale를 트랜스폼에 반영. 모델 원본 스케일(baseS*)을 최초 1회 캡처(스폰 직후, 아직 크기/반전이
+        -- 적용되지 않은 상태여야 정확)하고, 이후엔 baseS* × SizeScale을 ApplyFacing이 최종 적용한다. 발밑 피벗이라 위로 커진다.
+        local t = self.Entity.TransformComponent
+        if not isvalid(t) then return end
+        if self.baseScaleCaptured == false then
+            local s = t.Scale
+            self.baseSX = math.abs(s.x)
+            if self.baseSX <= 0 then self.baseSX = 1 end
+            self.baseSY = s.y
+            self.baseSZ = s.z
+            self.baseScaleCaptured = true
+        end
+        self:ApplyFacing()
+        log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' size x" .. tostring(self.SizeScale)
+            .. " base=(" .. tostring(self.baseSX) .. "," .. tostring(self.baseSY) .. ")")
+    end
+
+    @ExecSpace("ServerOnly")
     method void ApplyFacing()
         -- Sprite resources face left by default, so moving right flips Scale.x negative (keeps collider aligned).
+        -- 크기 배율(SizeScale)도 함께 반영: 최종 스케일 = 모델 원본(baseS*) × SizeScale, x부호는 바라보는 방향.
         local t = self.Entity.TransformComponent
         if not isvalid(t) then return end
         local dir = self.movingRight and 1 or -1
-        local s = t.Scale
-        t.Scale = Vector3(math.abs(s.x) * -dir, s.y, s.z)
+        t.Scale = Vector3(self.baseSX * self.SizeScale * -dir, self.baseSY * self.SizeScale, self.baseSZ * self.SizeScale)
     end
 
     @ExecSpace("ServerOnly")
@@ -703,6 +736,10 @@ script MonsterUnit extends Component
         end
 
         local myPos = self.Entity.TransformComponent.WorldPosition
+        -- 몸박 박스도 몬스터 크기에 맞춰 확대(스프라이트가 커진 만큼 접촉 판정도 커져야 몸집과 일치).
+        local hw = self.ContactHalfWidth * self.SizeScale
+        local hh = self.ContactHalfHeight * self.SizeScale
+        local oy = self.ContactOffsetY * self.SizeScale
         local nearestD = 99999
         local nearestDx = 0
         local nearestDy = 0
@@ -717,7 +754,7 @@ script MonsterUnit extends Component
                     nearestDx = dx
                     nearestDy = dy
                 end
-                if math.abs(dx) <= self.ContactHalfWidth and math.abs(dy - self.ContactOffsetY) <= self.ContactHalfHeight then
+                if math.abs(dx) <= hw and math.abs(dy - oy) <= hh then
                     ---@type PlayerHealth
                     local hp = user:GetComponent("script.PlayerHealth")
                     if isvalid(hp) then
@@ -734,7 +771,7 @@ script MonsterUnit extends Component
         if logNow then
             log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' users=" .. tostring(#users)
                 .. " nearest dx=" .. string.format("%.2f", nearestDx) .. " dy=" .. string.format("%.2f", nearestDy)
-                .. " (box hw=" .. tostring(self.ContactHalfWidth) .. " hh=" .. tostring(self.ContactHalfHeight) .. ")")
+                .. " (box hw=" .. tostring(hw) .. " hh=" .. tostring(hh) .. ")")
         end
     end
 
