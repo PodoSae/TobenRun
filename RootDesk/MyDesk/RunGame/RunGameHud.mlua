@@ -595,12 +595,12 @@ method void OnArriveMap(Entity player)
 	end
 	-- 강제 재빌드 요청은 이번 도착에서 소비(다음 우발적 OnArriveMap 재호출은 가드가 처리).
 	self.forceRebuildOnArrive = false
-	-- Stand the runner at the start of the generated floor. 바닥 바로 위(floorY+0.5)에 세운다(예전 +1.0은 1유닛
-	-- 위에서 떨어져 안착). 스폰/리스폰 모두 self.spawnY를 쓰므로 여기만 바꾸면 전부 반영된다.
+	-- Stand the runner at the start of the generated floor. 바닥 위 floorY+1.5에 세운다(살짝 위에서 떨어져 안착).
+	-- 스폰/리스폰 모두 self.spawnY를 쓰므로 여기만 바꾸면 전부 반영된다.
 	local sx = cfg.startX
 	-- 월드 바닥 y 저장(낙사 리스폰 이펙트 기준).
 	self.courseFloorY = cfg.floorY
-	local sy = cfg.floorY + 0.5
+	local sy = cfg.floorY + 1.5
 	if player.MovementComponent ~= nil then
 		player.MovementComponent:SetWorldPosition(Vector2(sx, sy))
 	end
