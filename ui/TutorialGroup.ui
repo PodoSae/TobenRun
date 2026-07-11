@@ -1185,7 +1185,7 @@
         }
       },
       {
-        "id": "500a4242-3eb1-44f4-b250-26bffc853e3b",
+        "id": "59b2e5f0-a58c-42b1-ac34-941257e34f9d",
         "path": "/ui/TutorialGroup/SkipBtn",
         "componentNames": "MOD.Core.UITransformComponent,MOD.Core.SpriteGUIRendererComponent,MOD.Core.ButtonComponent,MOD.Core.TextComponent",
         "jsonString": {
@@ -1289,10 +1289,10 @@
               "SortingLayer": "UI",
               "StartFrameIndex": 0,
               "Color": {
-                "r": 0.3,
-                "g": 0.33,
-                "b": 0.42,
-                "a": 0.96
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
               },
               "DropShadow": false,
               "DropShadowAngle": 120.0,
@@ -1394,12 +1394,12 @@
               "DropShadowDistance": 3.0,
               "Font": 0,
               "FontColor": {
-                "r": 1.0,
-                "g": 1.0,
-                "b": 1.0,
-                "a": 1.0
+                "r": 0.3,
+                "g": 0.33,
+                "b": 0.42,
+                "a": 0.96
               },
-              "FontSize": 26,
+              "FontSize": 24,
               "IgnoreMapLayerCheck": false,
               "IsLocalizationKey": false,
               "MaxSize": 40,

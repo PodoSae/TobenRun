@@ -131,6 +131,13 @@ method void LoadSteps()
 				target = row:GetItem("target"),
 				stage = row:GetItem("stage"),
 				guide = row:GetItem("guide"),   -- 가이드 캐릭터 방향 강제("left"/"right"). 비면 대상 위치로 자동 판단.
+				-- 수동 스포트라이트 사각형(중앙 원점 로컬 좌표). target의 '|' 후보와 1:1로 대응하는 ';'-구분 문자열.
+				-- 값이 있는 후보는 GetWorldCorners 대신 이 사각형으로 구멍을 뚫는다(오버레이 화면=장비/축복/팝업은
+				-- GetWorldCorners가 실제 렌더 위치와 어긋남). 비면 그 후보는 GetWorldCorners(로비 요소는 정상).
+				hlX = row:GetItem("hlX"),
+				hlY = row:GetItem("hlY"),
+				hlW = row:GetItem("hlW"),
+				hlH = row:GetItem("hlH"),
 			})
 		end
 	end
@@ -638,30 +645,64 @@ method void StepDialogSlide()
 	end
 end
 
+method any NthNum(string str, integer n)
+	-- ';'로 구분된 문자열에서 n번째 토큰을 숫자로 반환. 없거나 빈 토큰이면 nil.
+	if str == nil or str == "" or n < 1 then return nil end
+	local count = 0
+	for tok in string.gmatch(str .. ";", "(.-);") do
+		count = count + 1
+		if count == n then
+			if tok == "" then return nil end
+			return tonumber(tok)
+		end
+	end
+	return nil
+end
+
 method void ApplyDim(any step)
 	-- 4방향 딤 스트립을 배치해 화면을 어둡게 하되, step.target(로비 버튼)이 있으면 그 버튼 영역만 뚫는다(스포트라이트).
 	-- target은 '|'로 구분한 여러 후보 경로일 수 있다(1차 클릭 대상 → 팝업/선택 후 버튼 순). 매 프레임 현재 화면에
 	-- 실제로 활성(EnabledInHierarchy=조상까지 켜짐)인 '마지막' 후보를 골라 구멍을 낸다 → 팝업이 뜨면 그 버튼으로 이동.
-	local alpha = 0.62
+	-- 인게임 스텝: 딤을 아예 켜지 않는다(플랫포밍 화면이 그대로 보이게). 4방향 스트립 전부 숨김 + 가이드만 우측.
 	if step.ctx == "game" then
-		alpha = 0.42
+		self:PlaceStrip("DimTop", 0, 0, 0, 0, 0)
+		self:PlaceStrip("DimBottom", 0, 0, 0, 0, 0)
+		self:PlaceStrip("DimLeft", 0, 0, 0, 0, 0)
+		self:PlaceStrip("DimRight", 0, 0, 0, 0, 0)
+		self:SetGuideSide("right")
+		return
 	end
+	local alpha = 0.62
 	local cx = 0
 	local cy = 0
 	local hw = 0
 	local hh = 0
 	local chosen = nil
 	local chosenPath = ""
+	local chosenIdx = 0
 	if step.target ~= nil and step.target ~= "" then
+		local idx = 0
 		for p in string.gmatch(step.target, "[^|]+") do
+			idx = idx + 1
 			local tgt = _EntityService:GetEntityByPath(p)
 			if isvalid(tgt) and tgt.UITransformComponent ~= nil and tgt.EnabledInHierarchy then
 				chosen = tgt
 				chosenPath = p
+				chosenIdx = idx
 			end
 		end
 	end
-	if chosen ~= nil then
+	-- 수동 하이라이트: 선택된 후보(chosenIdx)에 대응하는 ';'-토큰의 수동 사각형이 있으면 GetWorldCorners 대신
+	-- 그 사각형으로 구멍을 뚫는다(오버레이 화면 요소는 GetWorldCorners가 어긋나므로). 없으면 GetWorldCorners.
+	local mw = self:NthNum(step.hlW, chosenIdx)
+	local mh = self:NthNum(step.hlH, chosenIdx)
+	local useManual = (chosen ~= nil and mw ~= nil and mw > 0 and mh ~= nil and mh > 0)
+	if useManual then
+		cx = self:NthNum(step.hlX, chosenIdx) or 0
+		cy = self:NthNum(step.hlY, chosenIdx) or 0
+		hw = mw
+		hh = mh
+	elseif chosen ~= nil then
 		local root = _EntityService:GetEntityByPath("/ui/TutorialGroup")
 		if isvalid(root) and root.UITransformComponent ~= nil then
 			local corners = chosen.UITransformComponent:GetWorldCorners()
@@ -771,6 +812,9 @@ method void PlaceStrip(string name, number cx, number cy, number w, number h, nu
 	e.UITransformComponent.UIScale = Vector3(w / 100, h / 100, 1)
 	if e.SpriteGUIRendererComponent ~= nil then
 		e.SpriteGUIRendererComponent.Color = Color(0, 0, 0, alpha)
+		-- 딤 영역은 터치를 흡수(RaycastTarget=true)해 뒤 버튼 클릭을 막는다. 뚫린 구멍(스트립 없음)만 클릭 통과.
+		-- SkipBtn/Guide/Speech는 스트립보다 앞(나중 생성)이라 계속 클릭 가능. 게임 스텝은 스트립을 숨겨(Enable=false) 차단 안 함.
+		e.SpriteGUIRendererComponent.RaycastTarget = true
 	end
 end
 
