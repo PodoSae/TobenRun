@@ -909,11 +909,19 @@ method any BlessEffectColor(string effectId)
 end
 
 method string BlessEffectIcon(string effectId)
-	-- Dedicated sprite RUID for effects that have a real icon; others fall back to the color swatch.
-	if effectId == "swift" then
+	-- Dedicated sprite RUID for each effect; others fall back to the color swatch.
+	if effectId == "hitcount" then          -- 타격수 증가
+		return "5b64009848484b549dd78cdc1b17a9aa"
+	elseif effectId == "pierce" then        -- 관통수 증가
+		return "0cfe777a9cd04df9bbb22a18a598e9b7"
+	elseif effectId == "regen" then         -- 일정 체력 회복
+		return "7279b8f64c7043edabf3cfac2fc8f310"
+	elseif effectId == "iframe" then        -- 무적
+		return "8b938a9b2bec440cba0742337a036e5e"
+	elseif effectId == "swift" then         -- 속사 공격
 		return "1c4508e357784c15be1caf2828b01ef8"
-	elseif effectId == "crit" then
-		return "ee044e735c3148c49797f4f1a8b5f3fa"
+	elseif effectId == "crit" then          -- 즉사 이펙트(임시)
+		return "0224a00456c54a6bb8ae18ba9d41c66c"
 	end
 	return ""
 end
