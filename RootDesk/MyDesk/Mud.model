@@ -14,7 +14,7 @@
     "Use": "Json",
     "Json": {
       "Version": 1,
-      "Name": "Mud_short",
+      "Name": "Mud",
       "BaseModelId": null,
       "Id": "Mud",
       "Components": [
@@ -45,7 +45,7 @@
             "$type": "MODNativeType",
             "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": "939df91b59024e5f9413952bcd46c490"
+          "Value": "49e9a30eecd34a3d963695b84b5bfb01"
         },
         {
           "TargetType": "MOD.Core.SpriteRendererComponent",
@@ -144,24 +144,6 @@
             "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
           "Value": true
-        },
-        {
-          "TargetType": "MOD.Core.SpriteRendererComponent",
-          "Name": "EndFrameIndex",
-          "ValueType": {
-            "$type": "MODNativeType",
-            "type": "System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
-          },
-          "Value": 2147483647
-        },
-        {
-          "TargetType": "MOD.Core.SpriteRendererComponent",
-          "Name": "StartFrameIndex",
-          "ValueType": {
-            "$type": "MODNativeType",
-            "type": "System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
-          },
-          "Value": 0
         }
       ],
       "EventLinks": [],
