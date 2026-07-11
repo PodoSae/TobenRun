@@ -20,10 +20,13 @@ property any stageSelectBackHandler = nil
 -- 스테이지 선택 흐름: 맵 버튼은 '선택'만 하고, Desc 패널의 출발 버튼으로 진입한다.
 property string selectedStage = ""
 property any stageDepartHandler = nil
--- Desc 패널 슬라이드: 선택 전엔 화면 아래(descHiddenY), 선택 시 원위치(descShownY)로 올라온다.
-property number descShownY = 0
+-- Desc 패널 슬라이드: 선택 전엔 화면 아래(-720), 선택 시 원위치(descShownY=50)로 올라온다.
+-- OnUpdate가 매 프레임 실제 위치를 descCurY로 강제하므로, 그룹 재활성으로 authored(50) 위치로 튀어도 즉시 교정된다.
+property number descShownY = 50
 property number descCurY = -720
 property number descTargetY = -720
+-- 스테이지 선택 화면이 방금 열렸는지 판정(비활성→활성 엣지)용. 열릴 때마다 Desc를 숨김으로 리셋한다.
+property boolean stageSelWasEnabled = false
 property any equipHandler = nil
 property any equipBackHandler = nil
 property any blessHandler = nil
@@ -93,11 +96,7 @@ method void OnBeginPlay()
 			table.insert(self.stageHandlers, { ent = btn, hd = h })
 		end
 	end
-	-- Desc 패널의 출발 버튼 → 선택된 스테이지로 진입. 원위치(y) 기억 후 화면 아래로 숨긴다.
-	local descPanel = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
-	if isvalid(descPanel) and descPanel.UITransformComponent ~= nil then
-		self.descShownY = descPanel.UITransformComponent.anchoredPosition.y
-	end
+	-- Desc 패널의 출발 버튼 → 선택된 스테이지로 진입. (원위치 descShownY는 상수, authored는 숨김.)
 	local departBtn = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/UIButton")
 	if isvalid(departBtn) then
 		self.stageDepartHandler = departBtn:ConnectEvent(ButtonClickEvent, self.OnStageDepartClick)
@@ -235,13 +234,32 @@ method void OnUpdate(number delta)
 	-- 축복 icon idle animation (runs regardless of the title-hint early-return below).
 	self:AnimateBlessIcon(delta)
 	-- Desc 패널 슬라이드(선택 시 아래→원위치). 스테이지 선택 화면이 열려 있을 때만.
-	if isvalid(self.stageSelectRoot) and self.stageSelectRoot.Enable then
+	local stageSelOpen = isvalid(self.stageSelectRoot) and self.stageSelectRoot.Enable
+	-- 스테이지 선택 화면이 방금 열렸으면(비활성→활성) Desc를 무조건 숨김으로 리셋한다.
+	-- 어떤 종료 경로(로비로/출발/기타)든, 종료 시 숨김을 못 했어도 재진입 순간 확실히 숨긴다(텔레포트 방지).
+	if stageSelOpen and (self.stageSelWasEnabled == false) then
+		self.selectedStage = ""
+		self.descCurY = -720
+		self.descTargetY = -720
+		-- 화면을 열 때 Desc를 미리 켜둔다(단, 위치는 화면밖 -720이라 안 보임). 선택 시엔 이미 켜져 있으므로
+		-- Enable 토글로 인한 재배치 튀는 현상 없이 매끄럽게 아래→위 슬라이드된다.
+		local de = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
+		if isvalid(de) then
+			if de.UITransformComponent ~= nil then
+				de.UITransformComponent.anchoredPosition = Vector2(0, -720)
+			end
+			de.Enable = true
+		end
+	end
+	self.stageSelWasEnabled = stageSelOpen
+	if stageSelOpen then
 		if math.abs(self.descCurY - self.descTargetY) > 0.5 then
 			self.descCurY = self.descCurY + (self.descTargetY - self.descCurY) * math.min(1, delta * 12)
-			local d = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
-			if isvalid(d) and d.UITransformComponent ~= nil then
-				d.UITransformComponent.anchoredPosition = Vector2(0, self.descCurY)
-			end
+		end
+		-- 매 프레임 실제 위치를 descCurY로 강제 → 그룹 재활성/authored 위치로 튀는 걸 방지.
+		local d = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
+		if isvalid(d) and d.UITransformComponent ~= nil then
+			d.UITransformComponent.anchoredPosition = Vector2(0, self.descCurY)
 		end
 	end
 	-- Pulse the title "터치하여 시작" prompt's alpha up and down while the title screen is visible.
@@ -336,7 +354,7 @@ method void RefreshSavedUI()
 		-- Number only (the pill icon already indicates 토벤코인); abbreviated so big values fit the box.
 		lobbyCoin.TextComponent.Text = self:AbbreviateNumber(coin)
 	end
-	local eqMeso = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
+	local eqMeso = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/MesoText")
 	if isvalid(eqMeso) and eqMeso.TextComponent ~= nil then
 		eqMeso.TextComponent.Text = self:AbbreviateNumber(gold)
 	end
@@ -415,6 +433,11 @@ method void RefreshSavedUI()
 			if isvalid(reqEnt) and reqEnt.TextComponent ~= nil then
 				reqEnt.TextComponent.Text = self:PrevStage(stage) .. " 클리어 필요"
 			end
+		end
+		-- 잠금 자물쇠 배지(버튼 직속 자식 — 어두운 오버레이 위에 렌더).
+		local badgeEnt = _EntityService:GetEntityByPath(btnPath .. "/LockBadge")
+		if isvalid(badgeEnt) then
+			badgeEnt.Enable = locked
 		end
 		-- 점수 대신 스테이지별 획득 별(0~3)을 3개의 별 스프라이트로 표시(빈 별 / 찬 별).
 		local stars = _PlayerSave:GetStageStars(stage)
@@ -508,7 +531,7 @@ method void FillEquipScreen()
 	if _PlayerSave ~= nil then
 		gold = _PlayerSave:GetGold()
 	end
-	local m = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/MesoPill/Text")
+	local m = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/MesoText")
 	if isvalid(m) and m.TextComponent ~= nil then
 		m.TextComponent.Text = self:AbbreviateNumber(gold)
 	end
@@ -519,6 +542,11 @@ method void FillEquipScreen()
 	local cc = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/CoinPill/Text")
 	if isvalid(cc) and cc.TextComponent ~= nil then
 		cc.TextComponent.Text = self:AbbreviateNumber(coin)
+	end
+	-- 토벤 포인트(축복창 스타일 포인트 칸).
+	local eqPt = _EntityService:GetEntityByPath("/ui/EquipGroup/CurrencyBar/PointPill/Text")
+	if isvalid(eqPt) and eqPt.TextComponent ~= nil and _PlayerSave ~= nil then
+		eqPt.TextComponent.Text = tostring(_PlayerSave:GetTobenFreePoints())
 	end
 end
 
@@ -886,10 +914,18 @@ method any BlessEffectColor(string effectId)
 end
 
 method string BlessEffectIcon(string effectId)
-	-- Dedicated sprite RUID for effects that have a real icon; others fall back to the color swatch.
-	if effectId == "swift" then
+	-- Dedicated sprite RUID for each effect; others fall back to the color swatch.
+	if effectId == "hitcount" then          -- 타격수 증가
+		return "5b64009848484b549dd78cdc1b17a9aa"
+	elseif effectId == "pierce" then        -- 관통수 증가
+		return "0cfe777a9cd04df9bbb22a18a598e9b7"
+	elseif effectId == "regen" then         -- 일정 체력 회복
+		return "7279b8f64c7043edabf3cfac2fc8f310"
+	elseif effectId == "iframe" then        -- 무적
+		return "8b938a9b2bec440cba0742337a036e5e"
+	elseif effectId == "swift" then         -- 속사 공격
 		return "1c4508e357784c15be1caf2828b01ef8"
-	elseif effectId == "crit" then
+	elseif effectId == "crit" then          -- 급소 일격(즉사)
 		return "ee044e735c3148c49797f4f1a8b5f3fa"
 	end
 	return ""
@@ -1464,8 +1500,8 @@ end
 method void SelectStage(string stage)
 	-- 선택된 스테이지 정보를 Desc 패널에 채우고 패널을 원위치로 올린다.
 	self.selectedStage = stage
-	-- 타이틀(스테이지 명)과 설명: StageObjective의 name/desc 열이 있으면 사용, 없으면 각각 stage id / 빈값.
-	local titleText = stage
+	-- 타이틀(스테이지 번호 + 이름)과 설명: StageSelect 데이터셋의 name/desc 열 사용.
+	local nameText = ""
 	local descText = ""
 	if _DataService ~= nil then
 		local ds = _DataService:GetTable("StageSelect")
@@ -1476,7 +1512,7 @@ method void SelectStage(string stage)
 				if self:DataSetHasColumn(ds, "name") then
 					local nm = row:GetItem("name")
 					if nm ~= nil and nm ~= "" then
-						titleText = nm
+						nameText = nm
 					end
 				end
 				if self:DataSetHasColumn(ds, "desc") then
@@ -1488,6 +1524,13 @@ method void SelectStage(string stage)
 			end
 		end
 	end
+	-- 타이틀은 "1-1 초원의 시작"처럼 스테이지 번호를 앞에 붙인다(이름 없으면 번호만).
+	local titleText = stage
+	if nameText ~= "" then
+		titleText = stage .. "  " .. nameText
+	end
+	-- 데이터셋 desc의 '\n'(리터럴 백슬래시+n)을 실제 줄바꿈으로 변환 → CSV에서 줄나눔을 넣을 수 있다.
+	descText = (string.gsub(descText, "\\n", "\n"))
 	local titleEnt = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc/title")
 	if isvalid(titleEnt) and titleEnt.TextGUIRendererComponent ~= nil then
 		titleEnt.TextGUIRendererComponent.Text = titleText
@@ -1504,7 +1547,8 @@ method void SelectStage(string stage)
 		end
 		starEnt.TextGUIRendererComponent.Text = starText
 	end
-	-- Desc 패널을 원위치(descShownY)로 슬라이드 업.
+	-- Desc는 화면 열 때 이미 켜져 있으므로(엣지리셋) 여기선 Enable을 건드리지 않는다.
+	-- Enable 토글이 authored 위치 재적용을 유발해 슬라이드 중 2번 튀는 원인이었음.
 	self.descTargetY = self.descShownY
 	log("[ScreenFlow] stage selected: " .. tostring(stage))
 end
@@ -1518,8 +1562,12 @@ method void OnStageDepartClick(ButtonClickEvent event)
 		end
 		return
 	end
-	self:EnterGameWithLoading(self.selectedStage, "RunStage")
-	log("[ScreenFlow] depart -> stage " .. tostring(self.selectedStage))
+	-- 진입할 스테이지를 먼저 확보(HideStageDesc가 selectedStage를 비우므로).
+	local goStage = self.selectedStage
+	-- 진입 전에 Desc를 화면 아래로 숨겨 둔다(재진입 엣지 리셋이 안전망이지만 즉시 숨겨 깔끔하게).
+	self:HideStageDesc()
+	self:EnterGameWithLoading(goStage, "RunStage")
+	log("[ScreenFlow] depart -> stage " .. tostring(goStage))
 end
 
 method boolean DataSetHasColumn(any ds, string col)
@@ -1542,8 +1590,12 @@ method void HideStageDesc()
 	self.descCurY = -720
 	self.descTargetY = -720
 	local d = _EntityService:GetEntityByPath("/ui/StageSelectGroup/Desc")
-	if isvalid(d) and d.UITransformComponent ~= nil then
-		d.UITransformComponent.anchoredPosition = Vector2(0, -720)
+	if isvalid(d) then
+		if d.UITransformComponent ~= nil then
+			d.UITransformComponent.anchoredPosition = Vector2(0, -720)
+		end
+		-- 완전히 비활성화 → 나가거나 재진입하는 전환 중에 Desc가 어떤 움직임도 못 보이게 한다.
+		d.Enable = false
 	end
 end
 
@@ -1581,11 +1633,11 @@ method void OnStageSelectOpenClick(ButtonClickEvent event)
 	if isvalid(self.lobbyRoot) then
 		self.lobbyRoot.Enable = false
 	end
+	-- 화면을 켜기 전에 먼저 Desc를 화면 아래로 숨긴다(켠 뒤 숨기면 한 프레임 위에 떴다 내려가 보임).
+	self:HideStageDesc()
 	if isvalid(self.stageSelectRoot) then
 		self.stageSelectRoot.Enable = true
 	end
-	-- 화면을 열 때는 아직 선택 전 → Desc 패널을 화면 아래에 숨겨 둔다.
-	self:HideStageDesc()
 	self:RefreshSavedUI()
 	log("[ScreenFlow] -> StageSelect")
 end

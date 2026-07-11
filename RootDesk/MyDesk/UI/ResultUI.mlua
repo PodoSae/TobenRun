@@ -57,9 +57,98 @@ script ResultUI extends Logic
     property TextGUIRendererComponent firstCoinText = "7dfac19f-dd52-4ec3-9a6d-c540d7d61894"
     property Entity firstBox = "692c40f4-561d-44af-9111-aced10ad5670"
 
+    -- 결과창 카운트업 연출: 점수 / 획득 메소가 0에서 목표값까지 CountUpDuration초에 걸쳐 '슈루루룩' 올라간다.
+    @DisplayName("카운트업 시간(초)")
+    @MinValue(0.1)
+    @MaxValue(5)
+    @Delta(0.1)
+    property number CountUpDuration = 2.7
+    @HideFromInspector property number scoreGoal = 0
+    @HideFromInspector property number scoreShown = 0
+    @HideFromInspector property number mesoGoal = 0
+    @HideFromInspector property number mesoShown = 0
+
+    -- 별 획득 연출: 달성한 별은 팝(LocalScale 커졌다 작아짐) + 위로 상승, 미달성 별은 제자리. 상태는 self._T(클라)로 구동.
+    @DisplayName("별 팝 지속(초)")
+    property number StarPopDuration = 0.96
+    @DisplayName("별 팝 추가 확대율")
+    property number StarPopAmplitude = 0.45
+    @DisplayName("별 순차 팝 간격(초)")
+    property number StarPopStagger = 0.42
+
     method void OnBeginPlay()
         if not self:IsClient() then return end
         self:Hide()
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnUpdate(number delta)
+        -- 결과창이 떠 있는 동안 점수 / 획득 메소를 목표값까지 CountUpDuration초에 걸쳐 올린다(카운트업 연출).
+        if not isvalid(self.resultGroup) or self.resultGroup.Enable == false then return end
+        local dur = self.CountUpDuration
+        if dur <= 0 then dur = 0.9 end
+        -- 점수 카운트업.
+        if self.scoreShown < self.scoreGoal and isvalid(self.scoreText) then
+            self.scoreShown = self.scoreShown + self.scoreGoal * (delta / dur)
+            if self.scoreShown > self.scoreGoal then self.scoreShown = self.scoreGoal end
+            self.scoreText.Text = self:Comma(math.floor(self.scoreShown))
+        end
+        -- 획득 메소 카운트업.
+        if self.mesoShown < self.mesoGoal and isvalid(self.mesoText) then
+            self.mesoShown = self.mesoShown + self.mesoGoal * (delta / dur)
+            if self.mesoShown > self.mesoGoal then self.mesoShown = self.mesoGoal end
+            self.mesoText.Text = self:Comma(math.floor(self.mesoShown)) .. " 메소"
+        end
+        -- 별 팝/상승 연출.
+        self:UpdateStarPops(delta)
+    end
+
+    method any StarComp(integer i)
+        -- i번째 별(1~3)의 SpriteGUIRendererComponent 반환.
+        if i == 1 then return self.star1 end
+        if i == 2 then return self.star2 end
+        return self.star3
+    end
+
+    @ExecSpace("ClientOnly")
+    method void StartStarPops(boolean f1, boolean f2, boolean f3)
+        -- 별은 이미 고정 슬롯에 미리 배치되어 있다(상단부터 채움). 여기선 위치를 건드리지 않고, 채워진(달성) 슬롯만
+        -- 팝(LocalScale 커졌다 작아짐)하도록 상태만 세팅한다. UpdateStarPops가 매 프레임 구동.
+        self._T.starAch = { f1, f2, f3 }
+        self._T.starT = { 0, 0, 0 }
+        for i = 1, 3 do
+            local sc = self:StarComp(i)
+            if isvalid(sc) then sc.LocalScale = Vector2(1, 1) end
+        end
+        self._T.starAnim = true
+    end
+
+    @ExecSpace("ClientOnly")
+    method void UpdateStarPops(number delta)
+        -- 채워진(달성) 별만 LocalScale 팝(1→peak→1). 순차 지연(StarPopStagger)으로 위→아래 순. 위치 변경 없음.
+        -- 모든 팝이 끝나면 starAnim=false로 중단.
+        if self._T.starAnim ~= true then return end
+        local anyRunning = false
+        for i = 1, 3 do
+            local sc = self:StarComp(i)
+            if isvalid(sc) then
+                self._T.starT[i] = self._T.starT[i] + delta
+                if self._T.starAch[i] == true then
+                    local t = self._T.starT[i] - (i - 1) * self.StarPopStagger
+                    local sp = 1
+                    if t <= 0 then
+                        anyRunning = true
+                    elseif t < self.StarPopDuration then
+                        sp = 1 + self.StarPopAmplitude * math.sin(math.pi * (t / self.StarPopDuration))
+                        anyRunning = true
+                    end
+                    sc.LocalScale = Vector2(sp, sp)
+                end
+            end
+        end
+        if not anyRunning then
+            self._T.starAnim = false
+        end
     end
 
     @ExecSpace("ClientOnly")
@@ -92,31 +181,49 @@ script ResultUI extends Logic
             end
         end
 
+        -- 점수는 0에서 목표까지 카운트업(OnUpdate). 여기서 목표를 걸고 0에서 시작한다.
+        self.scoreGoal = score
+        self.scoreShown = 0
         if isvalid(self.scoreText) then
-            self.scoreText.Text = self:Comma(score)
+            self.scoreText.Text = self:Comma(0)
         end
+        -- 획득 메소 목표는 곧 도착하는 ShowReward가 건다. 이전 판 잔여값이 남지 않도록 여기서 리셋.
+        self.mesoGoal = 0
+        self.mesoShown = 0
 
         local m1 = self:Eval(o1t, o1v, cleared, kills, hitsTaken, score, bossKilled)
         local m2 = self:Eval(o2t, o2v, cleared, kills, hitsTaken, score, bossKilled)
         local m3 = self:Eval(o3t, o3v, cleared, kills, hitsTaken, score, bossKilled)
 
-        self:SetStar(self.star1, m1)
-        self:SetStar(self.star2, m2)
-        self:SetStar(self.star3, m3)
-
-        -- 이번 판 획득 별 수(0~3)를 스테이지별 최고 기록으로 저장 → 스테이지 선택 화면에서 표기.
+        -- 획득 별 수(0~3). 별은 '위에서부터' 이 개수만큼 채운다(어느 목표를 달성했든 상단부터 정렬 = 미리 배치).
+        -- 슬롯(별 엔티티)은 고정 위치, 이동 없음 — 상단 starCount개만 달성(노랑+팝), 나머지는 미달성(회색).
         local starCount = 0
         if m1 then starCount = starCount + 1 end
         if m2 then starCount = starCount + 1 end
         if m3 then starCount = starCount + 1 end
+
+        self:SetStar(self.star1, starCount >= 1)
+        self:SetStar(self.star2, starCount >= 2)
+        self:SetStar(self.star3, starCount >= 3)
+        -- 채워진 상단 별만 팝(커졌다 작아짐). 위치 이동 없음.
+        self:StartStarPops(starCount >= 1, starCount >= 2, starCount >= 3)
+
         if _PlayerSave ~= nil and stage ~= nil and stage ~= "" then
             _PlayerSave:SetLocalStageStars(stage, starCount)
             _PlayerSave:SaveStageStars(stage, starCount)
         end
 
-        if isvalid(self.row1) then self.row1.Text = self:Label(o1t, o1v) end
-        if isvalid(self.row2) then self.row2.Text = self:Label(o2t, o2v) end
-        if isvalid(self.row3) then self.row3.Text = self:Label(o3t, o3v) end
+        -- 달성한 목표 문구를 위에서부터, 그 뒤에 미달성 목표 문구를 이어서 표시(별 상단 채움과 동일 정렬). 세 줄 모두 채움.
+        local labels = {}
+        if m1 then table.insert(labels, self:Label(o1t, o1v)) end
+        if m2 then table.insert(labels, self:Label(o2t, o2v)) end
+        if m3 then table.insert(labels, self:Label(o3t, o3v)) end
+        if not m1 then table.insert(labels, self:Label(o1t, o1v)) end
+        if not m2 then table.insert(labels, self:Label(o2t, o2v)) end
+        if not m3 then table.insert(labels, self:Label(o3t, o3v)) end
+        if isvalid(self.row1) then self.row1.Text = labels[1] or "" end
+        if isvalid(self.row2) then self.row2.Text = labels[2] or "" end
+        if isvalid(self.row3) then self.row3.Text = labels[3] or "" end
 
         -- 토벤 위 폭죽 재생(매번 첫 프레임부터 루프).
         self:PlayFirework(self.fw1, self.Fw1Ruid)
@@ -137,7 +244,10 @@ script ResultUI extends Logic
     @ExecSpace("ClientOnly")
     method void ShowReward(integer meso, integer coin, boolean isFirst)
         -- 서버가 실제 지급한 보상 표시. CoinBg=획득 메소+토벤코인, CoinBg_1("최초")=최초 클리어일 때만 표시.
-        if isvalid(self.mesoText) then self.mesoText.Text = self:Comma(meso) .. " 메소" end
+        -- 획득 메소를 0에서 목표(meso)까지 카운트업(OnUpdate). 목표 걸고 0에서 시작.
+        self.mesoGoal = meso
+        self.mesoShown = 0
+        if isvalid(self.mesoText) then self.mesoText.Text = self:Comma(0) .. " 메소" end
         if isvalid(self.coinText) then self.coinText.Text = self:Comma(coin) .. " 토벤코인" end
         if isvalid(self.firstCoinText) then self.firstCoinText.Text = self:Comma(coin) .. " 토벤코인" end
         if isvalid(self.firstBox) then self.firstBox.Enable = isFirst end
