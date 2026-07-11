@@ -713,7 +713,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "cf9cf3f4d48546adb9b4462dc6a34c1e"
+                "DataId": "ab8fb1fd6b9d45f5a7dc35c8cf544bd3"
               },
               "LocalPosition": {
                 "x": 0.0,
@@ -2472,7 +2472,7 @@
           "enable": true,
           "visible": true,
           "localize": true,
-          "displayOrder": 0,
+          "displayOrder": 1,
           "pathConstraints": "/////c465c2ee-823d-4e17-8ccb-9ff9ab6d8a48",
           "revision": 1,
           "modelId": null,

@@ -9,8 +9,19 @@ property Entity startButton = "4cc83fed-af0a-48bc-a88a-2a3fa9747f9c"
 property Entity backButton = "1d6433fa-a4ea-41f6-a01b-fb36b2daf066"
 property Entity startGameButton = "86b0e64c-95b4-411a-94de-64f02121927d"
 -- Title "터치하여 시작" prompt text — its alpha pulses while the title screen is visible.
-property Entity titleHint = "a42897a4-904a-428e-ad8d-ba0bac85cdb8"
+property Entity titleHint = "a6781e87-ffa1-4436-b8f5-23153b06326c"
 property number hintPulseT = 0
+-- 타이틀 12조각(뒤→앞) 순차 페이드 인트로 상태.
+property any titlePieces = nil
+property number titleIntroT = 0
+property boolean titleIntroOn = false
+property boolean titleWasShown = false
+-- 인트로 종료 후 상시 idle: title-4(슬라임) 점프 / title-10(로고) 둥둥.
+property number titleIdleT = 0
+-- 슬라임 착지 먼지: titleDustT<0 = 숨김, >=0 = 재생중. titlePrevPh는 착지(공중→착지) 엣지 감지용.
+property any titleDust = nil
+property number titleDustT = -1
+property number titlePrevPh = 0
 property any startHandler = nil
 property any backHandler = nil
 property any startGameHandler = nil
@@ -231,6 +242,10 @@ end
 
 @ExecSpace("ClientOnly")
 method void OnUpdate(number delta)
+	-- 타이틀 12조각 조립 인트로(타이틀이 켜질 때마다 재생).
+	self:AnimateTitleIntro(delta)
+	-- 인트로 후 상시 idle(슬라임 점프 / 로고 둥둥).
+	self:AnimateTitleIdle(delta)
 	-- 축복 icon idle animation (runs regardless of the title-hint early-return below).
 	self:AnimateBlessIcon(delta)
 	-- Desc 패널 슬라이드(선택 시 아래→원위치). 스테이지 선택 화면이 열려 있을 때만.
@@ -277,6 +292,170 @@ method void OnUpdate(number delta)
 		-- Title hidden → restore full opacity and reset the phase.
 		tc.FontColor = Color(c.r, c.g, c.b, 1)
 		self.hintPulseT = 0
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void AnimateTitleIntro(number delta)
+	-- 타이틀 로고를 12조각(뒤 하늘→앞 요소) 순서로 살짝 페이드+전체 줌 정착시키며 조립되듯 보여준다.
+	local shown = isvalid(self.titleRoot) and self.titleRoot.Enable
+	if shown == false then
+		self.titleWasShown = false
+		return
+	end
+	if self.titleWasShown == false then
+		-- 타이틀이 방금 켜짐(비활성→활성) → 인트로 재생 시작 + 조각 캐시.
+		self.titleWasShown = true
+		self.titleIntroT = 0
+		self.titleIntroOn = true
+		if self.titlePieces == nil then
+			self.titlePieces = {}
+			for i = 1, 12 do
+				self.titlePieces[i] = _EntityService:GetEntityByPath("/ui/TitleGroup/StartBtn/Piece_" .. tostring(i))
+			end
+		end
+	end
+	if self.titleIntroOn == false then
+		return
+	end
+	self.titleIntroT = self.titleIntroT + delta
+	local t = self.titleIntroT
+	local stagger = 0.1
+	local dur = 0.4
+	for i = 1, 12 do
+		local ent = self.titlePieces[i]
+		if isvalid(ent) and ent.SpriteGUIRendererComponent ~= nil then
+			local a = (t - (i - 1) * stagger) / dur
+			if a < 0 then a = 0 end
+			if a > 1 then a = 1 end
+			a = a * a * (3 - 2 * a) -- smoothstep
+			ent.SpriteGUIRendererComponent.Color = Color(1, 1, 1, a)
+		end
+	end
+	-- 전체 살짝 줌 정착(1.05 → 1.0, 0.6s) — 부모(StartBtn) 스케일이 모든 조각에 균일 적용되어 정렬 유지.
+	if isvalid(self.startButton) and self.startButton.UITransformComponent ~= nil then
+		local st = t / 0.6
+		if st > 1 then st = 1 end
+		st = st * st * (3 - 2 * st)
+		local s = 1.05 - 0.05 * st
+		self.startButton.UITransformComponent.Scale = Vector3(s, s, 1)
+	end
+	local total = 11 * stagger + dur
+	if t >= total then
+		-- 인트로 종료: 모든 조각 완전 표시 + 스케일 정규화.
+		for i = 1, 12 do
+			local ent = self.titlePieces[i]
+			if isvalid(ent) and ent.SpriteGUIRendererComponent ~= nil then
+				ent.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 1)
+			end
+		end
+		if isvalid(self.startButton) and self.startButton.UITransformComponent ~= nil then
+			self.startButton.UITransformComponent.Scale = Vector3(1, 1, 1)
+		end
+		self.titleIntroOn = false
+	end
+end
+
+@ExecSpace("ClientOnly")
+method void AnimateTitleIdle(number delta)
+	-- 인트로가 끝난 뒤, 타이틀이 보이는 동안 title-4(슬라임)는 통통 점프, title-10(로고)은 둥둥 떠 있게.
+	local shown = isvalid(self.titleRoot) and self.titleRoot.Enable
+	if shown == false or self.titlePieces == nil then
+		return
+	end
+	local p4 = self.titlePieces[4]
+	local p10 = self.titlePieces[10]
+	if self.titleDust == nil then
+		self.titleDust = _EntityService:GetEntityByPath("/ui/TitleGroup/StartBtn/Dust")
+	end
+	if self.titleIntroOn then
+		-- 인트로 중엔 기본 위치/스케일로 두고 idle/먼지 상태 리셋.
+		self.titleIdleT = 0
+		self.titleDustT = -1
+		self.titlePrevPh = 0
+		if isvalid(p4) and p4.UITransformComponent ~= nil then
+			p4.UITransformComponent.anchoredPosition = Vector2(0, 0)
+			p4.UITransformComponent.Scale = Vector3(1, 1, 1)
+		end
+		if isvalid(p10) and p10.UITransformComponent ~= nil then
+			p10.UITransformComponent.anchoredPosition = Vector2(0, 0)
+		end
+		if isvalid(self.titleDust) then
+			self.titleDust.Enable = false
+		end
+		return
+	end
+	self.titleIdleT = self.titleIdleT + delta
+	local t = self.titleIdleT
+	-- title-4 슬라임: 웅크림→도약(늘어남)→착지(납작 squash)→잔탱글, 발끝(bx,byBase) 기준으로 제자리에서 탱글탱글 변형.
+	if isvalid(p4) and p4.UITransformComponent ~= nil then
+		local T = 1.4
+		local ph = t - math.floor(t / T) * T
+		local bx = 495      -- 슬라임 중심 x (title-4 PNG 분석값)
+		local byBase = -450 -- 슬라임 발끝 y
+		local H = 155       -- 점프 높이(더 높게)
+		local jumpY = 0
+		local sx = 1
+		local sy = 1
+		local a1 = 0.13 -- 웅크림 끝
+		local a2 = 0.65 -- 공중 끝
+		local a3 = 0.80 -- 착지 스쿼시 끝
+		-- 착지 순간(공중→착지, ph가 a2를 상향 통과) 감지 → 먼지 재생 시작.
+		if self.titlePrevPh < a2 and ph >= a2 then
+			self.titleDustT = 0
+		end
+		self.titlePrevPh = ph
+		if ph < a1 then
+			-- 웅크림(anticipation): 납작하게 눌림.
+			local e = math.sin((ph / a1) * math.pi * 0.5)
+			sy = 1 - 0.20 * e
+			sx = 1 + 0.17 * e
+			jumpY = -8 * e
+		elseif ph < a2 then
+			-- 공중 아크 + 늘어남(stretch).
+			local u = (ph - a1) / (a2 - a1)
+			jumpY = H * math.sin(math.pi * u)
+			local st = math.sin(math.pi * u)
+			sy = 1 + 0.16 * st
+			sx = 1 - 0.12 * st
+		elseif ph < a3 then
+			-- 착지 임팩트: 강하게 납작.
+			local s = math.sin(((ph - a2) / (a3 - a2)) * math.pi)
+			sy = 1 - 0.24 * s
+			sx = 1 + 0.20 * s
+		else
+			-- 잔탱글(감쇠 진동)로 원상 복귀.
+			local u = (ph - a3) / (T - a3)
+			local wob = math.sin(u * math.pi * 3.0) * (1 - u)
+			sy = 1 + 0.07 * wob
+			sx = 1 - 0.055 * wob
+		end
+		-- 발끝(bx,byBase) 고정 counter-translate: 제자리에서 눌리고 늘어나며 jumpY만큼 상승.
+		p4.UITransformComponent.Scale = Vector3(sx, sy, 1)
+		p4.UITransformComponent.anchoredPosition = Vector2(bx * (1 - sx), byBase * (1 - sy) + jumpY)
+	end
+	-- 착지 먼지: 발끝에서 튀어나와 옆으로 퍼지며(scale↑) 옅어짐(alpha↓) 후 사라짐.
+	if isvalid(self.titleDust) and self.titleDustT >= 0 then
+		self.titleDustT = self.titleDustT + delta
+		local dd = 0.45
+		local pr = self.titleDustT / dd
+		if pr > 1 then pr = 1 end
+		self.titleDust.Enable = true
+		if self.titleDust.UITransformComponent ~= nil then
+			self.titleDust.UITransformComponent.Scale = Vector3(0.55 + 0.95 * pr, 0.5 + 0.5 * pr, 1)
+		end
+		if self.titleDust.SpriteGUIRendererComponent ~= nil then
+			self.titleDust.SpriteGUIRendererComponent.Color = Color(1, 1, 1, 0.85 * (1 - pr * pr))
+		end
+		if self.titleDustT >= dd then
+			self.titleDustT = -1
+			self.titleDust.Enable = false
+		end
+	end
+	-- title-10 로고 둥둥: 완만한 사인 상하 부유.
+	if isvalid(p10) and p10.UITransformComponent ~= nil then
+		local y = 16 * math.sin(t * 1.6)
+		p10.UITransformComponent.anchoredPosition = Vector2(0, y)
 	end
 end
 
