@@ -1,6 +1,6 @@
 ﻿cmd,p1,p2,p3
 Set,size,30,
-Spawn,magnet,4,
+Spawn,healbuff,4,
 Spawn,coin,5,
 Spawn,coin,6,
 Spawn,coin,7,2
@@ -17,3 +17,8 @@ Spawn,coin,17,
 Spawn,coin,18,
 Spawn,coin,19,
 Spawn,coin,20,
+Spawn,coin,21,
+Spawn,coin,22,
+Spawn,coin,23,
+Spawn,coin,24,
+Spawn,coin,25,

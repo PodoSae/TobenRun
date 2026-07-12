@@ -32,7 +32,7 @@
             "$type": "MODNativeType",
             "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": "4c9dde86b0934211ba6ee607deb2000a"
+          "Value": "ba8b7947b4ff4cdb89b0f85f5f55d2b6"
         },
         {
           "TargetType": "MOD.Core.SpriteRendererComponent",
@@ -63,7 +63,7 @@
             "$type": "MOD.Core.MODVector3, MOD.Core",
             "x": 1.5,
             "y": 1.5,
-            "z": 1
+            "z": 1.0
           }
         },
         {
@@ -102,10 +102,10 @@
           },
           "Value": {
             "$type": "MOD.Core.MODQuaternion, MOD.Core",
-            "x": 0,
-            "y": 0,
-            "z": 0,
-            "w": 1
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 1.0
           }
         },
         {
@@ -153,7 +153,7 @@
             "$type": "MODNativeType",
             "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": true
+          "Value": false
         },
         {
           "TargetType": "script.ObstacleHitboxDebug",
@@ -162,7 +162,7 @@
             "$type": "MODNativeType",
             "type": "System.Double, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 0
+          "Value": 0.0
         },
         {
           "TargetType": "MOD.Core.MODEntity",
@@ -216,7 +216,7 @@
             "$type": "MODNativeType",
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 1
+          "Value": 1.0
         },
         {
           "TargetType": "script.Obstacle",
@@ -234,7 +234,7 @@
             "$type": "MODNativeType",
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
-          "Value": 0
+          "Value": 0.0
         },
         {
           "TargetType": "script.Obstacle",
@@ -271,6 +271,15 @@
             "type": "System.Single, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
           },
           "Value": 0.4
+        },
+        {
+          "TargetType": "script.ObstacleHitboxDebug",
+          "Name": "ShowHitboxes",
+          "ValueType": {
+            "$type": "MODNativeType",
+            "type": "System.Boolean, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+          },
+          "Value": false
         }
       ],
       "EventLinks": [],
@@ -344,9 +353,9 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODVector3, MOD.Core",
-                  "x": 0,
-                  "y": 0,
-                  "z": 0
+                  "x": 0.0,
+                  "y": 0.0,
+                  "z": 0.0
                 }
               },
               {
@@ -358,10 +367,10 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODQuaternion, MOD.Core",
-                  "x": 0,
-                  "y": 0,
-                  "z": 0,
-                  "w": 1
+                  "x": 0.0,
+                  "y": 0.0,
+                  "z": 0.0,
+                  "w": 1.0
                 }
               },
               {
@@ -373,9 +382,9 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODVector3, MOD.Core",
-                  "x": 1,
-                  "y": 1,
-                  "z": 1
+                  "x": 1.0,
+                  "y": 1.0,
+                  "z": 1.0
                 }
               },
               {
@@ -461,7 +470,7 @@
                   "$type": "MODNativeType",
                   "type": "System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
                 },
-                "Value": "ce5f2707fe484fe5b99faa4320c0f82f"
+                "Value": "8859ec1f3b09471c8b6acb18c534d129"
               },
               {
                 "TargetType": "MOD.Core.SpriteRendererComponent",
@@ -490,9 +499,9 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODVector3, MOD.Core",
-                  "x": 0,
-                  "y": 2.6,
-                  "z": 0
+                  "x": 0.0,
+                  "y": 1.82,
+                  "z": 0.0
                 }
               },
               {
@@ -505,8 +514,8 @@
                 "Value": {
                   "$type": "MOD.Core.MODVector3, MOD.Core",
                   "x": 1.5,
-                  "y": 1,
-                  "z": 1
+                  "y": 1.0,
+                  "z": 1.0
                 }
               },
               {
@@ -518,10 +527,10 @@
                 },
                 "Value": {
                   "$type": "MOD.Core.MODQuaternion, MOD.Core",
-                  "x": 0,
-                  "y": 0,
-                  "z": 0,
-                  "w": 1
+                  "x": 0.0,
+                  "y": 0.0,
+                  "z": 0.0,
+                  "w": 1.0
                 }
               },
               {
