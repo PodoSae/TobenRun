@@ -118,12 +118,12 @@ property string GoalFlagRUID = "ff7a9e1d06054bd1b905e715b45b7d0b"
 @MinValue(0.5)
 @MaxValue(10)
 @Delta(0.5)
-property number GoalFlagHeight = 3.0
+property number GoalFlagHeight = 1.5
 @DisplayName("종점 깃발 x오프셋")
 @Description("goalX 기준 앞(+)/뒤(-) 미세 조정")
 property number GoalFlagXOffset = 0.0
 @DisplayName("종점 깃발 y오프셋(바닥 위 추가)")
-property number GoalFlagYOffset = 0.0
+property number GoalFlagYOffset = 0.2
 @DisplayName("발판 너비(월드유닛)")
 @Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
 property number platformWidth = 3.0
