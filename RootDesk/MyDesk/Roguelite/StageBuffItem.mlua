@@ -187,6 +187,9 @@ script StageBuffItem extends Component
             -- amount = 지속(초), Range = 코인 흡입 반경.
             local pc = player.PlayerComponent
             if _MagnetBuff ~= nil and pc ~= nil then
+                -- 서버 흡입(권위): 지속 동안 서버가 코인을 당겨 근접 픽업을 발동시킨다(클라 이동만으론 서버 픽업 안 됨).
+                _MagnetBuff:StartMagnetServer(player, amount, self.Range)
+                -- 소유 클라: 지속 이펙트(오라).
                 _MagnetBuff:StartMagnetClient(amount, self.Range, pc.UserId)
             else
                 log_warning("[StageBuffItem] MagnetBuff logic or PlayerComponent missing — magnet not started")

@@ -6,7 +6,7 @@ script MagnetBuff extends Logic
 	property number DefaultDuration = 6.0
 
 	@DisplayName("자석 기본 범위(월드유닛)")
-	property number DefaultRange = 2.5
+	property number DefaultRange = 10
 
 	@DisplayName("코인 끌어당김 속도(월드유닛/초)")
 	property number PullSpeed = 16.0
@@ -15,76 +15,123 @@ script MagnetBuff extends Logic
 	@Description("지속시간 동안 로컬 플레이어에 부착 루프 재생(비우면 없음). 기본값은 임시 오라 — 자석 전용 이펙트로 교체 권장")
 	property string EffectRUID = "42fcd59f14bb4cddaa6024ee96c0f279"
 
+	-- 클라(소유 플레이어) 시각 이펙트 상태.
 	property number remain = 0
-
 	property number activeDuration = 0
-
-	property number range = 2.5
-
 	property integer effectSerial = 0
+
+	-- 서버 흡입 상태: userId -> { player=Entity, remain=number, range=number }. 코인 당김을 서버 권위로 수행해야
+	-- StageBuffItem(ServerOnly)의 근접 픽업이 트리거된다. 클라에서 코인을 옮기면 서버 WorldPosition은 안 바뀌어
+	-- 획득이 안 되므로(코인이 script.Coin→script.StageBuffItem 서버 픽업으로 바뀐 뒤의 회귀), 서버에서 당긴다.
+	property any serverMagnets = nil
+
+	@ExecSpace("ServerOnly")
+	method void OnBeginPlay()
+		-- 서버 자석 레지스트리 초기화.
+		self.serverMagnets = {}
+	end
+
+	@ExecSpace("ServerOnly")
+	method void StartMagnetServer(Entity player, number duration, number magnetRange)
+		-- 서버 흡입 등록/갱신. StageBuffItem.Grant(magnet 분기, ServerOnly)에서 호출한다. 지속 동안 ServerTick이 이
+		-- 플레이어 주변의 코인/토벤코인(StageBuffItem)을 플레이어 쪽으로 당긴다 → 서버 근접 픽업이 정상 발동.
+		if self.serverMagnets == nil then self.serverMagnets = {} end
+		if not isvalid(player) or player.PlayerComponent == nil then return end
+		local uid = player.PlayerComponent.UserId
+		local dur = (duration > 0) and duration or self.DefaultDuration
+		local rng = (magnetRange > 0) and magnetRange or self.DefaultRange
+		self.serverMagnets[uid] = { player = player, remain = dur, range = rng }
+		log("[MagnetBuff] server start uid=" .. tostring(uid) .. " dur=" .. tostring(dur) .. " range=" .. tostring(rng))
+	end
 
 	@ExecSpace("Client")
 	method void StartMagnetClient(number duration, number magnetRange)
-		        -- 서버 픽업 → 소유 클라(마지막 호출 인자 targetUserId로 이 클라만 실행). 자석을 켜고 지속 이펙트를 부착한다.
-		        self.remain = (duration > 0) and duration or self.DefaultDuration
-		        self.activeDuration = self.remain
-		        self.range = (magnetRange > 0) and magnetRange or self.DefaultRange
-		        local player = _UserService.LocalPlayer
-		        if isvalid(player) and self.EffectRUID ~= "" and self.effectSerial == 0 then
-		            self.effectSerial = _EffectService:PlayEffectAttached(
-		                self.EffectRUID, player, Vector3(0, 0.4, 0), 0, Vector3(0.65, 0.65, 1), true, { ["Alpha"] = 0.3 })
-		        end
-		        log("[MagnetBuff] start dur=" .. tostring(self.remain) .. " range=" .. tostring(self.range))
+		-- 서버 픽업 → 소유 클라(마지막 호출 인자 targetUserId로 이 클라만 실행). 지속 이펙트(오라)만 담당한다.
+		-- 실제 코인 당김은 서버(ServerTick)가 처리하므로 여기서는 코인을 옮기지 않는다.
+		self.remain = (duration > 0) and duration or self.DefaultDuration
+		self.activeDuration = self.remain
+		local player = _UserService.LocalPlayer
+		if isvalid(player) and self.EffectRUID ~= "" and self.effectSerial == 0 then
+			self.effectSerial = _EffectService:PlayEffectAttached(
+				self.EffectRUID, player, Vector3(0, 0.4, 0), 0, Vector3(0.65, 0.65, 1), true, { ["Alpha"] = 0.3 })
+		end
+		log("[MagnetBuff] client start dur=" .. tostring(self.remain))
+	end
+
+	method void OnUpdate(number delta)
+		-- ExecSpace 미지정 → 서버/클라 양쪽에서 호출된다. 서버=코인 흡입(권위), 클라=이펙트 지속 타이머.
+		if self:IsServer() then
+			self:ServerTick(delta)
+		end
+		if self:IsClient() then
+			self:ClientTick(delta)
+		end
+	end
+
+	@ExecSpace("ServerOnly")
+	method void ServerTick(number delta)
+		-- 활성 자석마다 범위 내 코인/토벤코인(StageBuffItem, BuffKind=coin|tobencoin)을 플레이어 쪽으로 한 스텝 당긴다.
+		-- body-less runprop이라 Transform 직접 쓰기 안전. 플레이어에 가까워지면 StageBuffItem.CheckPickup이 획득 처리.
+		if self.serverMagnets == nil then return end
+		local step = self.PullSpeed * delta
+		for uid, st in pairs(self.serverMagnets) do
+			if st ~= nil then
+				st.remain = st.remain - delta
+				local player = st.player
+				if st.remain <= 0 or not isvalid(player) then
+					self.serverMagnets[uid] = nil
+				else
+					local map = player.CurrentMap
+					if isvalid(map) then
+						local pp = player.TransformComponent.WorldPosition
+						local r2 = st.range * st.range
+						local items = map:GetChildComponentsByTypeName("script.StageBuffItem", true)
+						if items ~= nil then
+							for _, ic in ipairs(items) do
+								if ic ~= nil and isvalid(ic) then
+									---@type StageBuffItem
+									local sbi = ic
+									local bk = sbi.BuffKind
+									if bk == "coin" or bk == "tobencoin" then
+										local ie = sbi.Entity
+										if isvalid(ie) and ie.Enable then
+											local wp = ie.TransformComponent.WorldPosition
+											local dx = pp.x - wp.x
+											local dy = pp.y - wp.y
+											local d2 = dx * dx + dy * dy
+											if d2 <= r2 and d2 > 0.0001 then
+												local len = math.sqrt(d2)
+												ie.TransformComponent.WorldPosition = Vector3(wp.x + (dx / len) * step, wp.y + (dy / len) * step, wp.z)
+											end
+										end
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
 	end
 
 	@ExecSpace("ClientOnly")
-	method void OnUpdate(number delta)
-		        -- 클라 매 프레임(소유 클라 한정): 활성 동안 범위 내 코인을 로컬 플레이어로 당긴다.
-		        if self.remain <= 0 then return end
-		        self.remain = self.remain - delta
-		        if self.remain <= 0 then
-		            self:StopMagnet()
-		            return
-		        end
-		
-		        local player = _UserService.LocalPlayer
-		        if not isvalid(player) then return end
-		        local map = player.CurrentMap
-		        if not isvalid(map) then return end
-		
-		        local pp = player.TransformComponent.WorldPosition
-		        local coins = map:GetChildComponentsByTypeName("script.Coin", true)
-		        if coins == nil then return end
-		
-		        local r2 = self.range * self.range
-		        local step = self.PullSpeed * delta
-		        for _, cc in ipairs(coins) do
-		            if cc ~= nil and isvalid(cc) then
-		                local ce = cc.Entity
-		                if isvalid(ce) and ce.Enable then
-		                    local wp = ce.TransformComponent.WorldPosition
-		                    local dx = pp.x - wp.x
-		                    local dy = pp.y - wp.y
-		                    local d2 = dx * dx + dy * dy
-		                    if d2 <= r2 and d2 > 0.0001 then
-		                        -- 플레이어 쪽으로 한 스텝 이동(로컬 Position). Coin.OnUpdate가 근접 시 수집한다.
-		                        local len = math.sqrt(d2)
-		                        local cp = ce.TransformComponent.Position
-		                        ce.TransformComponent.Position = Vector3(cp.x + (dx / len) * step, cp.y + (dy / len) * step, cp.z)
-		                    end
-		                end
-		            end
-		        end
+	method void ClientTick(number delta)
+		-- 이펙트 지속 타이머만 관리(코인 당김은 서버 ServerTick).
+		if self.remain <= 0 then return end
+		self.remain = self.remain - delta
+		if self.remain <= 0 then
+			self:StopMagnet()
+		end
 	end
 
 	method void StopMagnet()
-		        -- 지속 종료: 이펙트 제거.
-		        self.remain = 0
-		        if self.effectSerial ~= 0 then
-		            _EffectService:RemoveEffect(self.effectSerial)
-		            self.effectSerial = 0
-		        end
-		        log("[MagnetBuff] end")
+		-- 지속 종료: 클라 이펙트 제거.
+		self.remain = 0
+		if self.effectSerial ~= 0 then
+			_EffectService:RemoveEffect(self.effectSerial)
+			self.effectSerial = 0
+		end
+		log("[MagnetBuff] client end")
 	end
 
 end
