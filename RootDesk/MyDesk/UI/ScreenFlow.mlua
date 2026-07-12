@@ -549,7 +549,7 @@ method void RefreshSavedUI()
 	-- If the blessing screen is open, re-sync its currency + level/cost after any save change.
 	local blGroup = _EntityService:GetEntityByPath("/ui/BlessGroup")
 	if isvalid(blGroup) and blGroup.Enable then
-		local blMeso = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/MesoPill/Text")
+		local blMeso = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/CoinPill/MesoText")
 		if isvalid(blMeso) and blMeso.TextComponent ~= nil then
 			blMeso.TextComponent.Text = self:AbbreviateNumber(gold)
 		end
@@ -1026,7 +1026,7 @@ method void FillBlessScreen()
 		gold = _PlayerSave:GetGold()
 		coin = _PlayerSave:GetCoin()
 	end
-	local m = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/MesoPill/Text")
+	local m = _EntityService:GetEntityByPath("/ui/BlessGroup/CurrencyBar/CoinPill/MesoText")
 	if isvalid(m) and m.TextComponent ~= nil then
 		m.TextComponent.Text = self:AbbreviateNumber(gold)
 	end
@@ -1159,7 +1159,7 @@ method void RefreshBlessUI()
 		-- 재화(토벤코인) 아이콘: 강화 버튼과 동일하게 값 앞에 표시.
 		local upIcon = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn/CostIcon")
 		if isvalid(upIcon) and upIcon.SpriteGUIRendererComponent ~= nil then
-			upIcon.SpriteGUIRendererComponent.ImageRUID = DataRef("cf9cf3f4d48546adb9b4462dc6a34c1e")
+			upIcon.SpriteGUIRendererComponent.ImageRUID = DataRef("ab8fb1fd6b9d45f5a7dc35c8cf544bd3")
 		end
 		-- 비용 텍스트(재화 종류에 따른 값).
 		local upCost = _EntityService:GetEntityByPath("/ui/BlessGroup/EffectList/LevelUpBtn/CostText")

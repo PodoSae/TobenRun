@@ -6,7 +6,7 @@ script ObstacleHitboxDebug extends Component
     -- marker is that box. Client-only/visual; toggle with ShowHitboxes. The box is a child, so it inherits
     -- the obstacle's per-type scale — the scale below divides it back out to true world units.
     @DisplayName("히트박스 표시")
-    property boolean ShowHitboxes = true
+    property boolean ShowHitboxes = false
 
     -- Marker sprite (20x20, center pivot) is 0.2 world units at Scale 1. Keep in sync with the child's RUID.
     property number boxSpriteUnit = 0.2

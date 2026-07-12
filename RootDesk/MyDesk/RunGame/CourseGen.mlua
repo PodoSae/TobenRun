@@ -45,9 +45,15 @@ property number coinScale = 2
 property integer coinAmount = 50
 -- ── 토벤코인 픽업(계정 재화) ── 메소(coin=점수)와 별개로 실제 토벤코인(coin 재화)을 지급하는 픽업. Spawn,tobencoin,x[,y]
 @DisplayName("토벤코인 픽업 RUID")
-property string tobenCoinRuid = "cf9cf3f4d48546adb9b4462dc6a34c1e"
+property string tobenCoinRuid = "9870868c618e440b9f99e38ea59e96d9"
 @DisplayName("토벤코인 기본 높이(바닥 위)")
 property number tobenCoinFloatY = 0.5
+@DisplayName("토벤코인 픽업 크기 배율")
+@Description("토벤코인 픽업 시각 스케일. 픽업 판정은 StageBuffItem 고정 반경이라 이 값과 무관")
+@MinValue(0.01)
+@MaxValue(5)
+@Delta(0.01)
+property number tobenCoinScale = 0.05
 @DisplayName("토벤코인 픽업 획득량")
 @MinValue(1)
 @MaxValue(100)
@@ -66,7 +72,7 @@ property string aspdBuffRuid = "39dfb7d3137a48beb17bd428aaf3fea9"
 property string pierceBuffRuid = "1276af77877246568ebae9b4b4f19f54"
 @DisplayName("체력 재생 아이템 RUID")
 @Description("로그라이트 체력 재생 아이템(regenbuff) 스프라이트 (기본: 'HP 회복' 아이템 스프라이트)")
-property string regenBuffRuid = "13111d76481843aca7ef1c0b67e1a608"
+property string regenBuffRuid = "742f18365a034ba1b592c7750c5f7690"
 @DisplayName("최대체력 아이템 RUID")
 @Description("로그라이트 최대체력 증가 아이템(maxhpbuff) 스프라이트 (기본: 'MaxHP 상승' 아이템 스프라이트)")
 property string maxHpBuffRuid = "043d30b5581945e2a21f061a0cfc64b3"
@@ -78,7 +84,7 @@ property string shieldBuffRuid = "4c5a4894b8424dc1be09b0ce820e4fef"
 property string healBuffRuid = "742f18365a034ba1b592c7750c5f7690"
 @DisplayName("자석 아이템 RUID")
 @Description("자석(magnet) 스프라이트 (기본: '검은 자석')")
-property string magnetRuid = "08b6bdf6f8a44eb9ac23a3b97b3c906d"
+property string magnetRuid = "b9279051623c4c33b1bff10460b1044e"
 @DisplayName("슬로우검 아이템 RUID")
 @Description("슬로우검(slowsword) 스프라이트")
 property string slowSwordRuid = "a88caa5fbd8646b8aeb331896f7d286d"
@@ -112,12 +118,12 @@ property string GoalFlagRUID = "ff7a9e1d06054bd1b905e715b45b7d0b"
 @MinValue(0.5)
 @MaxValue(10)
 @Delta(0.5)
-property number GoalFlagHeight = 3.0
+property number GoalFlagHeight = 1.5
 @DisplayName("종점 깃발 x오프셋")
 @Description("goalX 기준 앞(+)/뒤(-) 미세 조정")
 property number GoalFlagXOffset = 0.0
 @DisplayName("종점 깃발 y오프셋(바닥 위 추가)")
-property number GoalFlagYOffset = 0.0
+property number GoalFlagYOffset = 0.2
 @DisplayName("발판 너비(월드유닛)")
 @Description("발판 가로 폭 = 충돌 풋홀드 길이 + 시각 스프라이트 폭")
 property number platformWidth = 3.0
@@ -1077,6 +1083,7 @@ method void CmdSpawn(Entity map, table cfg, table c)
 		end
 		local tc = self:SpawnProp(map, "TobenCoin_" .. tostring(math.floor(x)), x, ty, self.tobenCoinRuid)
 		if isvalid(tc) then
+			tc.TransformComponent.Scale = Vector3(self.tobenCoinScale, self.tobenCoinScale, 1)
 			---@type StageBuffItem
 			local tcc = tc:AddComponent("script.StageBuffItem")
 			if tcc ~= nil then
