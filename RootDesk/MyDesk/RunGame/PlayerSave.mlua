@@ -1575,6 +1575,22 @@ method void GrantTutorialClear()
 end
 
 @ExecSpace("Server")
+method void GrantTutorialComplete()
+	-- 튜토리얼 최종 완료(3막 보스 처치) 보상: 메소 1000 + 토벤코인 100. (건너뛰기가 아닌 실제 완주 시에만 호출)
+	local userId = senderUserId
+	if userId == nil or userId == "" then
+		return
+	end
+	local data = self:LoadUser(userId)
+	data.gold = (data.gold or 0) + 1000
+	data.coin = (data.coin or 0) + 100
+	self:Persist(userId)
+	self:ReceiveMyData(_UtilLogic:TableToString(data), userId)
+	self:EquipMsgClient("튜토리얼 완료! 메소 1000 · 토벤코인 100 획득", userId)
+	log("[PlayerSave] tutorial complete grant: +1000 meso +100 coin for " .. tostring(userId))
+end
+
+@ExecSpace("Server")
 method void CompleteTutorial()
 	-- 튜토리얼 종료(모든 스텝 완료 또는 건너뛰기): 이후 재접속에서 다시 시작되지 않게 tut_done=1로 확정.
 	local userId = senderUserId

@@ -1,6 +1,6 @@
-order,ctx,text,doneWhen,gate,trigX,target,stage,guide,hlX,hlY,hlW,hlH
-1,game,위로 스와이프하여 점프하세요!,JUMP,1,8,,0-0,,,,,
-2,game,아래로 슬라이드하여 지나가세요!,SLIDE,1,14,,0-0,,,,,
+﻿order,ctx,text,doneWhen,gate,trigX,target,stage,guide,hlX,hlY,hlW,hlH
+1,game,스페이스바를 눌러 점프하세요!,JUMP,1,8,,0-0,,,,,
+2,game,아랫방향키를 눌러 슬라이드 하세요!,SLIDE,1,14,,0-0,,,,,
 3,game,달리면서 코인을 획득하세요!,coin,0,,,0-0,,,,,
 4,game,결승선까지 달려가세요!,clear,0,,,0-0,,,,,
 5,lobby,장비 창을 열어보세요,equip_open,0,,/ui/LobbyGroup/EquipBtn,,,683,198,245,95
