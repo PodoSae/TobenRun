@@ -38,6 +38,16 @@ script MonsterUnit extends Component
     @Delta(0.5)
     property number PatrolRange = 5.0
 
+    -- 활성화 게이트: 플레이어가 이 거리 안으로 들어오기 전에는 이동/점프 AI를 시작하지 않고 스폰 위치에 정지한다.
+    -- (코스 빌드 시 한 번에 스폰되므로, 즉시 순찰하면 플레이어가 도착하기 전에 배치 위치를 벗어나 예측 위치와 어긋난다.)
+    @DisplayName("활성화 거리(플레이어 접근)")
+    @Description("플레이어가 이 거리(월드유닛) 안으로 들어오면 이동/점프를 시작한다. 그 전에는 스폰 위치에 정지. 0이면 항상 활성(즉시 이동)")
+    @MinValue(0)
+    @MaxValue(50)
+    @Delta(0.5)
+    property number ActivationRange = 15.0
+    @HideFromInspector property boolean activated = false
+
     -- Periodic jump 몸통 박치기 (주황버섯). Data-driven per monster; JumpInterval 0 = never jumps (스포아/슬라임).
     -- On each interval the monster hops in its PATROL direction (no player homing / no chasing) with an upward
     -- + forward impulse. Contact damage is handled by ContactCheck. Inspector-tunable and overridden by the
@@ -493,8 +503,11 @@ script MonsterUnit extends Component
             self:UpdateLaunch(delta)
             return
         end
-        self:Patrol()
-        self:JumpTick(delta)
+        -- 플레이어가 접근하기 전에는 이동/점프를 시작하지 않는다(스폰 위치 유지). 한 번 활성화되면 계속 유지.
+        if self:CheckActivation() then
+            self:Patrol()
+            self:JumpTick(delta)
+        end
         self:ContactCheck(delta)
         self:DotTick(delta)
         self:BurstTick(delta)
@@ -670,6 +683,35 @@ script MonsterUnit extends Component
         local dir = self.movingRight and 1 or -1
         self.body:AddForce(Vector2(dir * self.JumpFwd, self.JumpForce))
         log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' HOP dir=" .. tostring(dir))
+    end
+
+    @ExecSpace("ServerOnly")
+    method boolean CheckActivation()
+        -- 플레이어가 ActivationRange 안에 들어오기 전에는 false를 반환해 이동/점프를 막는다(스폰 위치 유지). 한 번
+        -- 활성화되면 계속 true. ActivationRange<=0이면 항상 활성(레거시 동작 = 즉시 이동). 수평 거리(x)로만 판정한다.
+        if self.activated then return true end
+        if self.ActivationRange <= 0 then
+            self.activated = true
+            return true
+        end
+        local map = self.Entity.CurrentMap
+        if not isvalid(map) then return false end
+        local mapComp = map.MapComponent
+        if not isvalid(mapComp) then return false end
+        local users = _UserService:GetUsersByMapComponent(mapComp)
+        if users == nil then return false end
+        local myX = self.Entity.TransformComponent.WorldPosition.x
+        for _, user in ipairs(users) do
+            if isvalid(user) then
+                local ux = user.TransformComponent.WorldPosition.x
+                if math.abs(ux - myX) <= self.ActivationRange then
+                    self.activated = true
+                    log("[MonsterUnit] '" .. tostring(self.MonsterId) .. "' activated (player near)")
+                    return true
+                end
+            end
+        end
+        return false
     end
 
     @ExecSpace("ServerOnly")
